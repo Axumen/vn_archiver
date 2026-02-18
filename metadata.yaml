@@ -1,0 +1,22 @@
+required:
+  - developer
+  - title
+  - version
+  - archive.filename
+  - archive.sha256
+  - archive.file_size
+
+optional:
+  - release_date
+  - build_type
+  - engine
+  - engine_version
+  - language
+  - target_platform
+  - distribution_platform
+  - distribution_model
+  - release_status
+  - content_rating
+  - tags
+  - source
+  - notes
