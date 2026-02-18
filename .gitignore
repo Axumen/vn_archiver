@@ -1,0 +1,7 @@
+incoming/
+extracted/
+archives/
+*.zip
+*.7z
+*.rar
+archive.db
