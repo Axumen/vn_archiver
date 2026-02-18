@@ -8,6 +8,7 @@ import yaml
 from datetime import datetime
 from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
+from tools.db_manager import get_connection
 
 # ==============================
 # CONFIGURATION
@@ -92,13 +93,75 @@ def create_archive(original_zip, metadata_dict, output_path):
     with open(temp_metadata_path, "w", encoding="utf-8") as f:
         yaml.dump(metadata_dict, f, sort_keys=False, allow_unicode=True)
 
-    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_STORED) as archive:
         archive.write(original_zip, arcname=os.path.basename(original_zip))
         archive.write(temp_metadata_path, arcname="metadata.yml")
 
     os.remove(temp_metadata_path)
 
+# ==============================
+# DATABASE
+# ==============================
 
+def sha_exists(sha256):
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM visual_novels WHERE sha256 = ?",
+            (sha256,)
+        ).fetchone()
+        return row is not None
+
+
+def insert_visual_novel(metadata, archive_path):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO visual_novels
+            (title, developer, engine, language, release_date,
+             sha256, file_size, archive_path, version, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                metadata.get("title"),
+                metadata.get("developer"),
+                metadata.get("engine"),
+                metadata.get("language"),
+                metadata.get("release_date"),
+                metadata.get("sha256"),
+                metadata.get("file_size_bytes"),
+                archive_path,
+                metadata.get("version"),
+                "archived"
+            )
+        )
+
+        vn_id = cursor.lastrowid
+
+        # Insert tags
+        tags = metadata.get("tags") or []
+
+        if not isinstance(tags, list):
+            tags = [tags]
+
+        for tag in tags:
+            if not tag:
+                continue
+            conn.execute(
+                "INSERT OR IGNORE INTO tags (name) VALUES (?)",
+                (tag,)
+            )
+
+            tag_row = conn.execute(
+                "SELECT id FROM tags WHERE name = ?",
+                (tag,)
+            ).fetchone()
+
+            if tag_row:
+                conn.execute(
+                    "INSERT OR IGNORE INTO vn_tags (vn_id, tag_id) VALUES (?, ?)",
+                    (vn_id, tag_row["id"])
+                )
+                
 # ==============================
 # BACKBLAZE
 # ==============================
@@ -139,22 +202,27 @@ def create_archive_only(filename, metadata):
     if not os.path.exists(full_path):
         raise Exception("File not found.")
 
-    # Auto fields
     metadata["original_filename"] = os.path.basename(full_path)
     metadata["file_size_bytes"] = os.path.getsize(full_path)
     metadata["sha256"] = sha256_file(full_path)
     metadata["archived_at"] = datetime.utcnow().isoformat() + "Z"
+
+    # Prevent duplicate ingestion
+    if sha_exists(metadata["sha256"]):
+        raise Exception("Archive already exists in database (duplicate SHA256).")
 
     final_name = filename.replace(".zip", "_archive.zip")
     final_path = os.path.join(PROCESSED_DIR, final_name)
 
     create_archive(full_path, metadata, final_path)
 
+    # Insert into database safely
+    insert_visual_novel(metadata, final_path)
+
     shutil.move(full_path, os.path.join(PROCESSED_DIR, filename))
 
     return final_path
-
-
+    
 # ==============================
 # UPLOAD SEPARATE
 # ==============================

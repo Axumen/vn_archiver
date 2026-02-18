@@ -2,6 +2,7 @@
 
 import os
 import yaml
+from tools.db_manager import initialize_database
 from pathlib import Path
 from colorama import init, Fore, Style
 from vn_archiver import (
@@ -12,6 +13,7 @@ from vn_archiver import (
     sha256_file,
     load_metadata_template
 )
+
 
 init(autoreset=True)
 
@@ -73,13 +75,13 @@ def list_processed_archives():
             if f.endswith("_archive.zip")]
 
 def normalize_value(value):
-    return value.strip().lower() if value else None
+    return value.strip() if value else None
 
 
 def normalize_list(value):
     if not value:
         return None
-    return sorted(set([v.strip().lower() for v in value.split(",") if v.strip()]))
+    return sorted(set([v.strip() for v in value.split(",") if v.strip()]))
     
 def show_file_info(filename):
     path = Path(INCOMING_DIR) / filename
@@ -310,6 +312,9 @@ def upload_archives():
 # =============================
 
 def main():
+    
+    initialize_database()
+    
     while True:
         header()
 
