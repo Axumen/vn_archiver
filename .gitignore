@@ -1,4 +1,6 @@
 incoming/
+processed/
+trash/
 extracted/
 archives/
 *.zip

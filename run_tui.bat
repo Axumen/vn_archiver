@@ -1,1 +1,1 @@
-py  tui.py
+py tui.py

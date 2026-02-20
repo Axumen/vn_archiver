@@ -5,10 +5,17 @@ import zipfile
 import hashlib
 import shutil
 import yaml
+import json
 from datetime import datetime
 from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from tools.db_manager import get_connection
+
+# ==============================
+# SAFETY
+# ==============================
+
+DRY_RUN = True  # Set to False when ready to upload for real
 
 # ==============================
 # CONFIGURATION
@@ -88,6 +95,10 @@ def create_metadata(zip_path):
 
 
 def create_archive(original_zip, metadata_dict, output_path):
+
+    # Ensure metadata_version exists
+    metadata_dict.setdefault("metadata_version", 1)
+
     temp_metadata_path = "metadata.yml"
 
     with open(temp_metadata_path, "w", encoding="utf-8") as f:
@@ -113,13 +124,18 @@ def sha_exists(sha256):
 
 
 def insert_visual_novel(metadata, archive_path):
+    
     with get_connection() as conn:
+
+        metadata_json = json.dumps(metadata, ensure_ascii=False)
+
         cursor = conn.execute(
             """
             INSERT INTO visual_novels
             (title, developer, engine, language, release_date,
-             sha256, file_size, archive_path, version, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             version, sha256, file_size, archive_path, status,
+             metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 metadata.get("title"),
@@ -127,17 +143,19 @@ def insert_visual_novel(metadata, archive_path):
                 metadata.get("engine"),
                 metadata.get("language"),
                 metadata.get("release_date"),
+                metadata.get("version"),
                 metadata.get("sha256"),
                 metadata.get("file_size_bytes"),
                 archive_path,
-                metadata.get("version"),
-                "archived"
+                "archived",
+                metadata_json
             )
         )
 
-        vn_id = cursor.lastrowid
+        # Format vn_id with leading zeros (e.g., 000123)
+        vn_id = f"{cursor.lastrowid:06d}"
 
-        # Insert tags
+        # ---- Normalize Tags ----
         tags = metadata.get("tags") or []
 
         if not isinstance(tags, list):
@@ -146,6 +164,7 @@ def insert_visual_novel(metadata, archive_path):
         for tag in tags:
             if not tag:
                 continue
+
             conn.execute(
                 "INSERT OR IGNORE INTO tags (name) VALUES (?)",
                 (tag,)
@@ -162,6 +181,8 @@ def insert_visual_novel(metadata, archive_path):
                     (vn_id, tag_row["id"])
                 )
                 
+        return vn_id
+                
 # ==============================
 # BACKBLAZE
 # ==============================
@@ -177,18 +198,54 @@ def get_b2_api():
     return b2_api
 
 
-def upload_to_b2(filepath):
+def upload_to_b2(filepath, remote_folder=None):
+    """
+    Upload file to Backblaze.
+    DRY_RUN prevents any real upload.
+    """
+
+    if not os.path.exists(filepath):
+        raise Exception("File does not exist for upload.")
+
+    filename = os.path.basename(filepath)
+
+    if remote_folder:
+        remote_name = f"{remote_folder}/{filename}"
+    else:
+        remote_name = filename
+
+    # ---------------------------
+    # DRY RUN (SAFE MODE)
+    # ---------------------------
+    if DRY_RUN:
+        print("\n[DRY RUN ENABLED]")
+        print(f"Would upload:")
+        print(f"  Local file : {filepath}")
+        print(f"  Bucket     : {B2_BUCKET_NAME}")
+        print(f"  Remote path: {remote_name}")
+        print("No upload performed.\n")
+        return
+
+    # ---------------------------
+    # CONFIRMATION (EXTRA SAFETY)
+    # ---------------------------
+    confirm = input(f"Upload '{remote_name}' to Backblaze? (yes/no): ").strip().lower()
+    if confirm != "yes":
+        print("Upload cancelled.")
+        return
+
+    # ---------------------------
+    # REAL UPLOAD
+    # ---------------------------
     b2_api = get_b2_api()
     bucket = b2_api.get_bucket_by_name(B2_BUCKET_NAME)
-    filename = os.path.basename(filepath)
 
     bucket.upload_local_file(
         local_file=filepath,
-        file_name=filename
+        file_name=remote_name
     )
 
-    print(f"Uploaded to Backblaze: {filename}")
-
+    print(f"Uploaded to Backblaze: {remote_name}")
 
 # ==============================
 # ARCHIVE CREATION ONLY
@@ -211,24 +268,76 @@ def create_archive_only(filename, metadata):
     if sha_exists(metadata["sha256"]):
         raise Exception("Archive already exists in database (duplicate SHA256).")
 
-    final_name = filename.replace(".zip", "_archive.zip")
+    # ---- Step 1: Temporary archive (before vn_id exists) ----
+    temp_name = filename.replace(".zip", "_archive_temp.zip")
+    temp_path = os.path.join(PROCESSED_DIR, temp_name)
+
+    create_archive(full_path, metadata, temp_path)
+
+    # ---- Step 2: Insert into DB to get vn_id ----
+    vn_id = insert_visual_novel(metadata, temp_path)
+
+    # ---- Step 3: Build structured final name ----
+    def sanitize(value):
+        return str(value).strip().replace(" ", "_")
+
+    title = sanitize(metadata.get("title") or "Unknown_Title")
+    build_version = sanitize(metadata.get("version") or "unknown")
+
+    final_name = f"{title}_build_{build_version}.zip"
     final_path = os.path.join(PROCESSED_DIR, final_name)
 
-    create_archive(full_path, metadata, final_path)
+    # ---- Step 4: Rename archive ----
+    if os.path.exists(final_path):
+        raise Exception("Archive with same title and build already exists.")
+    
+    os.rename(temp_path, final_path)
 
-    # Insert into database safely
-    insert_visual_novel(metadata, final_path)
+    # ---- Step 5: Update DB archive_path ----
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE visual_novels SET archive_path = ? WHERE id = ?",
+            (final_path, int(vn_id))
+        )
 
+    # ---- Step 6: Move original ZIP into processed ----
     shutil.move(full_path, os.path.join(PROCESSED_DIR, filename))
 
     return final_path
     
 # ==============================
-# UPLOAD SEPARATE
+# STRUCTURED ARCHIVE UPLOAD
 # ==============================
 
-def upload_archive(filepath):
+def upload_archive(filepath, metadata=None, vn_id=None):
+    """
+    Structured upload using:
+    archives/<Title>/vn_<id>/build_<version>/
+
+    Backward compatible:
+    If metadata or vn_id is missing, falls back to simple archives/ upload.
+    """
+
     if not os.path.exists(filepath):
         raise Exception("Archive not found.")
 
-    upload_to_b2(filepath)
+    # ---------------------------
+    # Fallback mode (old behavior)
+    # ---------------------------
+    if metadata is None or vn_id is None:
+        upload_to_b2(filepath, remote_folder="archives")
+        return
+
+    title = metadata.get("title") or "Unknown_Title"
+    title_folder = title.strip().replace(" ", "_")
+
+    build_version = metadata.get("version") or "unknown"
+
+    remote_folder = (
+        f"archives/"
+        f"{title_folder}/"
+        f"vn_{vn_id}/"
+        f"build_{build_version}"
+    )
+
+    upload_to_b2(filepath, remote_folder=remote_folder)
