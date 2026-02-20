@@ -4,6 +4,7 @@ import os
 import zipfile
 import hashlib
 import shutil
+import sys
 import yaml
 import json
 from datetime import datetime
@@ -276,10 +277,46 @@ def upload_to_b2(filepath, remote_folder=None):
     b2_api = get_b2_api()
     bucket = b2_api.get_bucket_by_name(bucket_name)
 
+    file_size = os.path.getsize(filepath)
+
+    class UploadProgressListener:
+        """Simple console progress display for Backblaze uploads."""
+
+        def __init__(self, total_bytes):
+            self.total_bytes = total_bytes
+            self.last_percent = -1
+
+        def set_total_bytes(self, total_bytes):
+            self.total_bytes = total_bytes
+
+        def bytes_completed(self, byte_count):
+            if self.total_bytes <= 0:
+                return
+
+            percent = int((byte_count / self.total_bytes) * 100)
+            if percent == self.last_percent:
+                return
+
+            self.last_percent = percent
+            bar_length = 30
+            filled = int((byte_count / self.total_bytes) * bar_length)
+            bar = "#" * filled + "-" * (bar_length - filled)
+            sys.stdout.write(f"\rUploading: [{bar}] {percent:3d}%")
+            sys.stdout.flush()
+
+        def close(self):
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+    progress_listener = UploadProgressListener(file_size)
+
     bucket.upload_local_file(
         local_file=filepath,
-        file_name=remote_name
+        file_name=remote_name,
+        progress_listener=progress_listener
     )
+
+    progress_listener.close()
 
     print(f"Uploaded to Backblaze: {remote_name}")
 
