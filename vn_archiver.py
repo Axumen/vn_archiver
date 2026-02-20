@@ -24,10 +24,11 @@ DRY_RUN = True  # Set to False when ready to upload for real
 INCOMING_DIR = "incoming"
 PROCESSED_DIR = "processed"
 METADATA_TEMPLATE = "metadata.yaml"
+B2_CONFIG_FILE = "backblaze_config.yaml"
 
-B2_KEY_ID = "YOUR_KEY_ID"
-B2_APPLICATION_KEY = "YOUR_APPLICATION_KEY"
-B2_BUCKET_NAME = "YOUR_BUCKET_NAME"
+B2_KEY_ID = None
+B2_APPLICATION_KEY = None
+B2_BUCKET_NAME = None
 
 SUGGESTED_TAGS = [
     "romance", "drama", "comedy", "slice-of-life",
@@ -55,6 +56,37 @@ def sha256_file(filepath):
 def load_metadata_template():
     with open(METADATA_TEMPLATE, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def load_b2_config(config_path=B2_CONFIG_FILE):
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(
+            f"Backblaze config file not found: {config_path}. "
+            "Create it from the project template."
+        )
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f) or {}
+
+    key_id = config.get("key_id")
+    application_key = config.get("application_key")
+    bucket_name = config.get("bucket_name")
+
+    missing_fields = [
+        field_name
+        for field_name, field_value in (
+            ("key_id", key_id),
+            ("application_key", application_key),
+            ("bucket_name", bucket_name),
+        )
+        if not field_value
+    ]
+
+    if missing_fields:
+        missing = ", ".join(missing_fields)
+        raise ValueError(f"Missing Backblaze config field(s): {missing}")
+
+    return key_id, application_key, bucket_name
 
 
 def prompt_field(field_name, current_value):
@@ -188,12 +220,14 @@ def insert_visual_novel(metadata, archive_path):
 # ==============================
 
 def get_b2_api():
+    key_id, application_key, _ = load_b2_config()
+
     info = InMemoryAccountInfo()
     b2_api = B2Api(info)
     b2_api.authorize_account(
         "production",
-        B2_KEY_ID,
-        B2_APPLICATION_KEY
+        key_id,
+        application_key
     )
     return b2_api
 
@@ -203,6 +237,8 @@ def upload_to_b2(filepath, remote_folder=None):
     Upload file to Backblaze.
     DRY_RUN prevents any real upload.
     """
+
+    _, _, bucket_name = load_b2_config()
 
     if not os.path.exists(filepath):
         raise Exception("File does not exist for upload.")
@@ -221,7 +257,7 @@ def upload_to_b2(filepath, remote_folder=None):
         print("\n[DRY RUN ENABLED]")
         print(f"Would upload:")
         print(f"  Local file : {filepath}")
-        print(f"  Bucket     : {B2_BUCKET_NAME}")
+        print(f"  Bucket     : {bucket_name}")
         print(f"  Remote path: {remote_name}")
         print("No upload performed.\n")
         return
@@ -238,7 +274,7 @@ def upload_to_b2(filepath, remote_folder=None):
     # REAL UPLOAD
     # ---------------------------
     b2_api = get_b2_api()
-    bucket = b2_api.get_bucket_by_name(B2_BUCKET_NAME)
+    bucket = b2_api.get_bucket_by_name(bucket_name)
 
     bucket.upload_local_file(
         local_file=filepath,
