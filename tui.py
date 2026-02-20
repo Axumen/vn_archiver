@@ -10,6 +10,7 @@ from colorama import init, Fore, Style
 from vn_archiver import (
     create_archive_only,
     upload_archive,
+    move_uploaded_archive,
     INCOMING_DIR,
     PROCESSED_DIR,
     sha256_file,
@@ -409,9 +410,25 @@ def upload_archives():
         return
 
     # ---- Call structured upload ----
-    upload_archive(archive_path, metadata, vn_id)
+    upload_successful = upload_archive(archive_path, metadata, vn_id)
 
-    print(Fore.GREEN + "Upload complete.\n")
+    if not upload_successful:
+        print(Fore.YELLOW + "Upload was not completed. Archive left in processed.\n")
+        return
+
+    try:
+        moved_path = move_uploaded_archive(archive_path, metadata)
+    except Exception as e:
+        print(Fore.RED + f"Upload succeeded but post-upload move failed: {e}\n")
+        return
+
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE visual_novels SET archive_path = ?, status = ? WHERE id = ?",
+            (moved_path, "uploaded", row["id"])
+        )
+
+    print(Fore.GREEN + f"Upload complete. Archive moved to: {moved_path}\n")
 
 
 # =============================

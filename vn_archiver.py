@@ -24,6 +24,7 @@ DRY_RUN = True  # Set to False when ready to upload for real
 
 INCOMING_DIR = "incoming"
 PROCESSED_DIR = "processed"
+UPLOADED_DIR = "uploaded"
 METADATA_TEMPLATE = "metadata.yaml"
 B2_CONFIG_FILE = "backblaze_config.yaml"
 
@@ -44,6 +45,7 @@ SUGGESTED_TAGS = [
 def ensure_directories():
     Path(INCOMING_DIR).mkdir(exist_ok=True)
     Path(PROCESSED_DIR).mkdir(exist_ok=True)
+    Path(UPLOADED_DIR).mkdir(exist_ok=True)
 
 
 def sha256_file(filepath):
@@ -261,7 +263,7 @@ def upload_to_b2(filepath, remote_folder=None):
         print(f"  Bucket     : {bucket_name}")
         print(f"  Remote path: {remote_name}")
         print("No upload performed.\n")
-        return
+        return False
 
     # ---------------------------
     # CONFIRMATION (EXTRA SAFETY)
@@ -269,7 +271,7 @@ def upload_to_b2(filepath, remote_folder=None):
     confirm = input(f"Upload '{remote_name}' to Backblaze? (yes/no): ").strip().lower()
     if confirm != "yes":
         print("Upload cancelled.")
-        return
+        return False
 
     # ---------------------------
     # REAL UPLOAD
@@ -319,6 +321,31 @@ def upload_to_b2(filepath, remote_folder=None):
     progress_listener.close()
 
     print(f"Uploaded to Backblaze: {remote_name}")
+    return True
+
+
+def move_uploaded_archive(filepath, metadata):
+    """Move uploaded archive out of processed into uploaded/<title>/<version>/."""
+    if not os.path.exists(filepath):
+        raise Exception("Archive not found for post-upload move.")
+
+    def sanitize(value):
+        return str(value).strip().replace(" ", "_")
+
+    title = sanitize(metadata.get("title") or "Unknown_Title")
+    build_version = sanitize(metadata.get("version") or "unknown")
+
+    target_dir = Path(UPLOADED_DIR) / title / build_version
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    destination = target_dir / Path(filepath).name
+
+    if destination.exists():
+        raise Exception(f"Destination already exists: {destination}")
+
+    shutil.move(filepath, destination)
+
+    return str(destination)
 
 # ==============================
 # ARCHIVE CREATION ONLY
@@ -398,8 +425,7 @@ def upload_archive(filepath, metadata=None, vn_id=None):
     # Fallback mode (old behavior)
     # ---------------------------
     if metadata is None or vn_id is None:
-        upload_to_b2(filepath, remote_folder="archives")
-        return
+        return upload_to_b2(filepath, remote_folder="archives")
 
     title = metadata.get("title") or "Unknown_Title"
     title_folder = title.strip().replace(" ", "_")
@@ -413,4 +439,4 @@ def upload_archive(filepath, metadata=None, vn_id=None):
         f"build_{build_version}"
     )
 
-    upload_to_b2(filepath, remote_folder=remote_folder)
+    return upload_to_b2(filepath, remote_folder=remote_folder)
