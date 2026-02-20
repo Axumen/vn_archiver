@@ -13,12 +13,6 @@ from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from tools.db_manager import get_connection
 
 # ==============================
-# SAFETY
-# ==============================
-
-DRY_RUN = True  # Set to False when ready to upload for real
-
-# ==============================
 # CONFIGURATION
 # ==============================
 
@@ -26,7 +20,7 @@ INCOMING_DIR = "incoming"
 PROCESSED_DIR = "processed"
 UPLOADED_DIR = "uploaded"
 METADATA_TEMPLATE = "metadata.yaml"
-B2_CONFIG_FILE = "backblaze_config.yaml"
+B2_CONFIG_FILE = "backblaze_config.yml"
 
 B2_KEY_ID = None
 B2_APPLICATION_KEY = None
@@ -74,6 +68,7 @@ def load_b2_config(config_path=B2_CONFIG_FILE):
     key_id = config.get("key_id")
     application_key = config.get("application_key")
     bucket_name = config.get("bucket_name")
+    dry_run = config.get("dry_run", True)
 
     missing_fields = [
         field_name
@@ -89,7 +84,7 @@ def load_b2_config(config_path=B2_CONFIG_FILE):
         missing = ", ".join(missing_fields)
         raise ValueError(f"Missing Backblaze config field(s): {missing}")
 
-    return key_id, application_key, bucket_name
+    return key_id, application_key, bucket_name, bool(dry_run)
 
 
 def prompt_field(field_name, current_value):
@@ -223,7 +218,7 @@ def insert_visual_novel(metadata, archive_path):
 # ==============================
 
 def get_b2_api():
-    key_id, application_key, _ = load_b2_config()
+    key_id, application_key, _, _ = load_b2_config()
 
     info = InMemoryAccountInfo()
     b2_api = B2Api(info)
@@ -238,10 +233,10 @@ def get_b2_api():
 def upload_to_b2(filepath, remote_folder=None):
     """
     Upload file to Backblaze.
-    DRY_RUN prevents any real upload.
+    dry_run in config prevents any real upload.
     """
 
-    _, _, bucket_name = load_b2_config()
+    _, _, bucket_name, dry_run = load_b2_config()
 
     if not os.path.exists(filepath):
         raise Exception("File does not exist for upload.")
@@ -256,7 +251,7 @@ def upload_to_b2(filepath, remote_folder=None):
     # ---------------------------
     # DRY RUN (SAFE MODE)
     # ---------------------------
-    if DRY_RUN:
+    if dry_run:
         print("\n[DRY RUN ENABLED]")
         print(f"Would upload:")
         print(f"  Local file : {filepath}")
