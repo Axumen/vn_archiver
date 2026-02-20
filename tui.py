@@ -2,6 +2,9 @@
 
 import os
 import yaml
+import shutil
+import json
+from tools.db_manager import initialize_database
 from pathlib import Path
 from colorama import init, Fore, Style
 from vn_archiver import (
@@ -12,6 +15,7 @@ from vn_archiver import (
     sha256_file,
     load_metadata_template
 )
+
 
 init(autoreset=True)
 
@@ -53,8 +57,19 @@ SUGGESTED_TARGET_PLATFORM = [
 # HELPERS
 # =============================
 
+
+
 def header():
-    print(Style.BRIGHT + Fore.CYAN + "\n=== VN ARCHIVER SYSTEM ===\n")
+    width = shutil.get_terminal_size().columns
+    title = "VN ARCHIVER SYSTEM"
+
+    line = "─" * width
+    centered_title = title.center(width)
+
+    print()
+    print(Fore.CYAN + line)
+    print(Style.BRIGHT + Fore.WHITE + centered_title)
+    print(Fore.CYAN + line + "\n")
 
 
 
@@ -70,16 +85,16 @@ def list_metadata():
 
 def list_processed_archives():
     return [f for f in os.listdir(PROCESSED_DIR)
-            if f.endswith("_archive.zip")]
+            if f.endswith(".zip")]
 
 def normalize_value(value):
-    return value.strip().lower() if value else None
+    return value.strip() if value else None
 
 
 def normalize_list(value):
     if not value:
         return None
-    return sorted(set([v.strip().lower() for v in value.split(",") if v.strip()]))
+    return sorted(set([v.strip() for v in value.split(",") if v.strip()]))
     
 def show_file_info(filename):
     path = Path(INCOMING_DIR) / filename
@@ -113,6 +128,7 @@ def choose_from_list(items, title):
 # =============================
 
 def create_metadata_only():
+    
     zips = list_zips()
     filename = choose_from_list(zips, "Select VN to create metadata for")
     if not filename:
@@ -121,6 +137,7 @@ def create_metadata_only():
     show_file_info(filename)
 
     metadata = {}
+    metadata["metadata_version"] = 1    
 
     print(Fore.MAGENTA + "Fill Metadata (Press ENTER to skip fields)\n")
 
@@ -227,29 +244,65 @@ def edit_metadata_only():
 
 def process_archive():
     zips = list_zips()
-    filename = choose_from_list(zips, "Select VN to process archive")
-    if not filename:
+    zip_filename = choose_from_list(zips, "Select VN ZIP to process")
+    if not zip_filename:
         return
 
-    base_name = Path(filename).stem
-    zip_path = Path(INCOMING_DIR) / filename
-    metadata_path = Path(INCOMING_DIR) / f"{base_name}.yaml"
+    metadata_files = list_metadata()
+    metadata_filename = choose_from_list(metadata_files, "Select metadata YAML to use")
+    if not metadata_filename:
+        return
+
+    zip_base = Path(zip_filename).stem
+    metadata_base = Path(metadata_filename).stem
+
+    zip_path = Path(INCOMING_DIR) / zip_filename
+    metadata_path = Path(INCOMING_DIR) / metadata_filename
 
     print(Fore.CYAN + "\n=== PROCESSING ARCHIVE ===\n")
 
-    # Step 1: Check metadata existence
-    print(Fore.BLUE + "Checking metadata file...", end=" ")
-    if not metadata_path.exists():
-        print(Fore.RED + "FAILED")
-        print(Fore.RED + f"Matching metadata '{base_name}.yaml' not found.\n")
-        return
-    print(Fore.GREEN + "OK")
+    # 🔎 Check filename match
+    if zip_base != metadata_base:
+        print(Fore.YELLOW + "WARNING: ZIP and metadata filenames do not match.")
+        print(Fore.YELLOW + f"ZIP: {zip_filename}")
+        print(Fore.YELLOW + f"Metadata: {metadata_filename}")
+        confirm = input(Fore.RED + "Are you sure you want to continue? (y/N): ").strip().lower()
+        if confirm != "y":
+            print(Fore.RED + "\nProcess cancelled.\n")
+            return
 
-    # Step 2: Load metadata
+    # Step 1: Load metadata
     print(Fore.BLUE + "Loading metadata...", end=" ")
     try:
         with open(metadata_path, "r", encoding="utf-8") as f:
             metadata = yaml.safe_load(f)
+            
+            from tools.db_manager import get_connection
+
+            # ---- Enforce metadata versioning ----
+            build_version = metadata.get("version")
+            title = metadata.get("title")
+
+            with get_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT metadata_json FROM visual_novels
+                    WHERE title = ? AND version = ?
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (title, build_version)
+                ).fetchone()
+
+            if row:
+                try:
+                    existing_metadata = json.loads(row["metadata_json"])
+                    old_version = existing_metadata.get("metadata_version", 1)
+                    metadata["metadata_version"] = old_version + 1
+                except Exception:
+                    metadata["metadata_version"] = 1
+            else:
+                metadata["metadata_version"] = 1
+                
     except Exception as e:
         print(Fore.RED + "FAILED")
         print(Fore.RED + f"Error reading metadata: {e}\n")
@@ -262,10 +315,10 @@ def process_archive():
 
     print(Fore.GREEN + "OK")
 
-    # Step 3: Creating archive
+    # Step 2: Creating archive
     print(Fore.BLUE + "Creating archive (hashing + packaging)...", end=" ")
     try:
-        archive_path = create_archive_only(filename, metadata)
+        archive_path = create_archive_only(zip_filename, metadata)
     except Exception as e:
         print(Fore.RED + "FAILED")
         print(Fore.RED + f"Archive creation failed: {e}\n")
@@ -273,22 +326,42 @@ def process_archive():
 
     print(Fore.GREEN + "DONE")
 
-    # Step 4: Move metadata
+    # Step 3: Move metadata (with overwrite option)
     print(Fore.BLUE + "Moving metadata to processed folder...", end=" ")
+
+    # ---- Structured metadata naming ----
+    from tools.db_manager import get_connection
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM visual_novels WHERE sha256 = ?",
+            (metadata["sha256"],)
+        ).fetchone()
+
+    if not row:
+        print(Fore.RED + "Could not determine vn_id for metadata naming.\n")
+        return
+
+    def sanitize(value):
+        return str(value).strip().replace(" ", "_")
+
+    title = sanitize(metadata.get("title") or "Unknown_Title")
+    build_version = sanitize(metadata.get("version") or "unknown")
+    meta_version = metadata.get("metadata_version", 1)
+
+    new_meta_name = f"{title}_build_{build_version}_meta_v{meta_version}.yml"
+    destination_path = Path(PROCESSED_DIR) / new_meta_name
+
     try:
-        metadata_path.rename(Path(PROCESSED_DIR) / metadata_path.name)
+        with open(destination_path, "w", encoding="utf-8") as f:
+            yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
+
+        metadata_path.unlink()
+
     except Exception as e:
         print(Fore.RED + "FAILED")
         print(Fore.RED + f"Metadata move failed: {e}\n")
         return
-
-    print(Fore.GREEN + "DONE")
-
-    # Final confirmation
-    print(Fore.GREEN + "\nArchive successfully created!")
-    print(Fore.GREEN + f"Archive: {Path(archive_path).name}")
-    print(Fore.GREEN + f"Metadata: {metadata_path.name}")
-    print(Fore.CYAN + "\nProcessing complete.\n")
 
 
 # =============================
@@ -301,7 +374,43 @@ def upload_archives():
     if not filename:
         return
 
-    upload_archive(os.path.join(PROCESSED_DIR, filename))
+    archive_path = os.path.join(PROCESSED_DIR, filename)
+
+    # ---- Load metadata + vn_id from DB ----
+    from tools.db_manager import get_connection
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, metadata_json FROM visual_novels WHERE archive_path = ?",
+            (archive_path,)
+        ).fetchone()
+
+    if not row:
+        print(Fore.RED + "Archive not found in database.\n")
+        return
+
+    vn_id = f"{row['id']:06d}"
+
+    raw_metadata = row["metadata_json"]
+
+    if not raw_metadata:
+        print(Fore.RED + "Metadata is empty in database.\n")
+        return
+
+    try:
+        if isinstance(raw_metadata, str):
+            metadata = json.loads(raw_metadata)
+        else:
+            metadata = raw_metadata
+    except Exception as e:
+        print(Fore.RED + f"Failed to parse metadata from database.")
+        print(Fore.RED + f"Raw value: {raw_metadata}")
+        print(Fore.RED + f"Error: {e}\n")
+        return
+
+    # ---- Call structured upload ----
+    upload_archive(archive_path, metadata, vn_id)
+
     print(Fore.GREEN + "Upload complete.\n")
 
 
@@ -310,6 +419,9 @@ def upload_archives():
 # =============================
 
 def main():
+    
+    initialize_database()
+    
     while True:
         header()
 
