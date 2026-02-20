@@ -3,3 +3,5 @@
 key_id: "YOUR_KEY_ID"
 application_key: "YOUR_APPLICATION_KEY"
 bucket_name: "YOUR_BUCKET_NAME"
+# Safety switch. Keep true to preview uploads without sending files.
+dry_run: true
