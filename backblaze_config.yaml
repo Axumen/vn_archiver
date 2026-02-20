@@ -1,0 +1,5 @@
+# Backblaze B2 credentials
+# Fill these values before uploading.
+key_id: "YOUR_KEY_ID"
+application_key: "YOUR_APPLICATION_KEY"
+bucket_name: "YOUR_BUCKET_NAME"
