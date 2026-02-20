@@ -1,7 +1,10 @@
 incoming/
+processed/
+trash/
 extracted/
 archives/
 *.zip
 *.7z
 *.rar
 archive.db
+run_tui.bat
