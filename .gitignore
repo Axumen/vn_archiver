@@ -7,3 +7,4 @@ archives/
 *.7z
 *.rar
 archive.db
+run_tui.bat
