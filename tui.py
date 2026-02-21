@@ -14,7 +14,8 @@ from vn_archiver import (
     INCOMING_DIR,
     PROCESSED_DIR,
     sha256_file,
-    load_metadata_template
+    load_metadata_template,
+    detect_latest_metadata_template_version,
 )
 
 
@@ -138,7 +139,7 @@ def create_metadata_only():
     show_file_info(filename)
 
     metadata = {}
-    metadata["metadata_version"] = 1    
+    metadata["metadata_version"] = detect_latest_metadata_template_version()
 
     print(Fore.MAGENTA + "Fill Metadata (Press ENTER to skip fields)\n")
 
@@ -278,31 +279,14 @@ def process_archive():
         with open(metadata_path, "r", encoding="utf-8") as f:
             metadata = yaml.safe_load(f)
             
-            from tools.db_manager import get_connection
+            # ---- Metadata schema version detection ----
+            metadata_version = metadata.get("metadata_version")
+            if metadata_version is None:
+                metadata_version = detect_latest_metadata_template_version()
+                metadata["metadata_version"] = metadata_version
 
-            # ---- Enforce metadata versioning ----
-            build_version = metadata.get("version")
-            title = metadata.get("title")
-
-            with get_connection() as conn:
-                row = conn.execute(
-                    """
-                    SELECT metadata_json FROM visual_novels
-                    WHERE title = ? AND version = ?
-                    ORDER BY id DESC LIMIT 1
-                    """,
-                    (title, build_version)
-                ).fetchone()
-
-            if row:
-                try:
-                    existing_metadata = json.loads(row["metadata_json"])
-                    old_version = existing_metadata.get("metadata_version", 1)
-                    metadata["metadata_version"] = old_version + 1
-                except Exception:
-                    metadata["metadata_version"] = 1
-            else:
-                metadata["metadata_version"] = 1
+            # Ensure an installed template exists for the metadata version in use.
+            load_metadata_template(metadata_version)
                 
     except Exception as e:
         print(Fore.RED + "FAILED")
