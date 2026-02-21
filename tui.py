@@ -15,11 +15,16 @@ from vn_archiver import (
     PROCESSED_DIR,
     sha256_file,
     load_metadata_template,
+    resolve_prompt_fields,
+    get_available_metadata_template_versions,
     detect_latest_metadata_template_version,
 )
 
 
 init(autoreset=True)
+
+
+SELECTED_METADATA_TEMPLATE_VERSION = None
 
 # =============================
 # SUGGESTED VALUES (Normalized)
@@ -125,6 +130,68 @@ def choose_from_list(items, title):
         return None
 
 
+def get_active_metadata_template_version():
+    if SELECTED_METADATA_TEMPLATE_VERSION is not None:
+        return SELECTED_METADATA_TEMPLATE_VERSION
+    return detect_latest_metadata_template_version()
+
+
+def configure_metadata_template_version():
+    global SELECTED_METADATA_TEMPLATE_VERSION
+
+    versions = get_available_metadata_template_versions()
+    if not versions:
+        print(Fore.RED + "No metadata templates found in metadata_templates/.\n")
+        return
+
+    print(Fore.CYAN + "\nAvailable metadata template versions:")
+    for version in versions:
+        tag = " (latest)" if version == versions[-1] else ""
+        print(Fore.CYAN + f"- v{version}{tag}")
+
+    selected = input(Fore.YELLOW + "\nSelect metadata template version number: ").strip()
+    try:
+        selected_version = int(selected)
+    except ValueError:
+        print(Fore.RED + "Invalid version selection.\n")
+        return
+
+    if selected_version not in versions:
+        print(Fore.RED + f"Template v{selected_version} not found.\n")
+        return
+
+    template = load_metadata_template(selected_version)
+    fields = resolve_prompt_fields(template)
+
+    print(Fore.BLUE + f"\nTemplate preview for v{selected_version}:")
+    print(Fore.BLUE + f"metadata_version: {template.get('metadata_version', selected_version)}")
+
+    required = template.get("required") or []
+    optional = template.get("optional") or []
+
+    if required:
+        print(Fore.GREEN + "Required fields:")
+        for field in required:
+            print(Fore.GREEN + f"  - {field}")
+
+    if optional:
+        print(Fore.GREEN + "Optional fields:")
+        for field in optional:
+            print(Fore.GREEN + f"  - {field}")
+
+    if not required and not optional:
+        print(Fore.GREEN + "Prompt fields:")
+        for field in fields:
+            print(Fore.GREEN + f"  - {field}")
+
+    confirm = input(Fore.YELLOW + f"\nUse metadata template v{selected_version}? [y/N]: ").strip().lower()
+    if confirm in ("y", "yes"):
+        SELECTED_METADATA_TEMPLATE_VERSION = selected_version
+        print(Fore.GREEN + f"Metadata template v{selected_version} is now active.\n")
+    else:
+        print(Fore.YELLOW + "No changes made to active metadata template.\n")
+
+
 # =============================
 # METADATA CREATION
 # =============================
@@ -139,7 +206,9 @@ def create_metadata_only():
     show_file_info(filename)
 
     metadata = {}
-    metadata["metadata_version"] = detect_latest_metadata_template_version()
+    metadata_version = get_active_metadata_template_version()
+    load_metadata_template(metadata_version)
+    metadata["metadata_version"] = metadata_version
 
     print(Fore.MAGENTA + "Fill Metadata (Press ENTER to skip fields)\n")
 
@@ -430,7 +499,11 @@ def main():
         print(Fore.MAGENTA + "2) Edit Metadata")
         print(Fore.MAGENTA + "3) Process Archive")
         print(Fore.MAGENTA + "4) Upload Archive")
-        print(Fore.MAGENTA + "5) Quit\n")
+        print(Fore.MAGENTA + "5) Config")
+        print(Fore.MAGENTA + "6) Quit\n")
+
+        active_version = get_active_metadata_template_version()
+        print(Fore.CYAN + f"Active metadata template: v{active_version}\n")
 
         choice = input(Fore.YELLOW + "Select option: ").strip()
 
@@ -443,6 +516,8 @@ def main():
         elif choice == "4":
             upload_archives()
         elif choice == "5":
+            configure_metadata_template_version()
+        elif choice == "6":
             print(Fore.CYAN + "\nGoodbye.\n")
             break
         else:
