@@ -19,7 +19,8 @@ from tools.db_manager import get_connection
 INCOMING_DIR = "incoming"
 PROCESSED_DIR = "processed"
 UPLOADED_DIR = "uploaded"
-METADATA_TEMPLATE = "metadata.yaml"
+METADATA_TEMPLATE_DIR = Path("metadata_templates")
+DEFAULT_METADATA_VERSION = 1
 B2_CONFIG_FILE = "backblaze_config.yml"
 
 B2_KEY_ID = None
@@ -31,6 +32,17 @@ SUGGESTED_TAGS = [
     "mystery", "horror", "sci-fi", "fantasy",
     "school", "adult", "nakige", "utsuge"
 ]
+
+AUTO_METADATA_FIELDS = {
+    "original_filename": lambda zip_path: os.path.basename(zip_path),
+    "file_size_bytes": lambda zip_path: os.path.getsize(zip_path),
+    "sha256": lambda zip_path: sha256_file(zip_path),
+    "archived_at": lambda _: datetime.utcnow().isoformat() + "Z",
+    # Legacy identification fields maintained in nested archive metadata.
+    "archive.filename": lambda zip_path: os.path.basename(zip_path),
+    "archive.sha256": lambda zip_path: sha256_file(zip_path),
+    "archive.file_size": lambda zip_path: os.path.getsize(zip_path),
+}
 
 # ==============================
 # UTILITY
@@ -50,9 +62,107 @@ def sha256_file(filepath):
     return sha256.hexdigest()
 
 
-def load_metadata_template():
-    with open(METADATA_TEMPLATE, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+def get_metadata_template_path(version=DEFAULT_METADATA_VERSION):
+    return METADATA_TEMPLATE_DIR / f"metadata_v{version}.yml"
+
+
+def get_available_metadata_template_versions():
+    if not METADATA_TEMPLATE_DIR.exists():
+        return []
+
+    versions = []
+    for template_path in METADATA_TEMPLATE_DIR.glob("metadata_v*.yml"):
+        stem = template_path.stem
+        try:
+            version = int(stem.split("_v", 1)[1])
+            versions.append(version)
+        except (IndexError, ValueError):
+            continue
+
+    return sorted(set(versions))
+
+
+def detect_latest_metadata_template_version():
+    versions = get_available_metadata_template_versions()
+    if versions:
+        return versions[-1]
+    return DEFAULT_METADATA_VERSION
+
+
+def load_metadata_template(version=None):
+    if version is None:
+        version = detect_latest_metadata_template_version()
+
+    template_path = get_metadata_template_path(version)
+
+    if not template_path.exists():
+        raise FileNotFoundError(
+            f"Metadata template not found for version {version}: {template_path}"
+        )
+
+    with open(template_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def set_nested_value(target, dotted_key, value):
+    parts = dotted_key.split(".")
+    current = target
+
+    for part in parts[:-1]:
+        if part not in current or not isinstance(current[part], dict):
+            current[part] = {}
+        current = current[part]
+
+    current[parts[-1]] = value
+
+
+def get_nested_value(target, dotted_key):
+    current = target
+    for part in dotted_key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def resolve_prompt_fields(template):
+    """
+    Returns metadata keys that should be prompted from the template format.
+
+    Supported structures:
+    1) {required: [...], optional: [...]}  # current template format
+    2) {fields: ["a", "b"]}
+    3) {fields: {a: ..., b: ...}}
+    """
+
+    fields = []
+
+    required_fields = template.get("required") or []
+    optional_fields = template.get("optional") or []
+
+    if required_fields or optional_fields:
+        fields.extend(required_fields)
+        fields.extend(optional_fields)
+
+    structured_fields = template.get("fields")
+    if isinstance(structured_fields, list):
+        fields.extend(structured_fields)
+    elif isinstance(structured_fields, dict):
+        fields.extend(structured_fields.keys())
+
+    deduplicated = []
+    seen = set()
+    for field in fields:
+        if not isinstance(field, str):
+            continue
+        if field in seen:
+            continue
+        if field in AUTO_METADATA_FIELDS:
+            continue
+        seen.add(field)
+        deduplicated.append(field)
+
+    return deduplicated
 
 
 def load_b2_config(config_path=B2_CONFIG_FILE):
@@ -103,31 +213,40 @@ def prompt_tags():
 
 def create_metadata(zip_path):
     template = load_metadata_template()
+    metadata_version = template.get(
+        "metadata_version",
+        detect_latest_metadata_template_version()
+    )
+    prompt_fields = resolve_prompt_fields(template)
+
+    metadata = {"metadata_version": metadata_version}
 
     print("\nFill Metadata (Press ENTER to leave blank):\n")
 
-    for key in template.keys():
-        if key in ["original_filename", "file_size_bytes", "sha256", "archived_at"]:
-            continue
-
+    for key in prompt_fields:
         if key == "tags":
-            template[key] = prompt_tags()
+            metadata[key] = prompt_tags()
         else:
-            template[key] = prompt_field(key, template.get(key, ""))
+            metadata[key] = prompt_field(key, "")
 
     # Automatic fields
-    template["original_filename"] = os.path.basename(zip_path)
-    template["file_size_bytes"] = os.path.getsize(zip_path)
-    template["sha256"] = sha256_file(zip_path)
-    template["archived_at"] = datetime.utcnow().isoformat() + "Z"
+    for key, value_factory in AUTO_METADATA_FIELDS.items():
+        value = value_factory(zip_path)
+        if "." in key:
+            set_nested_value(metadata, key, value)
+        else:
+            metadata[key] = value
 
-    return template
+    return metadata
 
 
 def create_archive(original_zip, metadata_dict, output_path):
 
     # Ensure metadata_version exists
-    metadata_dict.setdefault("metadata_version", 1)
+    metadata_dict.setdefault(
+        "metadata_version",
+        detect_latest_metadata_template_version()
+    )
 
     temp_metadata_path = "metadata.yml"
 
@@ -153,8 +272,20 @@ def sha_exists(sha256):
         return row is not None
 
 
+def get_metadata_value(metadata, key, fallback=None):
+    value = metadata.get(key)
+    if value is not None:
+        return value
+
+    nested = get_nested_value(metadata, key)
+    if nested is not None:
+        return nested
+
+    return fallback
+
+
 def insert_visual_novel(metadata, archive_path):
-    
+
     with get_connection() as conn:
 
         metadata_json = json.dumps(metadata, ensure_ascii=False)
@@ -174,8 +305,8 @@ def insert_visual_novel(metadata, archive_path):
                 metadata.get("language"),
                 metadata.get("release_date"),
                 metadata.get("version"),
-                metadata.get("sha256"),
-                metadata.get("file_size_bytes"),
+                get_metadata_value(metadata, "sha256", get_metadata_value(metadata, "archive.sha256")),
+                get_metadata_value(metadata, "file_size_bytes", get_metadata_value(metadata, "archive.file_size")),
                 archive_path,
                 "archived",
                 metadata_json
@@ -210,9 +341,9 @@ def insert_visual_novel(metadata, archive_path):
                     "INSERT OR IGNORE INTO vn_tags (vn_id, tag_id) VALUES (?, ?)",
                     (vn_id, tag_row["id"])
                 )
-                
+
         return vn_id
-                
+
 # ==============================
 # BACKBLAZE
 # ==============================
@@ -358,6 +489,9 @@ def create_archive_only(filename, metadata):
     metadata["file_size_bytes"] = os.path.getsize(full_path)
     metadata["sha256"] = sha256_file(full_path)
     metadata["archived_at"] = datetime.utcnow().isoformat() + "Z"
+    set_nested_value(metadata, "archive.filename", metadata["original_filename"])
+    set_nested_value(metadata, "archive.sha256", metadata["sha256"])
+    set_nested_value(metadata, "archive.file_size", metadata["file_size_bytes"])
 
     # Prevent duplicate ingestion
     if sha_exists(metadata["sha256"]):
@@ -385,7 +519,7 @@ def create_archive_only(filename, metadata):
     # ---- Step 4: Rename archive ----
     if os.path.exists(final_path):
         raise Exception("Archive with same title and build already exists.")
-    
+
     os.rename(temp_path, final_path)
 
     # ---- Step 5: Update DB archive_path ----
@@ -399,7 +533,7 @@ def create_archive_only(filename, metadata):
     shutil.move(full_path, os.path.join(PROCESSED_DIR, filename))
 
     return final_path
-    
+
 # ==============================
 # STRUCTURED ARCHIVE UPLOAD
 # ==============================
