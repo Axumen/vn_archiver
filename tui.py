@@ -26,6 +26,9 @@ init(autoreset=True)
 
 SELECTED_METADATA_TEMPLATE_VERSION = None
 
+
+SELECTED_METADATA_TEMPLATE_VERSION = None
+
 # =============================
 # SUGGESTED VALUES (Normalized)
 # =============================
@@ -128,6 +131,68 @@ def choose_from_list(items, title):
     except (ValueError, IndexError):
         print(Fore.RED + "Invalid selection.\n")
         return None
+
+
+def get_active_metadata_template_version():
+    if SELECTED_METADATA_TEMPLATE_VERSION is not None:
+        return SELECTED_METADATA_TEMPLATE_VERSION
+    return detect_latest_metadata_template_version()
+
+
+def configure_metadata_template_version():
+    global SELECTED_METADATA_TEMPLATE_VERSION
+
+    versions = get_available_metadata_template_versions()
+    if not versions:
+        print(Fore.RED + "No metadata templates found in metadata_templates/.\n")
+        return
+
+    print(Fore.CYAN + "\nAvailable metadata template versions:")
+    for version in versions:
+        tag = " (latest)" if version == versions[-1] else ""
+        print(Fore.CYAN + f"- v{version}{tag}")
+
+    selected = input(Fore.YELLOW + "\nSelect metadata template version number: ").strip()
+    try:
+        selected_version = int(selected)
+    except ValueError:
+        print(Fore.RED + "Invalid version selection.\n")
+        return
+
+    if selected_version not in versions:
+        print(Fore.RED + f"Template v{selected_version} not found.\n")
+        return
+
+    template = load_metadata_template(selected_version)
+    fields = resolve_prompt_fields(template)
+
+    print(Fore.BLUE + f"\nTemplate preview for v{selected_version}:")
+    print(Fore.BLUE + f"metadata_version: {template.get('metadata_version', selected_version)}")
+
+    required = template.get("required") or []
+    optional = template.get("optional") or []
+
+    if required:
+        print(Fore.GREEN + "Required fields:")
+        for field in required:
+            print(Fore.GREEN + f"  - {field}")
+
+    if optional:
+        print(Fore.GREEN + "Optional fields:")
+        for field in optional:
+            print(Fore.GREEN + f"  - {field}")
+
+    if not required and not optional:
+        print(Fore.GREEN + "Prompt fields:")
+        for field in fields:
+            print(Fore.GREEN + f"  - {field}")
+
+    confirm = input(Fore.YELLOW + f"\nUse metadata template v{selected_version}? [y/N]: ").strip().lower()
+    if confirm in ("y", "yes"):
+        SELECTED_METADATA_TEMPLATE_VERSION = selected_version
+        print(Fore.GREEN + f"Metadata template v{selected_version} is now active.\n")
+    else:
+        print(Fore.YELLOW + "No changes made to active metadata template.\n")
 
 
 def get_active_metadata_template_version():
