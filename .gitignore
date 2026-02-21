@@ -3,6 +3,7 @@ processed/
 trash/
 extracted/
 archives/
+uploaded/
 *.zip
 *.7z
 *.rar
