@@ -26,6 +26,9 @@ init(autoreset=True)
 
 SELECTED_METADATA_TEMPLATE_VERSION = None
 
+
+SELECTED_METADATA_TEMPLATE_VERSION = None
+
 # =============================
 # SUGGESTED VALUES (Normalized)
 # =============================
@@ -192,6 +195,68 @@ def configure_metadata_template_version():
         print(Fore.YELLOW + "No changes made to active metadata template.\n")
 
 
+def get_active_metadata_template_version():
+    if SELECTED_METADATA_TEMPLATE_VERSION is not None:
+        return SELECTED_METADATA_TEMPLATE_VERSION
+    return detect_latest_metadata_template_version()
+
+
+def configure_metadata_template_version():
+    global SELECTED_METADATA_TEMPLATE_VERSION
+
+    versions = get_available_metadata_template_versions()
+    if not versions:
+        print(Fore.RED + "No metadata templates found in metadata_templates/.\n")
+        return
+
+    print(Fore.CYAN + "\nAvailable metadata template versions:")
+    for version in versions:
+        tag = " (latest)" if version == versions[-1] else ""
+        print(Fore.CYAN + f"- v{version}{tag}")
+
+    selected = input(Fore.YELLOW + "\nSelect metadata template version number: ").strip()
+    try:
+        selected_version = int(selected)
+    except ValueError:
+        print(Fore.RED + "Invalid version selection.\n")
+        return
+
+    if selected_version not in versions:
+        print(Fore.RED + f"Template v{selected_version} not found.\n")
+        return
+
+    template = load_metadata_template(selected_version)
+    fields = resolve_prompt_fields(template)
+
+    print(Fore.BLUE + f"\nTemplate preview for v{selected_version}:")
+    print(Fore.BLUE + f"metadata_version: {template.get('metadata_version', selected_version)}")
+
+    required = template.get("required") or []
+    optional = template.get("optional") or []
+
+    if required:
+        print(Fore.GREEN + "Required fields:")
+        for field in required:
+            print(Fore.GREEN + f"  - {field}")
+
+    if optional:
+        print(Fore.GREEN + "Optional fields:")
+        for field in optional:
+            print(Fore.GREEN + f"  - {field}")
+
+    if not required and not optional:
+        print(Fore.GREEN + "Prompt fields:")
+        for field in fields:
+            print(Fore.GREEN + f"  - {field}")
+
+    confirm = input(Fore.YELLOW + f"\nUse metadata template v{selected_version}? [y/N]: ").strip().lower()
+    if confirm in ("y", "yes"):
+        SELECTED_METADATA_TEMPLATE_VERSION = selected_version
+        print(Fore.GREEN + f"Metadata template v{selected_version} is now active.\n")
+    else:
+        print(Fore.YELLOW + "No changes made to active metadata template.\n")
+
+
 # =============================
 # METADATA CREATION
 # =============================
@@ -207,68 +272,46 @@ def create_metadata_only():
 
     metadata = {}
     metadata_version = get_active_metadata_template_version()
-    load_metadata_template(metadata_version)
+    template = load_metadata_template(metadata_version)
     metadata["metadata_version"] = metadata_version
 
     print(Fore.MAGENTA + "Fill Metadata (Press ENTER to skip fields)\n")
 
-    def ask_with_suggestions(field, suggestions):
-        print(Fore.CYAN + f"Suggested {field}:")
-        print(", ".join(suggestions))
+    field_suggestions = {
+        "release_status": SUGGESTED_RELEASE_STATUS,
+        "distribution_model": SUGGESTED_DISTRIBUTION_MODEL,
+        "build_type": SUGGESTED_BUILD_TYPE,
+        "language": SUGGESTED_LANGUAGE,
+        "distribution_platform": SUGGESTED_DISTRIBUTION_PLATFORM,
+        "content_rating": SUGGESTED_CONTENT_RATING,
+        "target_platform": SUGGESTED_TARGET_PLATFORM,
+        "tags": [
+            "romance", "drama", "comedy", "slice-of-life", "mystery", "horror",
+            "sci-fi", "fantasy", "psychological", "thriller", "action", "historical",
+            "supernatural", "nakige", "utsuge", "nukige", "moege", "dark", "wholesome",
+            "tragic", "bittersweet", "school", "modern", "adult"
+        ],
+    }
+
+    prompt_fields = resolve_prompt_fields(template)
+
+    for field in prompt_fields:
+        if field in ("tags", "target_platform"):
+            suggestions = field_suggestions.get(field) or []
+            if suggestions:
+                print(Fore.CYAN + f"Suggested {field}:")
+                print(", ".join(suggestions))
+            value = input(Fore.YELLOW + f"{field} (comma separated): ").strip()
+            metadata[field] = normalize_list(value)
+            continue
+
+        suggestions = field_suggestions.get(field)
+        if suggestions:
+            print(Fore.CYAN + f"Suggested {field}:")
+            print(", ".join(suggestions))
+
         value = input(Fore.YELLOW + f"{field}: ").strip()
-        return normalize_value(value)
-
-    # Basic free fields
-    metadata["developer"] = normalize_value(input(Fore.YELLOW + "developer: ").strip())
-    metadata["title"] = normalize_value(input(Fore.YELLOW + "title: ").strip())
-    metadata["version"] = normalize_value(input(Fore.YELLOW + "version: ").strip())
-
-    # Structured fields with suggestions
-    metadata["release_status"] = ask_with_suggestions(
-        "release_status", SUGGESTED_RELEASE_STATUS
-    )
-
-    metadata["distribution_model"] = ask_with_suggestions(
-        "distribution_model", SUGGESTED_DISTRIBUTION_MODEL
-    )
-
-    metadata["build_type"] = ask_with_suggestions(
-        "build_type", SUGGESTED_BUILD_TYPE
-    )
-
-    metadata["release_date"] = normalize_value(input(Fore.YELLOW + "release_date (YYYY-MM-DD): ").strip())
-
-    # Engine (NO suggestion enforcement per your request)
-    metadata["engine"] = normalize_value(input(Fore.YELLOW + "engine: ").strip())
-
-    metadata["engine_version"] = normalize_value(input(Fore.YELLOW + "engine_version: ").strip())
-
-    metadata["language"] = ask_with_suggestions(
-        "language", SUGGESTED_LANGUAGE
-    )
-
-    metadata["distribution_platform"] = ask_with_suggestions(
-        "distribution_platform", SUGGESTED_DISTRIBUTION_PLATFORM
-    )
-
-    metadata["content_rating"] = ask_with_suggestions(
-        "content_rating", SUGGESTED_CONTENT_RATING
-    )
-
-    metadata["source"] = normalize_value(input(Fore.YELLOW + "source URL: ").strip())
-    metadata["notes"] = normalize_value(input(Fore.YELLOW + "notes: ").strip())
-
-    # Target platform (comma separated normalized list)
-    print(Fore.CYAN + "Suggested target_platform:")
-    print(", ".join(SUGGESTED_TARGET_PLATFORM))
-    value = input(Fore.YELLOW + "target_platform (comma separated): ").strip()
-    metadata["target_platform"] = normalize_list(value)
-
-    # Tags (still manual, only suggestions shown)
-    print(Fore.CYAN + "Suggested tags:")
-    print("romance, drama, comedy, slice-of-life, mystery, horror, sci-fi, fantasy, psychological, thriller, action, historical, supernatural, nakige, utsuge, nukige, moege, dark, wholesome, tragic, bittersweet, school, modern, adult")
-    value = input(Fore.YELLOW + "tags (comma separated): ").strip()
-    metadata["tags"] = normalize_list(value)
+        metadata[field] = normalize_value(value)
 
     metadata_path = Path(INCOMING_DIR) / (Path(filename).stem + ".yaml")
 
