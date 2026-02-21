@@ -66,7 +66,33 @@ def get_metadata_template_path(version=DEFAULT_METADATA_VERSION):
     return METADATA_TEMPLATE_DIR / f"metadata_v{version}.yml"
 
 
-def load_metadata_template(version=DEFAULT_METADATA_VERSION):
+def get_available_metadata_template_versions():
+    if not METADATA_TEMPLATE_DIR.exists():
+        return []
+
+    versions = []
+    for template_path in METADATA_TEMPLATE_DIR.glob("metadata_v*.yml"):
+        stem = template_path.stem
+        try:
+            version = int(stem.split("_v", 1)[1])
+            versions.append(version)
+        except (IndexError, ValueError):
+            continue
+
+    return sorted(set(versions))
+
+
+def detect_latest_metadata_template_version():
+    versions = get_available_metadata_template_versions()
+    if versions:
+        return versions[-1]
+    return DEFAULT_METADATA_VERSION
+
+
+def load_metadata_template(version=None):
+    if version is None:
+        version = detect_latest_metadata_template_version()
+
     template_path = get_metadata_template_path(version)
 
     if not template_path.exists():
@@ -187,7 +213,10 @@ def prompt_tags():
 
 def create_metadata(zip_path):
     template = load_metadata_template()
-    metadata_version = template.get("metadata_version", DEFAULT_METADATA_VERSION)
+    metadata_version = template.get(
+        "metadata_version",
+        detect_latest_metadata_template_version()
+    )
     prompt_fields = resolve_prompt_fields(template)
 
     metadata = {"metadata_version": metadata_version}
@@ -214,7 +243,10 @@ def create_metadata(zip_path):
 def create_archive(original_zip, metadata_dict, output_path):
 
     # Ensure metadata_version exists
-    metadata_dict.setdefault("metadata_version", DEFAULT_METADATA_VERSION)
+    metadata_dict.setdefault(
+        "metadata_version",
+        detect_latest_metadata_template_version()
+    )
 
     temp_metadata_path = "metadata.yml"
 
