@@ -11,6 +11,7 @@ from vn_archiver import (
     create_archive_only,
     upload_archive,
     move_uploaded_archive,
+    upload_metadata_sidecar,
     INCOMING_DIR,
     PROCESSED_DIR,
     sha256_file,
@@ -478,18 +479,19 @@ def upload_archives():
         return
 
     archive_path = os.path.join(PROCESSED_DIR, filename)
+    archive_sha256 = sha256_file(archive_path)
 
     # ---- Load metadata + vn_id from DB ----
     from tools.db_manager import get_connection
 
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT id, metadata_json FROM visual_novels WHERE archive_path = ?",
-            (archive_path,)
+            "SELECT id, metadata_json FROM visual_novels WHERE sha256 = ?",
+            (archive_sha256,)
         ).fetchone()
 
     if not row:
-        print(Fore.RED + "Archive not found in database.\n")
+        print(Fore.RED + "Archive not found in database by SHA256.\n")
         return
 
     vn_id = f"{row['id']:06d}"
@@ -518,6 +520,15 @@ def upload_archives():
         print(Fore.YELLOW + "Upload was not completed. Archive left in processed.\n")
         return
 
+    upload_metadata = input(
+        Fore.YELLOW + "Upload metadata sidecar to B2 metadata/<title>/vn_<id>/build_<version>/v* namespace? [y/N]: "
+    ).strip().lower()
+
+    if upload_metadata in ("y", "yes"):
+        metadata_uploaded = upload_metadata_sidecar(metadata, vn_id)
+        if not metadata_uploaded:
+            print(Fore.YELLOW + "Metadata sidecar upload skipped/cancelled. Archive remains uploaded.\n")
+
     try:
         moved_path = move_uploaded_archive(archive_path, metadata)
     except Exception as e:
@@ -526,8 +537,8 @@ def upload_archives():
 
     with get_connection() as conn:
         conn.execute(
-            "UPDATE visual_novels SET archive_path = ?, status = ? WHERE id = ?",
-            (moved_path, "uploaded", row["id"])
+            "UPDATE visual_novels SET status = ? WHERE id = ?",
+            ("uploaded", row["id"])
         )
 
     print(Fore.GREEN + f"Upload complete. Archive moved to: {moved_path}\n")

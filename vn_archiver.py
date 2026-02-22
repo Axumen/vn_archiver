@@ -7,6 +7,7 @@ import shutil
 import sys
 import yaml
 import json
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
@@ -293,7 +294,7 @@ def get_metadata_value(metadata, key, fallback=None):
     return fallback
 
 
-def insert_visual_novel(metadata, archive_path):
+def insert_visual_novel(metadata):
 
     with get_connection() as conn:
 
@@ -303,9 +304,9 @@ def insert_visual_novel(metadata, archive_path):
             """
             INSERT INTO visual_novels
             (title, developer, engine, language, release_date,
-             version, sha256, file_size, archive_path, status,
+             version, sha256, file_size, status,
              metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 metadata.get("title"),
@@ -316,7 +317,6 @@ def insert_visual_novel(metadata, archive_path):
                 metadata.get("version"),
                 get_metadata_value(metadata, "sha256", get_metadata_value(metadata, "archive.sha256")),
                 get_metadata_value(metadata, "file_size_bytes", get_metadata_value(metadata, "archive.file_size")),
-                archive_path,
                 "archived",
                 metadata_json
             )
@@ -506,14 +506,14 @@ def create_archive_only(filename, metadata):
     if sha_exists(metadata["sha256"]):
         raise Exception("Archive already exists in database (duplicate SHA256).")
 
-    # ---- Step 1: Temporary archive (before vn_id exists) ----
+    # ---- Step 1: Temporary archive (before final naming) ----
     temp_name = filename.replace(".zip", "_archive_temp.zip")
     temp_path = os.path.join(PROCESSED_DIR, temp_name)
 
     create_archive(full_path, metadata, temp_path)
 
     # ---- Step 2: Insert into DB to get vn_id ----
-    vn_id = insert_visual_novel(metadata, temp_path)
+    vn_id = insert_visual_novel(metadata)
 
     # ---- Step 3: Build structured final name ----
     def sanitize(value):
@@ -531,14 +531,7 @@ def create_archive_only(filename, metadata):
 
     os.rename(temp_path, final_path)
 
-    # ---- Step 5: Update DB archive_path ----
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE visual_novels SET archive_path = ? WHERE id = ?",
-            (final_path, int(vn_id))
-        )
-
-    # ---- Step 6: Move original ZIP into processed ----
+    # ---- Step 5: Move original ZIP into processed ----
     shutil.move(full_path, os.path.join(PROCESSED_DIR, filename))
 
     return final_path
@@ -578,3 +571,79 @@ def upload_archive(filepath, metadata=None, vn_id=None):
     )
 
     return upload_to_b2(filepath, remote_folder=remote_folder)
+
+
+def slugify_component(value, fallback):
+    """Normalize metadata values for stable folder/file naming."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return fallback
+
+    normalized = []
+    last_was_underscore = False
+
+    for char in text:
+        if char.isalnum():
+            normalized.append(char)
+            last_was_underscore = False
+            continue
+
+        if char in ("_", "-", " "):
+            if not last_was_underscore:
+                normalized.append("_")
+                last_was_underscore = True
+
+    slug = "".join(normalized).strip("_")
+    return slug or fallback
+
+
+def upload_metadata_sidecar(metadata, vn_id):
+    """
+    Upload metadata as a sidecar artifact to a consolidated metadata namespace:
+    metadata/<title>/vn_<id>/build_<version>/v<schema>/<title>__build_<version>__sha_<sha8>.yml
+    """
+
+    if not isinstance(metadata, dict):
+        raise ValueError("Metadata sidecar upload requires a metadata dictionary.")
+
+    metadata_version = metadata.get("metadata_version")
+    if metadata_version in (None, ""):
+        metadata_version = detect_latest_metadata_template_version()
+
+    title_slug = slugify_component(metadata.get("title"), "unknown_title")
+    build_slug = slugify_component(metadata.get("version"), "unknown")
+
+    sha256 = get_metadata_value(
+        metadata,
+        "sha256",
+        get_metadata_value(metadata, "archive.sha256")
+    )
+    sha_prefix = str(sha256 or "unknown")[:8]
+
+    filename = (
+        f"{title_slug}__build_{build_slug}__sha_{sha_prefix}.yml"
+    )
+    remote_folder = (
+        f"metadata/"
+        f"{title_slug}/"
+        f"vn_{vn_id}/"
+        f"build_{build_slug}/"
+        f"v{metadata_version}"
+    )
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yml", encoding="utf-8", delete=False) as handle:
+        temp_path = handle.name
+        yaml.dump(metadata, handle, sort_keys=False, allow_unicode=True)
+
+    final_temp_path = Path(temp_path)
+
+    try:
+        local_sidecar_path = final_temp_path.with_name(filename)
+        final_temp_path.rename(local_sidecar_path)
+        return upload_to_b2(str(local_sidecar_path), remote_folder=remote_folder)
+    finally:
+        if final_temp_path.exists():
+            final_temp_path.unlink(missing_ok=True)
+        local_sidecar_path = final_temp_path.with_name(filename)
+        if local_sidecar_path.exists():
+            local_sidecar_path.unlink(missing_ok=True)
