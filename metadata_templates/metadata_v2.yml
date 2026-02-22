@@ -1,4 +1,4 @@
-metadata_version: 1
+metadata_version: 2
 
 required:
   - developer
@@ -23,4 +23,3 @@ optional:
   - tags
   - source
   - notes
-  - events
