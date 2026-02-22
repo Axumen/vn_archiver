@@ -11,6 +11,7 @@ required:
 optional:
   - release_date
   - build_type
+  # engine is optional (not required by database schema)
   - engine
   - engine_version
   - language
