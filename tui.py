@@ -11,6 +11,7 @@ from vn_archiver import (
     create_archive_only,
     upload_archive,
     move_uploaded_archive,
+    upload_metadata_sidecar,
     INCOMING_DIR,
     PROCESSED_DIR,
     sha256_file,
@@ -517,6 +518,15 @@ def upload_archives():
     if not upload_successful:
         print(Fore.YELLOW + "Upload was not completed. Archive left in processed.\n")
         return
+
+    upload_metadata = input(
+        Fore.YELLOW + "Upload metadata sidecar to B2 metadata/<title>/vn_<id>/build_<version>/v* namespace? [y/N]: "
+    ).strip().lower()
+
+    if upload_metadata in ("y", "yes"):
+        metadata_uploaded = upload_metadata_sidecar(metadata, vn_id)
+        if not metadata_uploaded:
+            print(Fore.YELLOW + "Metadata sidecar upload skipped/cancelled. Archive remains uploaded.\n")
 
     try:
         moved_path = move_uploaded_archive(archive_path, metadata)
