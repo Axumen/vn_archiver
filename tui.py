@@ -3,7 +3,6 @@
 import os
 import yaml
 import shutil
-import json
 from tools.db_manager import initialize_database
 from pathlib import Path
 from colorama import init, Fore, Style
@@ -11,6 +10,7 @@ from vn_archiver import (
     create_archive_only,
     upload_archive,
     move_uploaded_archive,
+    move_original_to_uploaded_local,
     upload_metadata_sidecar,
     INCOMING_DIR,
     PROCESSED_DIR,
@@ -101,7 +101,7 @@ def list_metadata():
 
 def list_processed_archives():
     return [f for f in os.listdir(PROCESSED_DIR)
-            if f.endswith(".zip")]
+            if f.endswith("archive.zip")]
 
 def normalize_value(value):
     return value.strip() if value else None
@@ -422,7 +422,7 @@ def process_archive():
     # Step 2: Creating archive
     print(Fore.BLUE + "Creating archive (hashing + packaging)...", end=" ")
     try:
-        archive_path = create_archive_only(zip_filename, metadata)
+        archive_path, original_processed_path = create_archive_only(zip_filename, metadata)
     except Exception as e:
         print(Fore.RED + "FAILED")
         print(Fore.RED + f"Archive creation failed: {e}\n")
@@ -467,6 +467,20 @@ def process_archive():
         print(Fore.RED + f"Metadata move failed: {e}\n")
         return
 
+    print(Fore.GREEN + "DONE")
+
+    # Step 4: Move original ZIP into uploaded local folder for local use
+    print(Fore.BLUE + "Moving original ZIP to uploaded local folder...", end=" ")
+    try:
+        local_original_path = move_original_to_uploaded_local(original_processed_path, metadata)
+    except Exception as e:
+        print(Fore.RED + "FAILED")
+        print(Fore.RED + f"Original ZIP local move failed: {e}\n")
+        return
+
+    print(Fore.GREEN + f"DONE ({local_original_path})")
+    print()
+
 
 # =============================
 # UPLOAD
@@ -478,16 +492,44 @@ def upload_archives():
     if not filename:
         return
 
+    if not filename.endswith("archive.zip"):
+        print(Fore.RED + "Only repackaged files ending with 'archive.zip' can be uploaded.\n")
+        return
+
     archive_path = os.path.join(PROCESSED_DIR, filename)
-    archive_sha256 = sha256_file(archive_path)
+
+    try:
+        with open(archive_path, "rb") as f:
+            pass
+    except Exception as e:
+        print(Fore.RED + f"Cannot open archive: {e}\n")
+        return
 
     # ---- Load metadata + vn_id from DB ----
     from tools.db_manager import get_connection
 
+    metadata = None
+    try:
+        import zipfile
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            if "metadata.yml" not in archive.namelist():
+                print(Fore.RED + "Archive does not contain metadata.yml. Upload blocked.\n")
+                return
+            with archive.open("metadata.yml") as metadata_file:
+                metadata = yaml.safe_load(metadata_file.read().decode("utf-8")) or {}
+    except Exception as e:
+        print(Fore.RED + f"Failed to read metadata.yml from archive: {e}\n")
+        return
+
+    archive_source_sha = metadata.get("sha256")
+    if not archive_source_sha:
+        print(Fore.RED + "metadata.yml is missing sha256. Upload blocked.\n")
+        return
+
     with get_connection() as conn:
         row = conn.execute(
             "SELECT id, metadata_json FROM visual_novels WHERE sha256 = ?",
-            (archive_sha256,)
+            (archive_source_sha,)
         ).fetchone()
 
     if not row:
@@ -496,21 +538,14 @@ def upload_archives():
 
     vn_id = f"{row['id']:06d}"
 
-    raw_metadata = row["metadata_json"]
+    meta_version = metadata.get("metadata_version", 1)
+    title = str(metadata.get("title") or "Unknown_Title").strip().replace(" ", "_")
+    build_version = str(metadata.get("version") or "unknown").strip().replace(" ", "_")
+    expected_meta_name = f"{title}_build_{build_version}_meta_v{meta_version}.yml"
+    expected_meta_path = Path(PROCESSED_DIR) / expected_meta_name
 
-    if not raw_metadata:
-        print(Fore.RED + "Metadata is empty in database.\n")
-        return
-
-    try:
-        if isinstance(raw_metadata, str):
-            metadata = json.loads(raw_metadata)
-        else:
-            metadata = raw_metadata
-    except Exception as e:
-        print(Fore.RED + f"Failed to parse metadata from database.")
-        print(Fore.RED + f"Raw value: {raw_metadata}")
-        print(Fore.RED + f"Error: {e}\n")
+    if not expected_meta_path.exists():
+        print(Fore.RED + f"Corresponding metadata sidecar not found: {expected_meta_name}\n")
         return
 
     # ---- Call structured upload ----
