@@ -22,4 +22,5 @@ optional:
   - content_type
   - tags
   - source
+  - events
   - notes
