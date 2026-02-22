@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS visual_novels (
     -- File info
     sha256 TEXT UNIQUE,
     file_size INTEGER,
-    archive_path TEXT,
 
     -- Full metadata storage (future-proof)
     metadata_json TEXT,

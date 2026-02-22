@@ -294,7 +294,7 @@ def get_metadata_value(metadata, key, fallback=None):
     return fallback
 
 
-def insert_visual_novel(metadata, archive_path):
+def insert_visual_novel(metadata):
 
     with get_connection() as conn:
 
@@ -304,9 +304,9 @@ def insert_visual_novel(metadata, archive_path):
             """
             INSERT INTO visual_novels
             (title, developer, engine, language, release_date,
-             version, sha256, file_size, archive_path, status,
+             version, sha256, file_size, status,
              metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 metadata.get("title"),
@@ -317,7 +317,6 @@ def insert_visual_novel(metadata, archive_path):
                 metadata.get("version"),
                 get_metadata_value(metadata, "sha256", get_metadata_value(metadata, "archive.sha256")),
                 get_metadata_value(metadata, "file_size_bytes", get_metadata_value(metadata, "archive.file_size")),
-                archive_path,
                 "archived",
                 metadata_json
             )
@@ -507,14 +506,14 @@ def create_archive_only(filename, metadata):
     if sha_exists(metadata["sha256"]):
         raise Exception("Archive already exists in database (duplicate SHA256).")
 
-    # ---- Step 1: Temporary archive (before vn_id exists) ----
+    # ---- Step 1: Temporary archive (before final naming) ----
     temp_name = filename.replace(".zip", "_archive_temp.zip")
     temp_path = os.path.join(PROCESSED_DIR, temp_name)
 
     create_archive(full_path, metadata, temp_path)
 
     # ---- Step 2: Insert into DB to get vn_id ----
-    vn_id = insert_visual_novel(metadata, temp_path)
+    vn_id = insert_visual_novel(metadata)
 
     # ---- Step 3: Build structured final name ----
     def sanitize(value):
@@ -532,14 +531,7 @@ def create_archive_only(filename, metadata):
 
     os.rename(temp_path, final_path)
 
-    # ---- Step 5: Update DB archive_path ----
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE visual_novels SET archive_path = ? WHERE id = ?",
-            (final_path, int(vn_id))
-        )
-
-    # ---- Step 6: Move original ZIP into processed ----
+    # ---- Step 5: Move original ZIP into processed ----
     shutil.move(full_path, os.path.join(PROCESSED_DIR, filename))
 
     return final_path
