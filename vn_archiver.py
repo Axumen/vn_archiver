@@ -458,27 +458,12 @@ def upload_to_b2(filepath, remote_folder=None):
 
 
 def move_uploaded_archive(filepath, metadata):
-    """Move uploaded archive out of processed into uploaded/<title>/<version>/."""
+    """Move uploaded archive out of processed into uploaded/<title>/Latest Version/."""
     if not os.path.exists(filepath):
         raise Exception("Archive not found for post-upload move.")
 
-    def sanitize(value):
-        return str(value).strip().replace(" ", "_")
-
-    title = sanitize(metadata.get("title") or "Unknown_Title")
-    build_version = sanitize(metadata.get("version") or "unknown")
-
-    target_dir = Path(UPLOADED_DIR) / title / build_version
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    destination = target_dir / Path(filepath).name
-
-    if destination.exists():
-        raise Exception(f"Destination already exists: {destination}")
-
-    shutil.move(filepath, destination)
-
-    return str(destination)
+    target_dir = get_uploaded_latest_dir(metadata)
+    return move_file_to_uploaded_dir(filepath, target_dir)
 
 # ==============================
 # ARCHIVE CREATION ONLY
@@ -538,26 +523,58 @@ def create_archive_only(filename, metadata):
 
 
 def move_original_to_uploaded_local(original_filepath, metadata):
-    """Move original zip to uploaded/<title>/<version>/ using local naming only."""
+    """Move original zip to uploaded/<title>/Latest Version/ using local naming only."""
     if not os.path.exists(original_filepath):
         raise Exception("Original file not found for local move.")
 
-    def sanitize(value):
-        return str(value).strip().replace(" ", "_")
+    target_dir = get_uploaded_latest_dir(metadata)
+    ensure_clean_directory(target_dir)
 
-    title = sanitize(metadata.get("title") or "Unknown_Title")
-    build_version = sanitize(metadata.get("version") or "unknown")
-    cleaned_name = f"{title}_{build_version}.zip"
+    title = format_uploaded_component(metadata.get("title"), "Unknown Title")
+    build_version = format_uploaded_component(metadata.get("version"), "unknown")
+    cleaned_name = f"{title} {build_version}.zip"
 
-    target_dir = Path(UPLOADED_DIR) / title / build_version
+    return move_file_to_uploaded_dir(original_filepath, target_dir, cleaned_name)
+
+
+def move_processed_metadata_to_uploaded(metadata_filepath, metadata):
+    """Move processed metadata YAML to uploaded/<title>/Latest Version/."""
+    if not os.path.exists(metadata_filepath):
+        raise Exception("Metadata file not found for post-upload move.")
+
+    target_dir = get_uploaded_latest_dir(metadata)
+    return move_file_to_uploaded_dir(metadata_filepath, target_dir)
+
+
+def format_uploaded_component(value, fallback):
+    text = str(value or "").replace("_", " ").strip()
+    text = " ".join(text.split())
+    return text or fallback
+
+
+def get_uploaded_latest_dir(metadata):
+    title = format_uploaded_component(metadata.get("title"), "Unknown Title")
+    return Path(UPLOADED_DIR) / title / "Latest Version"
+
+
+def ensure_clean_directory(target_dir):
     target_dir.mkdir(parents=True, exist_ok=True)
+    for entry in target_dir.iterdir():
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink(missing_ok=True)
 
-    destination = target_dir / cleaned_name
+
+def move_file_to_uploaded_dir(source_filepath, target_dir, destination_name=None):
+    target_dir.mkdir(parents=True, exist_ok=True)
+    resolved_name = destination_name or Path(source_filepath).name
+    destination = target_dir / resolved_name
 
     if destination.exists():
-        raise Exception(f"Destination already exists: {destination}")
+        destination.unlink()
 
-    shutil.move(original_filepath, destination)
+    shutil.move(source_filepath, destination)
     return str(destination)
 
 # ==============================
