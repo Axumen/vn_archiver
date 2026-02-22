@@ -19,6 +19,7 @@ optional:
   - distribution_model
   - release_status
   - content_rating
+  - content_type
   - tags
   - source
   - notes
