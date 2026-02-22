@@ -520,7 +520,8 @@ def create_archive_only(filename, metadata):
     title = sanitize(metadata.get("title") or "Unknown_Title")
     build_version = sanitize(metadata.get("version") or "unknown")
 
-    final_name = f"{title}_build_{build_version}.zip"
+    local_base_name = f"{title}_{build_version}"
+    final_name = f"{local_base_name}_archive.zip"
     final_path = os.path.join(PROCESSED_DIR, final_name)
 
     # ---- Step 4: Rename archive ----
@@ -530,9 +531,34 @@ def create_archive_only(filename, metadata):
     os.rename(temp_path, final_path)
 
     # ---- Step 5: Move original ZIP into processed ----
-    shutil.move(full_path, os.path.join(PROCESSED_DIR, filename))
+    original_processed_path = os.path.join(PROCESSED_DIR, filename)
+    shutil.move(full_path, original_processed_path)
 
-    return final_path
+    return final_path, original_processed_path
+
+
+def move_original_to_uploaded_local(original_filepath, metadata):
+    """Move original zip to uploaded/<title>/<version>/ using local naming only."""
+    if not os.path.exists(original_filepath):
+        raise Exception("Original file not found for local move.")
+
+    def sanitize(value):
+        return str(value).strip().replace(" ", "_")
+
+    title = sanitize(metadata.get("title") or "Unknown_Title")
+    build_version = sanitize(metadata.get("version") or "unknown")
+    cleaned_name = f"{title}_{build_version}.zip"
+
+    target_dir = Path(UPLOADED_DIR) / title / build_version
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    destination = target_dir / cleaned_name
+
+    if destination.exists():
+        raise Exception(f"Destination already exists: {destination}")
+
+    shutil.move(original_filepath, destination)
+    return str(destination)
 
 # ==============================
 # STRUCTURED ARCHIVE UPLOAD
