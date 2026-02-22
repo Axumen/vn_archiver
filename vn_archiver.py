@@ -303,16 +303,14 @@ def insert_visual_novel(metadata):
         cursor = conn.execute(
             """
             INSERT INTO visual_novels
-            (title, developer, engine, language, release_date,
+            (title, developer, release_date,
              version, sha256, file_size, status,
              metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 metadata.get("title"),
                 metadata.get("developer"),
-                metadata.get("engine"),
-                metadata.get("language"),
                 metadata.get("release_date"),
                 metadata.get("version"),
                 get_metadata_value(metadata, "sha256", get_metadata_value(metadata, "archive.sha256")),
