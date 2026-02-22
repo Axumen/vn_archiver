@@ -63,6 +63,11 @@ SUGGESTED_TARGET_PLATFORM = [
     "windows", "linux", "mac", "android", "web", "ios", "switch"
 ]
 
+SUGGESTED_CONTENT_TYPE = [
+    "main_story", "story_expansion", "seasonal_event",
+    "april_fools", "side_story", "non_canon_special"
+]
+
 # =============================
 # HELPERS
 # =============================
@@ -284,6 +289,7 @@ def create_metadata_only():
         "language": SUGGESTED_LANGUAGE,
         "distribution_platform": SUGGESTED_DISTRIBUTION_PLATFORM,
         "content_rating": SUGGESTED_CONTENT_RATING,
+        "content_type": SUGGESTED_CONTENT_TYPE,
         "target_platform": SUGGESTED_TARGET_PLATFORM,
         "tags": [
             "romance", "drama", "comedy", "slice-of-life", "mystery", "horror",

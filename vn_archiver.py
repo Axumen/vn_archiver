@@ -33,6 +33,11 @@ SUGGESTED_TAGS = [
     "school", "adult", "nakige", "utsuge"
 ]
 
+SUGGESTED_CONTENT_TYPE = [
+    "main_story", "story_expansion", "seasonal_event",
+    "april_fools", "side_story", "non_canon_special"
+]
+
 AUTO_METADATA_FIELDS = {
     "original_filename": lambda zip_path: os.path.basename(zip_path),
     "file_size_bytes": lambda zip_path: os.path.getsize(zip_path),
@@ -198,6 +203,10 @@ def load_b2_config(config_path=B2_CONFIG_FILE):
 
 
 def prompt_field(field_name, current_value):
+    if field_name == "content_type":
+        print("\nSuggested content_type:")
+        print(", ".join(SUGGESTED_CONTENT_TYPE))
+
     value = input(f"{field_name} [{current_value}]: ").strip()
     return value if value else current_value
 
