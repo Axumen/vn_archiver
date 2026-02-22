@@ -13,8 +13,6 @@ CREATE TABLE IF NOT EXISTS visual_novels (
     -- Core searchable fields
     title TEXT,
     developer TEXT,
-    engine TEXT,
-    language TEXT,
     release_date TEXT,
     version TEXT,
     status TEXT,
@@ -45,6 +43,5 @@ CREATE TABLE IF NOT EXISTS vn_tags (
 -- Indexes (critical for performance)
 CREATE INDEX IF NOT EXISTS idx_vn_title ON visual_novels(title);
 CREATE INDEX IF NOT EXISTS idx_vn_developer ON visual_novels(developer);
-CREATE INDEX IF NOT EXISTS idx_vn_engine ON visual_novels(engine);
 CREATE INDEX IF NOT EXISTS idx_vn_sha ON visual_novels(sha256);
 CREATE INDEX IF NOT EXISTS idx_vn_tags_vn_id ON vn_tags(vn_id);
