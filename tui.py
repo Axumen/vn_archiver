@@ -10,6 +10,7 @@ from vn_archiver import (
     create_archive_only,
     upload_archive,
     move_uploaded_archive,
+    move_processed_metadata_to_uploaded,
     move_original_to_uploaded_local,
     upload_metadata_sidecar,
     INCOMING_DIR,
@@ -570,13 +571,20 @@ def upload_archives():
         print(Fore.RED + f"Upload succeeded but post-upload move failed: {e}\n")
         return
 
+    try:
+        moved_meta_path = move_processed_metadata_to_uploaded(str(expected_meta_path), metadata)
+    except Exception as e:
+        print(Fore.RED + f"Upload succeeded but metadata move to uploaded failed: {e}\n")
+        return
+
     with get_connection() as conn:
         conn.execute(
             "UPDATE visual_novels SET status = ? WHERE id = ?",
             ("uploaded", row["id"])
         )
 
-    print(Fore.GREEN + f"Upload complete. Archive moved to: {moved_path}\n")
+    print(Fore.GREEN + f"Upload complete. Archive moved to: {moved_path}")
+    print(Fore.GREEN + f"Metadata moved to: {moved_meta_path}\n")
 
 
 # =============================
