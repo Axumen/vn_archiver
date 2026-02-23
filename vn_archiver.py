@@ -8,6 +8,7 @@ import sys
 import yaml
 import json
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
@@ -415,11 +416,12 @@ def upload_to_b2(filepath, remote_folder=None):
     file_size = os.path.getsize(filepath)
 
     class UploadProgressListener:
-        """Simple console progress display for Backblaze uploads."""
+        """Advanced console progress display for Backblaze uploads."""
 
         def __init__(self, total_bytes):
             self.total_bytes = total_bytes
-            self.last_percent = -1
+            self.start_time = time.time()
+            self.last_update_time = 0
 
         def set_total_bytes(self, total_bytes):
             self.total_bytes = total_bytes
@@ -428,15 +430,28 @@ def upload_to_b2(filepath, remote_folder=None):
             if self.total_bytes <= 0:
                 return
 
-            percent = int((byte_count / self.total_bytes) * 100)
-            if percent == self.last_percent:
+            now = time.time()
+
+            # Limit redraw frequency to avoid flicker
+            if now - self.last_update_time < 0.1 and byte_count < self.total_bytes:
                 return
 
-            self.last_percent = percent
+            self.last_update_time = now
+
+            percent = (byte_count / self.total_bytes) * 100
+            elapsed = now - self.start_time
+            speed = byte_count / elapsed if elapsed > 0 else 0
+
             bar_length = 30
             filled = int((byte_count / self.total_bytes) * bar_length)
             bar = "#" * filled + "-" * (bar_length - filled)
-            sys.stdout.write(f"\rUploading: [{bar}] {percent:3d}%")
+
+            sys.stdout.write(
+                f"\rUploading: [{bar}] "
+                f"{percent:6.2f}% "
+                f"{byte_count/1024/1024:8.2f}MB / {self.total_bytes/1024/1024:8.2f}MB "
+                f"{speed/1024/1024:6.2f} MB/s"
+            )
             sys.stdout.flush()
 
         def close(self):
