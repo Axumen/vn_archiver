@@ -274,11 +274,11 @@ def create_archive(original_zip, metadata_dict, output_path):
 # DATABASE
 # ==============================
 
-def sha_exists(sha256):
+def sha_exists(build_id, sha256):
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT id FROM visual_novels WHERE sha256 = ?",
-            (sha256,)
+            "SELECT id FROM archives WHERE build_id = ? AND sha256 = ?",
+            (build_id, sha256)
         ).fetchone()
         return row is not None
 
@@ -294,39 +294,219 @@ def get_metadata_value(metadata, key, fallback=None):
 
     return fallback
 
-
 def insert_visual_novel(metadata):
 
     with get_connection() as conn:
 
-        metadata_json = json.dumps(metadata, ensure_ascii=False)
+        title = metadata.get("title")
+        if not title:
+            raise Exception("Title is required.")
 
-        cursor = conn.execute(
+        # -------------------------------------------------
+        # 1️⃣ CHECK IF WORK ALREADY EXISTS
+        # -------------------------------------------------
+        existing_row = conn.execute(
+            "SELECT id FROM visual_novels WHERE title = ?",
+            (title,)
+        ).fetchone()
+
+        is_new_work = False
+
+        if existing_row:
+            vn_id = existing_row["id"]
+        else:
+            is_new_work = True
+
+            # -------------------------------------------------
+            # 2️⃣ SERIES NORMALIZATION (ONLY FOR NEW WORK)
+            # -------------------------------------------------
+            series_name = metadata.get("series")
+            series_id = None
+
+            if series_name:
+                conn.execute(
+                    "INSERT OR IGNORE INTO series (name) VALUES (?)",
+                    (series_name,)
+                )
+
+                series_row = conn.execute(
+                    "SELECT id FROM series WHERE name = ?",
+                    (series_name,)
+                ).fetchone()
+
+                if series_row:
+                    series_id = series_row["id"]
+
+            # -------------------------------------------------
+            # 3️⃣ INSERT NEW WORK
+            # -------------------------------------------------
+            cursor = conn.execute(
+                """
+                INSERT INTO visual_novels
+                (series_id, title, developer, release_status, content_rating)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    series_id,
+                    title,
+                    metadata.get("developer"),
+                    metadata.get("release_status"),
+                    metadata.get("content_rating"),
+                )
+            )
+
+            vn_id = cursor.lastrowid
+
+        # -------------------------------------------------
+        # 4️⃣ INSERT BUILD (ALWAYS)
+        # -------------------------------------------------
+        build_cursor = conn.execute(
             """
-            INSERT INTO visual_novels
-            (title, developer, release_date,
-             version, sha256, file_size, status,
-             metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO builds
+            (vn_id, version, build_type,
+             distribution_model, distribution_platform,
+             language, release_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                metadata.get("title"),
-                metadata.get("developer"),
-                metadata.get("release_date"),
+                vn_id,
                 metadata.get("version"),
-                get_metadata_value(metadata, "sha256", get_metadata_value(metadata, "archive.sha256")),
-                get_metadata_value(metadata, "file_size_bytes", get_metadata_value(metadata, "archive.file_size")),
-                "archived",
-                metadata_json
+                metadata.get("build_type"),
+                metadata.get("distribution_model"),
+                metadata.get("distribution_platform"),
+                metadata.get("language"),
+                metadata.get("release_date"),
             )
         )
 
-        # Format vn_id with leading zeros (e.g., 000123)
-        vn_id = f"{cursor.lastrowid:06d}"
+        build_id = build_cursor.lastrowid
 
-        # ---- Normalize Tags ----
+        # -------------------------------------------------
+        # PLATFORM NORMALIZATION (FIXED + HARDENED)
+        # -------------------------------------------------
+        raw_platforms = metadata.get("target_platform")
+
+        if not raw_platforms:
+            raw_platforms = []
+
+        if isinstance(raw_platforms, str):
+            raw_platforms = [
+                p.strip() for p in raw_platforms.split(",") if p.strip()
+            ]
+
+        if not isinstance(raw_platforms, list):
+            raw_platforms = [raw_platforms]
+
+        for platform in raw_platforms:
+            if not platform:
+                continue
+
+            normalized_platform = str(platform).strip().lower()
+
+            if not normalized_platform:
+                continue
+
+            conn.execute(
+                "INSERT OR IGNORE INTO target_platforms (name) VALUES (?)",
+                (normalized_platform,)
+            )
+
+            platform_row = conn.execute(
+                "SELECT id FROM target_platforms WHERE name = ?",
+                (normalized_platform,)
+            ).fetchone()
+
+            if platform_row:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO build_target_platforms
+                    (build_id, platform_id)
+                    VALUES (?, ?)
+                    """,
+                    (build_id, platform_row["id"])
+                )
+
+        if not raw_platforms:
+            raw_platforms = []
+
+        # If string, allow comma-separated
+        if isinstance(raw_platforms, str):
+            raw_platforms = [
+                p.strip() for p in raw_platforms.split(",") if p.strip()
+            ]
+
+        # Ensure list
+        if not isinstance(raw_platforms, list):
+            raw_platforms = [raw_platforms]
+
+        for platform in raw_platforms:
+            if not platform:
+                continue
+
+            normalized_platform = str(platform).strip().lower()
+
+            if not normalized_platform:
+                continue
+
+            # Insert into master platform table
+            conn.execute(
+                "INSERT OR IGNORE INTO target_platforms (name) VALUES (?)",
+                (normalized_platform,)
+            )
+
+            platform_row = conn.execute(
+                "SELECT id FROM target_platforms WHERE name = ?",
+                (normalized_platform,)
+            ).fetchone()
+
+            if platform_row:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO build_target_platforms
+                    (build_id, platform_id)
+                    VALUES (?, ?)
+                    """,
+                    (build_id, platform_row["id"])
+                )
+
+        # -------------------------------------------------
+        # 5️⃣ INSERT ARCHIVE
+        # -------------------------------------------------
+        metadata_json = json.dumps(metadata, ensure_ascii=False)
+
+        sha256 = get_metadata_value(
+            metadata,
+            "sha256",
+            get_metadata_value(metadata, "archive.sha256")
+        )
+
+        if sha_exists(build_id, sha256):
+            raise Exception("Archive already exists for this build (duplicate SHA256).")
+
+        conn.execute(
+            """
+            INSERT INTO archives
+            (build_id, sha256, file_size_bytes,
+             metadata_json, metadata_version)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                build_id,
+                sha256,
+                get_metadata_value(
+                    metadata,
+                    "file_size_bytes",
+                    get_metadata_value(metadata, "archive.file_size")
+                ),
+                metadata_json,
+                metadata.get("metadata_version", 1),
+            )
+        )
+
+        # -------------------------------------------------
+        # 6️⃣ TAG NORMALIZATION (WORK LEVEL)
+        # -------------------------------------------------
         tags = metadata.get("tags") or []
-
         if not isinstance(tags, list):
             tags = [tags]
 
@@ -350,8 +530,31 @@ def insert_visual_novel(metadata):
                     (vn_id, tag_row["id"])
                 )
 
-        return vn_id
+        # -------------------------------------------------
+        # 7️⃣ CANON RELATIONSHIPS (ONLY IF NEW WORK)
+        # -------------------------------------------------
+        if is_new_work:
+            parent_title = metadata.get("parent_vn_title")
+            relationship_type = metadata.get("relationship_type")
 
+            if parent_title and relationship_type:
+                parent_row = conn.execute(
+                    "SELECT id FROM visual_novels WHERE title = ?",
+                    (parent_title,)
+                ).fetchone()
+
+                if parent_row:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO canon_relationships
+                        (parent_vn_id, child_vn_id, relationship_type)
+                        VALUES (?, ?, ?)
+                        """,
+                        (parent_row["id"], vn_id, relationship_type)
+                    )
+
+        return vn_id
+        
 # ==============================
 # BACKBLAZE
 # ==============================
@@ -473,11 +676,12 @@ def upload_to_b2(filepath, remote_folder=None):
 
 
 def move_uploaded_archive(filepath, metadata):
-    """Move uploaded archive out of processed into uploaded/<title>/Latest Version/."""
     if not os.path.exists(filepath):
         raise Exception("Archive not found for post-upload move.")
 
     target_dir = get_uploaded_latest_dir(metadata)
+    ensure_clean_directory(target_dir)
+
     return move_file_to_uploaded_dir(filepath, target_dir)
 
 # ==============================
@@ -496,47 +700,37 @@ def create_archive_only(filename, metadata):
     metadata["file_size_bytes"] = os.path.getsize(full_path)
     metadata["sha256"] = sha256_file(full_path)
     metadata["archived_at"] = datetime.utcnow().isoformat() + "Z"
+
     set_nested_value(metadata, "archive.filename", metadata["original_filename"])
     set_nested_value(metadata, "archive.sha256", metadata["sha256"])
     set_nested_value(metadata, "archive.file_size", metadata["file_size_bytes"])
 
-    # Prevent duplicate ingestion
-    if sha_exists(metadata["sha256"]):
-        raise Exception("Archive already exists in database (duplicate SHA256).")
-
-    # ---- Step 1: Temporary archive (before final naming) ----
     temp_name = filename.replace(".zip", "_archive_temp.zip")
     temp_path = os.path.join(PROCESSED_DIR, temp_name)
 
     create_archive(full_path, metadata, temp_path)
 
-    # ---- Step 2: Insert into DB to get vn_id ----
+    # Insert into DB
     vn_id = insert_visual_novel(metadata)
 
-    # ---- Step 3: Build structured final name ----
-    def sanitize(value):
-        return str(value).strip().replace(" ", "_")
+    # Slug-safe naming
+    title_slug = slugify_component(metadata.get("title"), "unknown_title")
+    build_slug = slugify_component(metadata.get("version"), "unknown")
 
-    title = sanitize(metadata.get("title") or "Unknown_Title")
-    build_version = sanitize(metadata.get("version") or "unknown")
-
-    local_base_name = f"{title}_{build_version}"
-    final_name = f"{local_base_name}_archive.zip"
+    final_name = f"{title_slug}_build_{build_slug}_archive.zip"
     final_path = os.path.join(PROCESSED_DIR, final_name)
 
-    # ---- Step 4: Rename archive ----
     if os.path.exists(final_path):
         raise Exception("Archive with same title and build already exists.")
 
     os.rename(temp_path, final_path)
 
-    # ---- Step 5: Move original ZIP into processed ----
     original_processed_path = os.path.join(PROCESSED_DIR, filename)
     shutil.move(full_path, original_processed_path)
 
-    return final_path, original_processed_path
-
-
+    # NOW RETURNS vn_id (required by tui.py)
+    return final_path, original_processed_path, vn_id
+    
 def move_original_to_uploaded_local(original_filepath, metadata):
     """Move original zip to uploaded/<title>/Latest Version/ using local naming only."""
     if not os.path.exists(original_filepath):
@@ -614,10 +808,8 @@ def upload_archive(filepath, metadata=None, vn_id=None):
     if metadata is None or vn_id is None:
         return upload_to_b2(filepath, remote_folder="archives")
 
-    title = metadata.get("title") or "Unknown_Title"
-    title_folder = title.strip().replace(" ", "_")
-
-    build_version = metadata.get("version") or "unknown"
+    title_folder = slugify_component(metadata.get("title"), "unknown_title")
+    build_version = slugify_component(metadata.get("version"), "unknown")
 
     remote_folder = (
         f"archives/"
@@ -627,8 +819,7 @@ def upload_archive(filepath, metadata=None, vn_id=None):
     )
 
     return upload_to_b2(filepath, remote_folder=remote_folder)
-
-
+    
 def slugify_component(value, fallback):
     """Normalize metadata values for stable folder/file naming."""
     text = str(value or "").strip().lower()
@@ -651,7 +842,6 @@ def slugify_component(value, fallback):
 
     slug = "".join(normalized).strip("_")
     return slug or fallback
-
 
 def upload_metadata_sidecar(metadata, vn_id):
     """

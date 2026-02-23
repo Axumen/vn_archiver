@@ -423,7 +423,7 @@ def process_archive():
     # Step 2: Creating archive
     print(Fore.BLUE + "Creating archive (hashing + packaging)...", end=" ")
     try:
-        archive_path, original_processed_path = create_archive_only(zip_filename, metadata)
+        archive_path, original_processed_path, vn_id = create_archive_only(zip_filename, metadata)
     except Exception as e:
         print(Fore.RED + "FAILED")
         print(Fore.RED + f"Archive creation failed: {e}\n")
@@ -439,7 +439,13 @@ def process_archive():
 
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT id FROM visual_novels WHERE sha256 = ?",
+            """
+            SELECT vn.id
+            FROM archives a
+            JOIN builds b ON a.build_id = b.id
+            JOIN visual_novels vn ON b.vn_id = vn.id
+            WHERE a.sha256 = ?
+            """,
             (metadata["sha256"],)
         ).fetchone()
 
@@ -529,7 +535,13 @@ def upload_archives():
 
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT id, metadata_json FROM visual_novels WHERE sha256 = ?",
+            """
+            SELECT vn.id
+            FROM archives a
+            JOIN builds b ON a.build_id = b.id
+            JOIN visual_novels vn ON b.vn_id = vn.id
+            WHERE a.sha256 = ?
+            """,
             (archive_source_sha,)
         ).fetchone()
 
@@ -580,7 +592,7 @@ def upload_archives():
     with get_connection() as conn:
         conn.execute(
             "UPDATE visual_novels SET status = ? WHERE id = ?",
-            ("uploaded", row["id"])
+            ("uploaded", row[0])
         )
 
     print(Fore.GREEN + f"Upload complete. Archive moved to: {moved_path}")

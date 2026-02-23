@@ -1,47 +1,145 @@
--- Enable foreign keys (important)
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER PRIMARY KEY
+-- =====================================================
+-- 1. SERIES
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS series (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    status TEXT DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT OR IGNORE INTO schema_version (version) VALUES (1);
+-- =====================================================
+-- 2. VISUAL NOVELS (Work Identity)
+-- =====================================================
 
 CREATE TABLE IF NOT EXISTS visual_novels (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    series_id INTEGER,
 
-    -- Core searchable fields
-    title TEXT,
+    -- Core metadata (work-level)
+    title TEXT NOT NULL,
     developer TEXT,
-    release_date TEXT,
-    version TEXT,
-    status TEXT,
+    release_status TEXT,
+    content_rating TEXT,
 
-    -- File info
-    sha256 TEXT UNIQUE,
-    file_size INTEGER,
+    -- Legacy tracking column preserved
+    status TEXT DEFAULT 'processed',
 
-    -- Full metadata storage (future-proof)
-    metadata_json TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    FOREIGN KEY (series_id) REFERENCES series(id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_visual_novels_title
+ON visual_novels(title);
+
+-- =====================================================
+-- 3. CANON RELATIONSHIPS
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS canon_relationships (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_vn_id INTEGER NOT NULL,
+    child_vn_id INTEGER NOT NULL,
+    relationship_type TEXT NOT NULL,
+
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (parent_vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE,
+    FOREIGN KEY (child_vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE
+);
+
+-- =====================================================
+-- 4. BUILDS (Version Layer)
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS builds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vn_id INTEGER NOT NULL,
+
+    version TEXT NOT NULL,
+    build_type TEXT,
+    distribution_model TEXT,
+    distribution_platform TEXT,
+    language TEXT,
+    release_date TEXT,
+
+    status TEXT DEFAULT 'processed',
+
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE(vn_id, version),
+
+    FOREIGN KEY (vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE
+);
+
+-- =====================================================
+-- 5. TARGET PLATFORMS (Normalized)
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS target_platforms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS build_target_platforms (
+    build_id INTEGER NOT NULL,
+    platform_id INTEGER NOT NULL,
+
+    PRIMARY KEY (build_id, platform_id),
+
+    FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE,
+    FOREIGN KEY (platform_id) REFERENCES target_platforms(id) ON DELETE CASCADE
+);
+
+-- =====================================================
+-- 6. ARCHIVES (Content-Addressable Per Build)
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS archives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    build_id INTEGER NOT NULL,
+
+    sha256 TEXT NOT NULL,
+    file_size_bytes INTEGER NOT NULL,
+
+    metadata_json TEXT NOT NULL,
+    metadata_version INTEGER NOT NULL,
+
+    status TEXT DEFAULT 'archived',
+
+    archived_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    uploaded_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE(build_id, sha256),
+
+    FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_archives_build_id
+ON archives(build_id);
+
+-- =====================================================
+-- 7. TAGS (Work-Level)
+-- =====================================================
 
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS vn_tags (
-    vn_id INTEGER,
-    tag_id INTEGER,
-    UNIQUE(vn_id, tag_id),
-    FOREIGN KEY(vn_id) REFERENCES visual_novels(id),
-    FOREIGN KEY(tag_id) REFERENCES tags(id)
-);
+    vn_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
 
--- Indexes (critical for performance)
-CREATE INDEX IF NOT EXISTS idx_vn_title ON visual_novels(title);
-CREATE INDEX IF NOT EXISTS idx_vn_developer ON visual_novels(developer);
-CREATE INDEX IF NOT EXISTS idx_vn_sha ON visual_novels(sha256);
-CREATE INDEX IF NOT EXISTS idx_vn_tags_vn_id ON vn_tags(vn_id);
+    PRIMARY KEY (vn_id, tag_id),
+
+    FOREIGN KEY (vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
