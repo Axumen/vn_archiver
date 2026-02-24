@@ -3,7 +3,10 @@
 import os
 import yaml
 import shutil
-from db_manager import initialize_database
+import subprocess
+import tempfile
+import json
+from db_manager import initialize_database, get_connection
 from pathlib import Path
 from colorama import init, Fore, Style
 from vn_archiver import (
@@ -329,32 +332,72 @@ def create_metadata_only():
 # METADATA EDITING
 # =============================
 
+# Make sure to import insert_visual_novel if this is in tui.py
+
 def edit_metadata_only():
-    metadata_files = list_metadata()
-    filename = choose_from_list(metadata_files, "Select metadata file to edit")
-    if not filename:
-        return
+    conn = get_connection()
+    try:
+        # 1. List available Visual Novels
+        print("\n--- Select Visual Novel to Edit ---")
+        vns = conn.execute("SELECT id, title FROM visual_novels").fetchall()
+        if not vns:
+            print("No visual novels in the database yet.")
+            return
 
-    path = Path(INCOMING_DIR) / filename
+        for vn in vns:
+            print(f"[{vn['id']}] {vn['title']}")
 
-    with open(path, "r", encoding="utf-8") as f:
-        metadata = yaml.safe_load(f) or {}
+        vn_id_str = input("\nEnter VN ID to edit (or press Enter to cancel): ").strip()
+        if not vn_id_str.isdigit():
+            return
+        vn_id = int(vn_id_str)
 
-    print(Fore.MAGENTA + "\nPress ENTER to keep current value.\n")
+        # 2. Fetch the current active metadata
+        row = conn.execute('''
+            SELECT mo.metadata_json 
+            FROM metadata_versions mv
+            JOIN metadata_objects mo ON mv.metadata_hash = mo.hash
+            WHERE mv.vn_id = ? AND mv.is_current = 1
+        ''', (vn_id,)).fetchone()
 
-    for key, value in metadata.items():
-        new_value = input(Fore.YELLOW + f"{key} [{value}]: ").strip()
-        if new_value:
-            if key in ["tags", "target_platform"]:
-                metadata[key] = [x.strip() for x in new_value.split(",")]
-            else:
-                metadata[key] = new_value
+        if not row:
+            print("No current metadata found for this VN.")
+            return
 
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.dump(metadata, f, sort_keys=False)
+        current_metadata = json.loads(row["metadata_json"])
 
-    print(Fore.GREEN + "\nMetadata updated.\n")
+    finally:
+        conn.close()
 
+    # 3. Open in System Text Editor
+    with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False, encoding="utf-8") as tf:
+        yaml.dump(current_metadata, tf, sort_keys=False, allow_unicode=True)
+        temp_path = tf.name
+
+    # Chooses 'notepad' on Windows, 'nano' or system default on Linux/Mac
+    editor = os.environ.get('EDITOR', 'notepad' if os.name == 'nt' else 'nano')
+
+    print(f"\nOpening metadata in {editor}... Save and close the file when finished.")
+    subprocess.call([editor, temp_path])
+
+    # 4. Read the edited file and save
+    try:
+        with open(temp_path, "r", encoding="utf-8") as f:
+            updated_metadata = yaml.safe_load(f)
+
+        if updated_metadata == current_metadata:
+            print("\nNo changes detected. Aborting update.")
+            return
+
+        # Re-run it through the engine. It will update the rows and create a new version!
+        insert_visual_novel(updated_metadata)
+        print("\nMetadata successfully updated and a new version history was created!")
+
+    except Exception as e:
+        print(f"\nFailed to save metadata: {e}")
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 # =============================
 # PROCESS ARCHIVE

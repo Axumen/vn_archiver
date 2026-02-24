@@ -333,9 +333,19 @@ def insert_visual_novel(metadata):
 
             if existing_row:
                 vn_id = existing_row["id"]
-                # Optional: You could update VN details here if they changed in the metadata
+                # UPDATE existing VN details with any edits
+                conn.execute(
+                    """
+                    UPDATE visual_novels 
+                    SET aliases = ?, developer = ?, publisher = ?, release_status = ?, content_rating = ?
+                    WHERE id = ?
+                    """,
+                    (aliases_json, metadata.get("developer"), metadata.get("publisher"),
+                     metadata.get("release_status"), metadata.get("content_rating"), vn_id)
+                )
             else:
                 is_new_work = True
+
                 cursor = conn.execute(
                     """
                     INSERT INTO visual_novels
@@ -365,6 +375,24 @@ def insert_visual_novel(metadata):
 
             if existing_build:
                 build_id = existing_build["id"]
+                # UPDATE existing build details with any edits
+                conn.execute(
+                    """
+                    UPDATE builds
+                    SET build_type = ?, distribution_model = ?, distribution_platform = ?,
+                        language = ?, translator = ?, edition = ?, release_date = ?,
+                        engine = ?, engine_version = ?, base_archive_sha256 = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        metadata.get("build_type"), metadata.get("distribution_model"),
+                        metadata.get("distribution_platform"), metadata.get("language"),
+                        metadata.get("translator"), metadata.get("edition"),
+                        metadata.get("release_date"), metadata.get("engine"),
+                        metadata.get("engine_version"), metadata.get("base_archive_sha256"),
+                        build_id
+                    )
+                )
             else:
                 build_cursor = conn.execute(
                     """
@@ -380,12 +408,12 @@ def insert_visual_novel(metadata):
                         metadata.get("distribution_model"),
                         metadata.get("distribution_platform"),
                         metadata.get("language"),
-                        metadata.get("translator"),  # NEW FIELD
+                        metadata.get("translator"),
                         metadata.get("edition"),
                         metadata.get("release_date"),
-                        metadata.get("engine"),  # NEW FIELD
-                        metadata.get("engine_version"),  # NEW FIELD
-                        metadata.get("base_archive_sha256"),  # NEW FIELD
+                        metadata.get("engine"),
+                        metadata.get("engine_version"),
+                        metadata.get("base_archive_sha256"),
                     )
                 )
                 build_id = build_cursor.lastrowid
@@ -409,29 +437,58 @@ def insert_visual_novel(metadata):
                     conn.execute("INSERT OR IGNORE INTO build_target_platforms (build_id, platform_id) VALUES (?, ?)",
                                  (build_id, platform_row["id"]))
 
-            # -------------------------------------------------
-            # 5️⃣ INSERT ARCHIVE
-            # -------------------------------------------------
-            sha256 = get_metadata_value(metadata, "sha256", get_metadata_value(metadata, "archive.sha256"))
-            if sha256:
-                archive_exists = conn.execute("SELECT id FROM archives WHERE build_id = ? AND sha256 = ?",
-                                              (build_id, sha256)).fetchone()
-                if not archive_exists:
-                    conn.execute(
-                        """
-                        INSERT INTO archives
-                        (build_id, sha256, file_size_bytes, metadata_json, metadata_version)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (
-                            build_id,
-                            sha256,
-                            get_metadata_value(metadata, "file_size_bytes",
-                                               get_metadata_value(metadata, "archive.file_size") or 0),
-                            json.dumps(metadata, ensure_ascii=False),
-                            metadata.get("metadata_version", 1),
-                        )
-                    )
+                    # -------------------------------------------------
+                    # 5️⃣ INSERT ARCHIVE(S)
+                    # -------------------------------------------------
+                    archives_to_process = []
+
+                    # 1. Check for a single top-level archive definition
+                    top_level_sha = get_metadata_value(metadata, "sha256",
+                                                       get_metadata_value(metadata, "archive.sha256"))
+                    if top_level_sha:
+                        archives_to_process.append({
+                            "sha256": top_level_sha,
+                            "file_size_bytes": get_metadata_value(metadata, "file_size_bytes",
+                                                                  get_metadata_value(metadata,
+                                                                                     "archive.file_size") or 0)
+                        })
+
+                    # 2. Check for multi-archive list (from the YAML template)
+                    multi_archives = metadata.get("archives", [])
+                    if isinstance(multi_archives, list):
+                        for arch in multi_archives:
+                            # Make sure the array item is actually a dictionary and has a SHA
+                            if isinstance(arch, dict) and arch.get("sha256"):
+                                archives_to_process.append({
+                                    "sha256": arch.get("sha256"),
+                                    "file_size_bytes": arch.get("file_size_bytes", 0)
+                                })
+
+                    # 3. Insert all gathered archives safely
+                    for arch_data in archives_to_process:
+                        sha256 = arch_data["sha256"]
+                        file_size = arch_data["file_size_bytes"]
+
+                        archive_exists = conn.execute(
+                            "SELECT id FROM archives WHERE build_id = ? AND sha256 = ?",
+                            (build_id, sha256)
+                        ).fetchone()
+
+                        if not archive_exists:
+                            conn.execute(
+                                """
+                                INSERT INTO archives
+                                (build_id, sha256, file_size_bytes, metadata_json, metadata_version)
+                                VALUES (?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    build_id,
+                                    sha256,
+                                    file_size,
+                                    json.dumps(metadata, ensure_ascii=False),
+                                    metadata.get("metadata_version", 1),
+                                )
+                            )
 
             # -------------------------------------------------
             # 6️⃣ TAG NORMALIZATION
