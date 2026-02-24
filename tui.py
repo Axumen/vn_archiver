@@ -24,6 +24,7 @@ from vn_archiver import (
     resolve_prompt_fields,
     get_available_metadata_template_versions,
     detect_latest_metadata_template_version,
+    insert_visual_novel
 )
 
 init(autoreset=True)
@@ -370,7 +371,7 @@ def edit_metadata_only():
         conn.close()
 
     # 3. Open in System Text Editor
-    with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False, encoding="utf-8") as tf:
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as tf:
         yaml.dump(current_metadata, tf, sort_keys=False, allow_unicode=True)
         temp_path = tf.name
 
@@ -416,16 +417,16 @@ def process_archive():
     for i, f in enumerate(files, 1):
         print(f"[{i}] {f}")
 
-    # Allow selecting multiple files (e.g., "1, 2, 4")
     choice = input(
         Fore.YELLOW + "\nSelect file numbers to process together (comma-separated), or 0 to cancel: ").strip()
     if choice == "0" or not choice:
         return
 
     try:
-        # Parse the comma-separated choices
         indices = [int(idx.strip()) - 1 for idx in choice.split(",") if idx.strip().isdigit()]
         selected_paths = []
+
+        # Gathering files in a loop
         for idx in indices:
             if 0 <= idx < len(files):
                 selected_paths.append(os.path.join(INCOMING_DIR, files[idx]))
@@ -438,7 +439,8 @@ def process_archive():
             return
 
         active_version = detect_latest_metadata_template_version()
-        # Pass the LIST of files to the backend
+
+        # Passing the gathered list ONCE to the backend
         create_archive_only(selected_paths, metadata_version=active_version)
 
     except ValueError:
@@ -474,18 +476,18 @@ def upload_archives():
     try:
         import zipfile
         with zipfile.ZipFile(archive_path, "r") as archive:
-            if "metadata.yml" not in archive.namelist():
-                print(Fore.RED + "Archive does not contain metadata.yml. Upload blocked.\n")
+            if "metadata.yaml" not in archive.namelist():
+                print(Fore.RED + "Archive does not contain metadata.yaml. Upload blocked.\n")
                 return
-            with archive.open("metadata.yml") as metadata_file:
+            with archive.open("metadata.yaml") as metadata_file:
                 metadata = yaml.safe_load(metadata_file.read().decode("utf-8")) or {}
     except Exception as e:
-        print(Fore.RED + f"Failed to read metadata.yml from archive: {e}\n")
+        print(Fore.RED + f"Failed to read metadata.yaml from archive: {e}\n")
         return
 
     archive_source_sha = metadata.get("sha256")
     if not archive_source_sha:
-        print(Fore.RED + "metadata.yml is missing sha256. Upload blocked.\n")
+        print(Fore.RED + "metadata.yaml is missing sha256. Upload blocked.\n")
         return
 
     with get_connection() as conn:
@@ -513,7 +515,7 @@ def upload_archives():
     expected_meta_name = (
         f"{title_slug}_"
         f"{build_slug}_"
-        f"{sha8}.meta.yml"
+        f"{sha8}.meta.yaml"
     )
 
     expected_meta_path = Path(PROCESSED_DIR) / expected_meta_name

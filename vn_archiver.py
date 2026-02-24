@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import re
 import zipfile
 import hashlib
 import shutil
@@ -25,7 +26,7 @@ PROCESSED_DIR = "processed"
 UPLOADED_DIR = "uploaded"
 METADATA_TEMPLATE_DIR = Path("metadata_templates")
 DEFAULT_METADATA_VERSION = 1
-B2_CONFIG_FILE = "backblaze_config.yml"
+B2_CONFIG_FILE = "backblaze_config.yaml"
 
 B2_KEY_ID = None
 B2_APPLICATION_KEY = None
@@ -72,7 +73,7 @@ def sha256_file(filepath):
 
 
 def get_metadata_template_path(version=DEFAULT_METADATA_VERSION):
-    return METADATA_TEMPLATE_DIR / f"metadata_v{version}.yml"
+    return METADATA_TEMPLATE_DIR / f"metadata_v{version}.yaml"
 
 
 def get_available_metadata_template_versions():
@@ -80,7 +81,7 @@ def get_available_metadata_template_versions():
         return []
 
     versions = []
-    for template_path in METADATA_TEMPLATE_DIR.glob("metadata_v*.yml"):
+    for template_path in METADATA_TEMPLATE_DIR.glob("metadata_v*.yaml"):
         stem = template_path.stem
         try:
             version = int(stem.split("_v", 1)[1])
@@ -261,14 +262,14 @@ def create_archive(original_zip, metadata_dict, output_path):
         detect_latest_metadata_template_version()
     )
 
-    temp_metadata_path = "metadata.yml"
+    temp_metadata_path = "metadata.yaml"
 
     with open(temp_metadata_path, "w", encoding="utf-8") as f:
         yaml.dump(metadata_dict, f, sort_keys=False, allow_unicode=True)
 
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_STORED) as archive:
         archive.write(original_zip, arcname=os.path.basename(original_zip))
-        archive.write(temp_metadata_path, arcname="metadata.yml")
+        archive.write(temp_metadata_path, arcname="metadata.yaml")
 
     os.remove(temp_metadata_path)
 
@@ -699,10 +700,11 @@ def move_uploaded_archive(filepath, metadata):
 # ==============================
 
 def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VERSION):
-    # Default to empty list to support "Create Metadata Only" (Option 1)
+    from colorama import Fore, Style
+    import zipfile
+
     if archive_paths is None:
         archive_paths = []
-    # Ensure it's a list even if called with a single string
     elif isinstance(archive_paths, str):
         archive_paths = [archive_paths]
 
@@ -712,7 +714,9 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
     if archive_paths:
         print(f"\nProcessing {len(archive_paths)} file(s)...")
 
+    # -------------------------------------------------------------------
     # 1. Gather data for all archives
+    # -------------------------------------------------------------------
     archives_data = []
     for path in archive_paths:
         print(f"Calculating SHA-256 for: {os.path.basename(path)}...")
@@ -726,63 +730,60 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
             "sha256": sha256
         })
 
-        # -------------------------------------------------------------------
-        # 2. Prepare metadata (Beautiful TUI Prompts)
-        # -------------------------------------------------------------------
-        from colorama import Fore, Style
+    # -------------------------------------------------------------------
+    # 2. Prepare metadata (Beautiful TUI Prompts)
+    # -------------------------------------------------------------------
+    base_template = load_metadata_template(metadata_version)
+    prompt_fields = resolve_prompt_fields(base_template)
 
-        base_template = load_metadata_template(metadata_version)
-        prompt_fields = resolve_prompt_fields(base_template)
+    metadata = {"metadata_version": metadata_version}
 
-        metadata = {"metadata_version": metadata_version}
+    FIELD_SUGGESTIONS = {
+        "release_status": ["ongoing", "completed", "hiatus", "cancelled", "abandoned"],
+        "distribution_model": ["free", "paid", "freemium", "donationware", "subscription", "patron_only"],
+        "build_type": ["full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "seasonal",
+                       "side-story"],
+        "language": ["japanese", "english", "chinese-simplified", "chinese-traditional", "korean", "spanish", "german",
+                     "french", "russian", "multi-language"],
+        "distribution_platform": ["steam", "itch.io", "dlsite", "fanza", "gumroad", "patreon", "booth",
+                                  "self-distributed", "other"],
+        "content_rating": ["all-ages", "teen", "mature", "18+", "unrated"],
+        "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
+        "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story",
+                         "non_canon_special"],
+        "tags": [
+            "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
+            "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
+            "nakige", "utsuge", "nukige", "moege", "dark", "wholesome", "tragic", "bittersweet",
+            "school", "modern", "adult"
+        ]
+    }
 
-        FIELD_SUGGESTIONS = {
-            "release_status": ["ongoing", "completed", "hiatus", "cancelled", "abandoned"],
-            "distribution_model": ["free", "paid", "freemium", "donationware", "subscription", "patron_only"],
-            "build_type": ["full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "seasonal",
-                           "side-story"],
-            "language": ["japanese", "english", "chinese-simplified", "chinese-traditional", "korean", "spanish",
-                         "german", "french", "russian", "multi-language"],
-            "distribution_platform": ["steam", "itch.io", "dlsite", "fanza", "gumroad", "patreon", "booth",
-                                      "self-distributed", "other"],
-            "content_rating": ["all-ages", "teen", "mature", "18+", "unrated"],
-            "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
-            "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story",
-                             "non_canon_special"],
-            "tags": [
-                "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
-                "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
-                "nakige", "utsuge", "nukige", "moege", "dark", "wholesome", "tragic", "bittersweet",
-                "school", "modern", "adult"
-            ]
-        }
+    def normalize_list(val):
+        if not val: return None
+        return sorted(set([v.strip() for v in val.split(",") if v.strip()]))
 
-        def normalize_list(val):
-            if not val: return None
-            return sorted(set([v.strip() for v in val.split(",") if v.strip()]))
+    print(Fore.MAGENTA + "\nFill Metadata (Press ENTER to skip fields)\n")
 
-        print(Fore.MAGENTA + "\nFill Metadata (Press ENTER to skip fields)\n")
+    for field in prompt_fields:
+        if field in ("tags", "target_platform", "aliases"):
+            suggestions = FIELD_SUGGESTIONS.get(field) or []
+            if suggestions:
+                print(Fore.CYAN + f"Suggested {field}:")
+                print(", ".join(suggestions))
+            value = input(Fore.YELLOW + f"{field} (comma separated): " + Style.RESET_ALL).strip()
+            metadata[field] = normalize_list(value)
+        else:
+            suggestions = FIELD_SUGGESTIONS.get(field)
+            if suggestions:
+                print(Fore.CYAN + f"Suggested {field}:")
+                print(", ".join(suggestions))
+            value = input(Fore.YELLOW + f"{field}: " + Style.RESET_ALL).strip()
+            metadata[field] = value if value else None
 
-        for field in prompt_fields:
-            # Fields that support multiple values
-            if field in ("tags", "target_platform", "aliases"):
-                suggestions = FIELD_SUGGESTIONS.get(field) or []
-                if suggestions:
-                    print(Fore.CYAN + f"Suggested {field}:")
-                    print(", ".join(suggestions))
-                value = input(Fore.YELLOW + f"{field} (comma separated): " + Style.RESET_ALL).strip()
-                metadata[field] = normalize_list(value)
-
-            # Standard single-value fields
-            else:
-                suggestions = FIELD_SUGGESTIONS.get(field)
-                if suggestions:
-                    print(Fore.CYAN + f"Suggested {field}:")
-                    print(", ".join(suggestions))
-                value = input(Fore.YELLOW + f"{field}: " + Style.RESET_ALL).strip()
-                metadata[field] = value if value else None
-
-    # 3. Inject the multi-archive data into the metadata dictionary (if any exist)
+    # -------------------------------------------------------------------
+    # 3. Inject the multi-archive data
+    # -------------------------------------------------------------------
     if archives_data:
         archives_list = []
         for a in archives_data:
@@ -793,44 +794,86 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
             })
         metadata["archives"] = archives_list
 
+    # -------------------------------------------------------------------
     # 4. Insert into Database
+    # -------------------------------------------------------------------
     vn_id = insert_visual_novel(metadata)
     if not vn_id:
-        print("Failed to insert visual novel into database.")
+        print(Fore.RED + "Failed to insert visual novel into database.")
         return
 
-    # 5. Move and rename all physical files
-    title_slug = slugify_component(metadata.get("title"), "unknown_title")
-    build_slug = slugify_component(metadata.get("version"), "unknown_version")
+        # -------------------------------------------------------------------
+        # 5 & 6. Repackage ZIP & Update Dynamic Parent Folder
+        # -------------------------------------------------------------------
 
-    for arch in archives_data:
-        old_path = arch["original_path"]
-        ext = os.path.splitext(old_path)[1]
-        sha_prefix = str(arch["sha256"])[:8]
+        # Grab the exact strings the user typed
+    proper_title = str(metadata.get("title", "Unknown Title"))
+    proper_version = str(metadata.get("version", "Unknown Version"))
 
-        new_filename = f"{title_slug}_{build_slug}_{sha_prefix}{ext}"
-        new_path = os.path.join(PROCESSED_DIR, new_filename)
+    # Safely remove invalid Windows/Linux file characters but KEEP spaces and casing
+    safe_title = re.sub(r'[\\/*?:"<>|]', "", proper_title).strip()
+    safe_version = re.sub(r'[\\/*?:"<>|]', "", proper_version).strip()
 
-        print(f"Moving {arch['filename']} -> {new_path}")
-        shutil.move(old_path, new_path)
-
-    # 6. Generate the Sidecar YAML for the build
     if archives_data:
-        first_sha_prefix = str(archives_data[0]["sha256"])[:8]
+        # 1. Package the master zip file
+        bundle_filename = f"{safe_title} {safe_version}.zip"
+        bundle_path = os.path.join(PROCESSED_DIR, bundle_filename)
+
+        print(Fore.CYAN + f"\nPackaging files into {bundle_filename}...")
+
+        with zipfile.ZipFile(bundle_path, 'w', zipfile.ZIP_DEFLATED) as bundle_zip:
+            yaml_str = yaml.dump(metadata, sort_keys=False, allow_unicode=True)
+            bundle_zip.writestr("metadata.yaml", yaml_str)
+
+            for arch in archives_data:
+                bundle_zip.write(arch["original_path"], arch["filename"])
+                os.remove(arch["original_path"])
+
+        print(Fore.GREEN + f"Bundle successfully created at: {bundle_path}")
+
+        # 2. Bulletproof Parent Folder Renaming Logic
+        new_parent_name = f"{safe_title} {safe_version}"
+        new_parent_path = os.path.join(UPLOADED_DIR, new_parent_name)
+
+        if os.path.exists(UPLOADED_DIR):
+            for existing_folder in os.listdir(UPLOADED_DIR):
+                old_parent_path = os.path.join(UPLOADED_DIR, existing_folder)
+
+                # Check if it's a directory and starts with "Title " (with a space)
+                if os.path.isdir(old_parent_path) and existing_folder.startswith(safe_title + " "):
+
+                    # Deduce what the old version string was based on the folder name
+                    possible_old_version = existing_folder[len(safe_title) + 1:].strip()
+
+                    # Verify it's actually the matching game by checking if that version subfolder exists inside it
+                    if os.path.isdir(os.path.join(old_parent_path, possible_old_version)):
+                        if existing_folder != new_parent_name:
+                            print(
+                                Fore.YELLOW + f"Updating parent folder: '{existing_folder}' -> '{new_parent_name}'")
+                            os.rename(old_parent_path, new_parent_path)
+                        break
+
+        # 3. Create the final subfolder and move the zip
+        uploaded_dest_dir = os.path.join(new_parent_path, safe_version)
+        os.makedirs(uploaded_dest_dir, exist_ok=True)
+
+        uploaded_dest_path = os.path.join(uploaded_dest_dir, bundle_filename)
+        shutil.copy2(bundle_path, uploaded_dest_path)
+
+        print(Fore.GREEN + f"Bundle copied to: {uploaded_dest_path}")
+        print(Fore.GREEN + "Archive processing complete!")
+
     else:
-        first_sha_prefix = "no_archive"
+        # Option 1 Fallback (No physical files selected)
+        # Safely names it strictly metadata.yaml inside the processed folder
+        meta_filename = "metadata.yaml"
+        meta_path = os.path.join(PROCESSED_DIR, meta_filename)
 
-    meta_filename = f"{title_slug}_{build_slug}_{first_sha_prefix}_meta.yml"
-    meta_path = os.path.join(PROCESSED_DIR, meta_filename)
+        with open(meta_path, "w", encoding="utf-8") as f:
+            yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
 
-    with open(meta_path, "w", encoding="utf-8") as f:
-        yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
-
-    print(f"\nMetadata saved to: {meta_path}")
-    if archive_paths:
-        print("Archive processing complete!")
-    else:
-        print("Metadata creation complete!")
+        print(Fore.GREEN + f"\nMetadata saved to: {meta_path}")
+        print(Fore.GREEN + "Metadata creation complete!")
 
 def move_original_to_uploaded_local(original_filepath, metadata):
     """Move original zip to uploaded/<title>/Latest Version/ using local naming only."""
@@ -951,7 +994,7 @@ def slugify_component(value, fallback):
 def upload_metadata_sidecar(metadata, vn_id):
     """
     Upload metadata as a sidecar artifact to a consolidated metadata namespace:
-    metadata/<title>/vn_<id>/build_<version>/v<schema>/<title>__build_<version>__sha_<sha8>.yml
+    metadata/<title>/vn_<id>/build_<version>/v<schema>/<title>__build_<version>__sha_<sha8>.yaml
     """
 
     if not isinstance(metadata, dict):
@@ -986,7 +1029,7 @@ def upload_metadata_sidecar(metadata, vn_id):
     filename = (
         f"{title_slug}_"
         f"{build_slug}_"
-        f"{sha_prefix}_meta.yml"
+        f"{sha_prefix}_meta.yaml"
     )
     remote_folder = (
         f"metadata/"
@@ -996,7 +1039,7 @@ def upload_metadata_sidecar(metadata, vn_id):
         f"v{metadata_version}"
     )
 
-    with tempfile.NamedTemporaryFile("w", suffix=".yml", encoding="utf-8", delete=False) as handle:
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", encoding="utf-8", delete=False) as handle:
         temp_path = handle.name
         yaml.dump(metadata, handle, sort_keys=False, allow_unicode=True)
 
