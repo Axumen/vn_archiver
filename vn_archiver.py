@@ -714,10 +714,20 @@ def create_archive_only(filename, metadata):
     vn_id = insert_visual_novel(metadata)
 
     # Slug-safe naming
-    title_slug = slugify_component(metadata.get("title"), "unknown_title")
-    build_slug = slugify_component(metadata.get("version"), "unknown")
+    # ==============================
+    # Structured filename naming
+    # ==============================
 
-    final_name = f"{title_slug}_build_{build_slug}_archive.zip"
+    title_slug = slugify_component(metadata.get("title"), "unknown")
+    build_slug = slugify_component(metadata.get("version"), "unknown")
+    sha8 = str(metadata.get("sha256", ""))[:8] or "unknown"
+
+    final_name = (
+        f"{title_slug}_"
+        f"{build_slug}_"
+        f"{sha8}.archive.zip"
+    )
+
     final_path = os.path.join(PROCESSED_DIR, final_name)
 
     if os.path.exists(final_path):
@@ -821,26 +831,30 @@ def upload_archive(filepath, metadata=None, vn_id=None):
     return upload_to_b2(filepath, remote_folder=remote_folder)
     
 def slugify_component(value, fallback):
-    """Normalize metadata values for stable folder/file naming."""
+    """
+    Slugify using:
+    - lowercase
+    - hyphen as word separator
+    - alphanumeric only
+    - collapse duplicates
+    """
     text = str(value or "").strip().lower()
     if not text:
         return fallback
 
     normalized = []
-    last_was_underscore = False
+    last_was_hyphen = False
 
     for char in text:
         if char.isalnum():
             normalized.append(char)
-            last_was_underscore = False
-            continue
+            last_was_hyphen = False
+        else:
+            if not last_was_hyphen:
+                normalized.append("-")
+                last_was_hyphen = True
 
-        if char in ("_", "-", " "):
-            if not last_was_underscore:
-                normalized.append("_")
-                last_was_underscore = True
-
-    slug = "".join(normalized).strip("_")
+    slug = "".join(normalized).strip("-")
     return slug or fallback
 
 def upload_metadata_sidecar(metadata, vn_id):
@@ -866,8 +880,19 @@ def upload_metadata_sidecar(metadata, vn_id):
     )
     sha_prefix = str(sha256 or "unknown")[:8]
 
+    raw_platform = metadata.get("target_platform")
+    if isinstance(raw_platform, list) and raw_platform:
+        platform_value = raw_platform[0]
+    else:
+        platform_value = raw_platform
+
+    platform_slug = slugify_component(platform_value, "unknown")
+    build_type_slug = slugify_component(metadata.get("build_type"), "unknown")
+
     filename = (
-        f"{title_slug}__build_{build_slug}__sha_{sha_prefix}.yml"
+        f"{title_slug}_"
+        f"{build_slug}_"
+        f"{sha_prefix}_meta.yml"
     )
     remote_folder = (
         f"metadata/"

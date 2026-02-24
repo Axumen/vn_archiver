@@ -16,18 +16,14 @@ from vn_archiver import (
     INCOMING_DIR,
     PROCESSED_DIR,
     sha256_file,
+    slugify_component,
     load_metadata_template,
     resolve_prompt_fields,
     get_available_metadata_template_versions,
     detect_latest_metadata_template_version,
 )
 
-
 init(autoreset=True)
-
-
-SELECTED_METADATA_TEMPLATE_VERSION = None
-
 
 SELECTED_METADATA_TEMPLATE_VERSION = None
 
@@ -44,7 +40,7 @@ SUGGESTED_DISTRIBUTION_MODEL = [
 ]
 
 SUGGESTED_BUILD_TYPE = [
-    "full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc" , "seasonal" , "side-story"
+    "full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "seasonal", "side-story"
 ]
 
 SUGGESTED_LANGUAGE = [
@@ -70,10 +66,10 @@ SUGGESTED_CONTENT_TYPE = [
     "april_fools", "side_story", "non_canon_special"
 ]
 
+
 # =============================
 # HELPERS
 # =============================
-
 
 
 def header():
@@ -87,7 +83,6 @@ def header():
     print(Fore.CYAN + line)
     print(Style.BRIGHT + Fore.WHITE + centered_title)
     print(Fore.CYAN + line + "\n")
-
 
 
 def list_zips():
@@ -104,6 +99,7 @@ def list_processed_archives():
     return [f for f in os.listdir(PROCESSED_DIR)
             if f.endswith("archive.zip")]
 
+
 def normalize_value(value):
     return value.strip() if value else None
 
@@ -112,7 +108,8 @@ def normalize_list(value):
     if not value:
         return None
     return sorted(set([v.strip() for v in value.split(",") if v.strip()]))
-    
+
+
 def show_file_info(filename):
     path = Path(INCOMING_DIR) / filename
     size = path.stat().st_size
@@ -269,7 +266,6 @@ def configure_metadata_template_version():
 # =============================
 
 def create_metadata_only():
-    
     zips = list_zips()
     filename = choose_from_list(zips, "Select VN to create metadata for")
     if not filename:
@@ -398,7 +394,7 @@ def process_archive():
     try:
         with open(metadata_path, "r", encoding="utf-8") as f:
             metadata = yaml.safe_load(f)
-            
+
             # ---- Metadata schema version detection ----
             metadata_version = metadata.get("metadata_version")
             if metadata_version is None:
@@ -407,7 +403,7 @@ def process_archive():
 
             # Ensure an installed template exists for the metadata version in use.
             load_metadata_template(metadata_version)
-                
+
     except Exception as e:
         print(Fore.RED + "FAILED")
         print(Fore.RED + f"Error reading metadata: {e}\n")
@@ -453,18 +449,21 @@ def process_archive():
         print(Fore.RED + "Could not determine vn_id for metadata naming.\n")
         return
 
-    def sanitize(value):
-        return str(value).strip().replace(" ", "_")
+    title_slug = slugify_component(metadata.get("title"), "unknown")
+    build_slug = slugify_component(metadata.get("version"), "unknown")
+    sha8 = str(metadata.get("sha256", ""))[:8] or "unknown"
 
-    title = sanitize(metadata.get("title") or "Unknown_Title")
-    build_version = sanitize(metadata.get("version") or "unknown")
-    meta_version = metadata.get("metadata_version", 1)
+    new_meta_name = (
+        f"{title_slug}_"
+        f"{build_slug}_"
+        f"{sha8}.meta.yml"
+    )
 
-    new_meta_name = f"{title}_build_{build_version}_meta_v{meta_version}.yml"
     destination_path = Path(PROCESSED_DIR) / new_meta_name
 
     try:
         with open(destination_path, "w", encoding="utf-8") as f:
+
             yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
 
         metadata_path.unlink()
@@ -551,10 +550,16 @@ def upload_archives():
 
     vn_id = f"{row['id']:06d}"
 
-    meta_version = metadata.get("metadata_version", 1)
-    title = str(metadata.get("title") or "Unknown_Title").strip().replace(" ", "_")
-    build_version = str(metadata.get("version") or "unknown").strip().replace(" ", "_")
-    expected_meta_name = f"{title}_build_{build_version}_meta_v{meta_version}.yml"
+    title_slug = slugify_component(metadata.get("title"), "unknown")
+    build_slug = slugify_component(metadata.get("version"), "unknown")
+    sha8 = str(metadata.get("sha256", ""))[:8] or "unknown"
+
+    expected_meta_name = (
+        f"{title_slug}_"
+        f"{build_slug}_"
+        f"{sha8}.meta.yml"
+    )
+
     expected_meta_path = Path(PROCESSED_DIR) / expected_meta_name
 
     if not expected_meta_path.exists():
@@ -604,9 +609,8 @@ def upload_archives():
 # =============================
 
 def main():
-    
     initialize_database()
-    
+
     while True:
         header()
 
