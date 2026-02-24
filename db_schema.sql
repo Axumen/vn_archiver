@@ -1,6 +1,31 @@
 PRAGMA foreign_keys = ON;
 
 -- =====================================================
+-- 1. SERIES
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS series (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    status TEXT DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =====================================================
+-- 2. VISUAL NOVELS (Work Identity)
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS visual_novels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    series_id INTEGER,
+    canonical_slug TEXT UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (series_id) REFERENCES series(id)
+);
+
+-- =====================================================
 -- 3. CANON RELATIONSHIPS
 -- =====================================================
 
@@ -109,35 +134,7 @@ CREATE TABLE IF NOT EXISTS vn_tags (
 );
 
 -- =====================================================
--- 1. SERIES
--- =====================================================
-
-CREATE TABLE IF NOT EXISTS series (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    description TEXT,
-    status TEXT DEFAULT 'active',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- =====================================================
--- 2. VISUAL NOVELS (Work Identity)
--- =====================================================
-
-CREATE TABLE IF NOT EXISTS visual_novels (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    series_id INTEGER,
-    canonical_slug TEXT UNIQUE,
-    current_metadata_version_id INTEGER,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    FOREIGN KEY (series_id) REFERENCES series(id),
-    FOREIGN KEY (current_metadata_version_id)
-        REFERENCES metadata_versions(id)
-);
-
--- =====================================================
--- 3. ARCHIVE OBJECTS (Content-Addressed Storage)
+-- 8. ARCHIVE OBJECTS (Content-Addressed Storage)
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS archive_objects (
@@ -148,7 +145,7 @@ CREATE TABLE IF NOT EXISTS archive_objects (
 );
 
 -- =====================================================
--- 4. METADATA OBJECTS (Immutable Blob Store)
+-- 9. METADATA OBJECTS (Immutable Blob Store)
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS metadata_objects (
@@ -159,7 +156,7 @@ CREATE TABLE IF NOT EXISTS metadata_objects (
 );
 
 -- =====================================================
--- 5. METADATA VERSIONS (Version History Per VN)
+-- 10. METADATA VERSIONS (Version History Per VN)
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS metadata_versions (
@@ -169,6 +166,7 @@ CREATE TABLE IF NOT EXISTS metadata_versions (
     parent_version_id INTEGER,
     version_number INTEGER NOT NULL,
     change_note TEXT,
+    status TEXT DEFAULT 'approved',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     is_current INTEGER NOT NULL DEFAULT 0,
 
@@ -186,7 +184,7 @@ CREATE TABLE IF NOT EXISTS metadata_versions (
 );
 
 -- =====================================================
--- 6. UNIQUE CONSTRAINTS
+-- 11. UNIQUE CONSTRAINTS
 -- =====================================================
 
 -- Ensure only one current metadata version per VN
@@ -199,7 +197,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_version_number
 ON metadata_versions(vn_id, version_number);
 
 -- =====================================================
--- 7. OPTIONAL: INDEXES FOR PERFORMANCE
+-- 12. INDEXES FOR PERFORMANCE
 -- =====================================================
 
 CREATE INDEX IF NOT EXISTS idx_metadata_versions_vn
