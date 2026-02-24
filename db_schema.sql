@@ -19,7 +19,16 @@ CREATE TABLE IF NOT EXISTS series (
 CREATE TABLE IF NOT EXISTS visual_novels (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     series_id INTEGER,
+    
+    title TEXT NOT NULL,
     canonical_slug TEXT UNIQUE,
+    aliases TEXT,           -- Stores JSON array or comma-separated alternate titles
+    
+    developer TEXT,
+    publisher TEXT,
+    release_status TEXT,
+    content_rating TEXT,
+    
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (series_id) REFERENCES series(id)
@@ -53,8 +62,16 @@ CREATE TABLE IF NOT EXISTS builds (
     build_type TEXT,
     distribution_model TEXT,
     distribution_platform TEXT,
+    
     language TEXT,
+    translator TEXT,
+    edition TEXT,
     release_date TEXT,
+    
+    engine TEXT,
+    engine_version TEXT,
+    
+    base_archive_sha256 TEXT, -- References the base game for patches/append discs
 
     status TEXT DEFAULT 'processed',
 

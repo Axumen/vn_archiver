@@ -3,7 +3,7 @@
 import os
 import yaml
 import shutil
-from tools.db_manager import initialize_database
+from db_manager import initialize_database
 from pathlib import Path
 from colorama import init, Fore, Style
 from vn_archiver import (

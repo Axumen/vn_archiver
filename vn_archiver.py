@@ -9,10 +9,12 @@ import yaml
 import json
 import tempfile
 import time
+import json
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
-from tools.db_manager import get_connection
+from db_manager import get_connection, exclusive_transaction
 
 # ==============================
 # CONFIGURATION
@@ -294,267 +296,218 @@ def get_metadata_value(metadata, key, fallback=None):
 
     return fallback
 
+
 def insert_visual_novel(metadata):
+    conn = get_connection()
+    try:
+        # Wrap everything in an exclusive transaction to prevent race conditions
+        with exclusive_transaction(conn):
 
-    with get_connection() as conn:
-
-        title = metadata.get("title")
-        if not title:
-            raise Exception("Title is required.")
-
-        # -------------------------------------------------
-        # 1️⃣ CHECK IF WORK ALREADY EXISTS
-        # -------------------------------------------------
-        existing_row = conn.execute(
-            "SELECT id FROM visual_novels WHERE title = ?",
-            (title,)
-        ).fetchone()
-
-        is_new_work = False
-
-        if existing_row:
-            vn_id = existing_row["id"]
-        else:
-            is_new_work = True
+            title = metadata.get("title")
+            if not title:
+                raise Exception("Title is required.")
 
             # -------------------------------------------------
-            # 2️⃣ SERIES NORMALIZATION (ONLY FOR NEW WORK)
+            # 1️⃣ SERIES NORMALIZATION
             # -------------------------------------------------
             series_name = metadata.get("series")
             series_id = None
 
             if series_name:
-                conn.execute(
-                    "INSERT OR IGNORE INTO series (name) VALUES (?)",
-                    (series_name,)
-                )
-
-                series_row = conn.execute(
-                    "SELECT id FROM series WHERE name = ?",
-                    (series_name,)
-                ).fetchone()
-
+                conn.execute("INSERT OR IGNORE INTO series (name) VALUES (?)", (series_name,))
+                series_row = conn.execute("SELECT id FROM series WHERE name = ?", (series_name,)).fetchone()
                 if series_row:
                     series_id = series_row["id"]
 
             # -------------------------------------------------
-            # 3️⃣ INSERT NEW WORK
+            # 2️⃣ INSERT OR FETCH VISUAL NOVEL
             # -------------------------------------------------
-            cursor = conn.execute(
-                """
-                INSERT INTO visual_novels
-                (series_id, title, developer, release_status, content_rating)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    series_id,
-                    title,
-                    metadata.get("developer"),
-                    metadata.get("release_status"),
-                    metadata.get("content_rating"),
-                )
-            )
+            existing_row = conn.execute("SELECT id FROM visual_novels WHERE title = ?", (title,)).fetchone()
+            is_new_work = False
 
-            vn_id = cursor.lastrowid
+            # Format aliases as JSON array
+            aliases_raw = metadata.get("aliases", [])
+            if isinstance(aliases_raw, str):
+                aliases_raw = [a.strip() for a in aliases_raw.split(",") if a.strip()]
+            aliases_json = json.dumps(aliases_raw, ensure_ascii=False) if aliases_raw else None
 
-        # -------------------------------------------------
-        # 4️⃣ INSERT BUILD (ALWAYS)
-        # -------------------------------------------------
-        build_cursor = conn.execute(
-            """
-            INSERT INTO builds
-            (vn_id, version, build_type,
-             distribution_model, distribution_platform,
-             language, release_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                vn_id,
-                metadata.get("version"),
-                metadata.get("build_type"),
-                metadata.get("distribution_model"),
-                metadata.get("distribution_platform"),
-                metadata.get("language"),
-                metadata.get("release_date"),
-            )
-        )
-
-        build_id = build_cursor.lastrowid
-
-        # -------------------------------------------------
-        # PLATFORM NORMALIZATION (FIXED + HARDENED)
-        # -------------------------------------------------
-        raw_platforms = metadata.get("target_platform")
-
-        if not raw_platforms:
-            raw_platforms = []
-
-        if isinstance(raw_platforms, str):
-            raw_platforms = [
-                p.strip() for p in raw_platforms.split(",") if p.strip()
-            ]
-
-        if not isinstance(raw_platforms, list):
-            raw_platforms = [raw_platforms]
-
-        for platform in raw_platforms:
-            if not platform:
-                continue
-
-            normalized_platform = str(platform).strip().lower()
-
-            if not normalized_platform:
-                continue
-
-            conn.execute(
-                "INSERT OR IGNORE INTO target_platforms (name) VALUES (?)",
-                (normalized_platform,)
-            )
-
-            platform_row = conn.execute(
-                "SELECT id FROM target_platforms WHERE name = ?",
-                (normalized_platform,)
-            ).fetchone()
-
-            if platform_row:
-                conn.execute(
+            if existing_row:
+                vn_id = existing_row["id"]
+                # Optional: You could update VN details here if they changed in the metadata
+            else:
+                is_new_work = True
+                cursor = conn.execute(
                     """
-                    INSERT OR IGNORE INTO build_target_platforms
-                    (build_id, platform_id)
-                    VALUES (?, ?)
+                    INSERT INTO visual_novels
+                    (series_id, title, aliases, developer, publisher, release_status, content_rating)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (build_id, platform_row["id"])
+                    (
+                        series_id,
+                        title,
+                        aliases_json,
+                        metadata.get("developer"),
+                        metadata.get("publisher"),  # NEW FIELD
+                        metadata.get("release_status"),
+                        metadata.get("content_rating"),
+                    )
                 )
+                vn_id = cursor.lastrowid
 
-        if not raw_platforms:
-            raw_platforms = []
-
-        # If string, allow comma-separated
-        if isinstance(raw_platforms, str):
-            raw_platforms = [
-                p.strip() for p in raw_platforms.split(",") if p.strip()
-            ]
-
-        # Ensure list
-        if not isinstance(raw_platforms, list):
-            raw_platforms = [raw_platforms]
-
-        for platform in raw_platforms:
-            if not platform:
-                continue
-
-            normalized_platform = str(platform).strip().lower()
-
-            if not normalized_platform:
-                continue
-
-            # Insert into master platform table
-            conn.execute(
-                "INSERT OR IGNORE INTO target_platforms (name) VALUES (?)",
-                (normalized_platform,)
-            )
-
-            platform_row = conn.execute(
-                "SELECT id FROM target_platforms WHERE name = ?",
-                (normalized_platform,)
+            # -------------------------------------------------
+            # 3️⃣ INSERT OR FETCH BUILD (FIXED BUG)
+            # -------------------------------------------------
+            build_version = metadata.get("version")
+            existing_build = conn.execute(
+                "SELECT id FROM builds WHERE vn_id = ? AND version = ?",
+                (vn_id, build_version)
             ).fetchone()
 
-            if platform_row:
-                conn.execute(
+            if existing_build:
+                build_id = existing_build["id"]
+            else:
+                build_cursor = conn.execute(
                     """
-                    INSERT OR IGNORE INTO build_target_platforms
-                    (build_id, platform_id)
-                    VALUES (?, ?)
+                    INSERT INTO builds
+                    (vn_id, version, build_type, distribution_model, distribution_platform,
+                     language, translator, edition, release_date, engine, engine_version, base_archive_sha256)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (build_id, platform_row["id"])
+                    (
+                        vn_id,
+                        build_version,
+                        metadata.get("build_type"),
+                        metadata.get("distribution_model"),
+                        metadata.get("distribution_platform"),
+                        metadata.get("language"),
+                        metadata.get("translator"),  # NEW FIELD
+                        metadata.get("edition"),
+                        metadata.get("release_date"),
+                        metadata.get("engine"),  # NEW FIELD
+                        metadata.get("engine_version"),  # NEW FIELD
+                        metadata.get("base_archive_sha256"),  # NEW FIELD
+                    )
                 )
+                build_id = build_cursor.lastrowid
 
-        # -------------------------------------------------
-        # 5️⃣ INSERT ARCHIVE
-        # -------------------------------------------------
-        metadata_json = json.dumps(metadata, ensure_ascii=False)
+            # -------------------------------------------------
+            # 4️⃣ PLATFORM NORMALIZATION
+            # -------------------------------------------------
+            raw_platforms = metadata.get("target_platform", [])
+            if isinstance(raw_platforms, str):
+                raw_platforms = [p.strip() for p in raw_platforms.split(",") if p.strip()]
+            elif not isinstance(raw_platforms, list):
+                raw_platforms = [raw_platforms]
 
-        sha256 = get_metadata_value(
-            metadata,
-            "sha256",
-            get_metadata_value(metadata, "archive.sha256")
-        )
+            for platform in raw_platforms:
+                if not platform: continue
+                normalized = str(platform).strip().lower()
+                if not normalized: continue
+                conn.execute("INSERT OR IGNORE INTO target_platforms (name) VALUES (?)", (normalized,))
+                platform_row = conn.execute("SELECT id FROM target_platforms WHERE name = ?", (normalized,)).fetchone()
+                if platform_row:
+                    conn.execute("INSERT OR IGNORE INTO build_target_platforms (build_id, platform_id) VALUES (?, ?)",
+                                 (build_id, platform_row["id"]))
 
-        if sha_exists(build_id, sha256):
-            raise Exception("Archive already exists for this build (duplicate SHA256).")
-
-        conn.execute(
-            """
-            INSERT INTO archives
-            (build_id, sha256, file_size_bytes,
-             metadata_json, metadata_version)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                build_id,
-                sha256,
-                get_metadata_value(
-                    metadata,
-                    "file_size_bytes",
-                    get_metadata_value(metadata, "archive.file_size")
-                ),
-                metadata_json,
-                metadata.get("metadata_version", 1),
-            )
-        )
-
-        # -------------------------------------------------
-        # 6️⃣ TAG NORMALIZATION (WORK LEVEL)
-        # -------------------------------------------------
-        tags = metadata.get("tags") or []
-        if not isinstance(tags, list):
-            tags = [tags]
-
-        for tag in tags:
-            if not tag:
-                continue
-
-            conn.execute(
-                "INSERT OR IGNORE INTO tags (name) VALUES (?)",
-                (tag,)
-            )
-
-            tag_row = conn.execute(
-                "SELECT id FROM tags WHERE name = ?",
-                (tag,)
-            ).fetchone()
-
-            if tag_row:
-                conn.execute(
-                    "INSERT OR IGNORE INTO vn_tags (vn_id, tag_id) VALUES (?, ?)",
-                    (vn_id, tag_row["id"])
-                )
-
-        # -------------------------------------------------
-        # 7️⃣ CANON RELATIONSHIPS (ONLY IF NEW WORK)
-        # -------------------------------------------------
-        if is_new_work:
-            parent_title = metadata.get("parent_vn_title")
-            relationship_type = metadata.get("relationship_type")
-
-            if parent_title and relationship_type:
-                parent_row = conn.execute(
-                    "SELECT id FROM visual_novels WHERE title = ?",
-                    (parent_title,)
-                ).fetchone()
-
-                if parent_row:
+            # -------------------------------------------------
+            # 5️⃣ INSERT ARCHIVE
+            # -------------------------------------------------
+            sha256 = get_metadata_value(metadata, "sha256", get_metadata_value(metadata, "archive.sha256"))
+            if sha256:
+                archive_exists = conn.execute("SELECT id FROM archives WHERE build_id = ? AND sha256 = ?",
+                                              (build_id, sha256)).fetchone()
+                if not archive_exists:
                     conn.execute(
                         """
-                        INSERT OR IGNORE INTO canon_relationships
-                        (parent_vn_id, child_vn_id, relationship_type)
-                        VALUES (?, ?, ?)
+                        INSERT INTO archives
+                        (build_id, sha256, file_size_bytes, metadata_json, metadata_version)
+                        VALUES (?, ?, ?, ?, ?)
                         """,
-                        (parent_row["id"], vn_id, relationship_type)
+                        (
+                            build_id,
+                            sha256,
+                            get_metadata_value(metadata, "file_size_bytes",
+                                               get_metadata_value(metadata, "archive.file_size") or 0),
+                            json.dumps(metadata, ensure_ascii=False),
+                            metadata.get("metadata_version", 1),
+                        )
                     )
 
+            # -------------------------------------------------
+            # 6️⃣ TAG NORMALIZATION
+            # -------------------------------------------------
+            tags = metadata.get("tags") or []
+            if isinstance(tags, str):
+                tags = [t.strip() for t in tags.split(",") if t.strip()]
+            elif not isinstance(tags, list):
+                tags = [tags]
+
+            for tag in tags:
+                if not tag: continue
+                conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
+                tag_row = conn.execute("SELECT id FROM tags WHERE name = ?", (tag,)).fetchone()
+                if tag_row:
+                    conn.execute("INSERT OR IGNORE INTO vn_tags (vn_id, tag_id) VALUES (?, ?)", (vn_id, tag_row["id"]))
+
+            # -------------------------------------------------
+            # 7️⃣ CANON RELATIONSHIPS
+            # -------------------------------------------------
+            if is_new_work:
+                parent_title = metadata.get("parent_vn_title")
+                relationship_type = metadata.get("relationship_type")
+                if parent_title and relationship_type:
+                    parent_row = conn.execute("SELECT id FROM visual_novels WHERE title = ?",
+                                              (parent_title,)).fetchone()
+                    if parent_row:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO canon_relationships (parent_vn_id, child_vn_id, relationship_type) VALUES (?, ?, ?)",
+                            (parent_row["id"], vn_id, relationship_type))
+
+            # -------------------------------------------------
+            # 8️⃣ METADATA VERSIONING (NEW)
+            # -------------------------------------------------
+            # Generate a consistent string to hash
+            canonical_json = json.dumps(metadata, sort_keys=True, ensure_ascii=False)
+            metadata_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+            schema_version = metadata.get("metadata_version", 1)
+
+            # Insert immutable blob into metadata_objects
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO metadata_objects (hash, schema_version, metadata_json)
+                VALUES (?, ?, ?)
+                """,
+                (metadata_hash, schema_version, canonical_json)
+            )
+
+            # Check if this exact metadata hash is already the current version
+            current_ver = conn.execute(
+                "SELECT metadata_hash FROM metadata_versions WHERE vn_id = ? AND is_current = 1",
+                (vn_id,)
+            ).fetchone()
+
+            if not current_ver or current_ver["metadata_hash"] != metadata_hash:
+                # Turn off the old active version
+                conn.execute("UPDATE metadata_versions SET is_current = 0 WHERE vn_id = ?", (vn_id,))
+
+                # Fetch the next sequential version number
+                cursor = conn.execute("SELECT MAX(version_number) FROM metadata_versions WHERE vn_id = ?", (vn_id,))
+                current_max = cursor.fetchone()[0]
+                next_version = (current_max or 0) + 1
+
+                # Insert the new version history
+                conn.execute(
+                    """
+                    INSERT INTO metadata_versions (vn_id, metadata_hash, version_number, is_current)
+                    VALUES (?, ?, ?, 1)
+                    """,
+                    (vn_id, metadata_hash, next_version)
+                )
+
         return vn_id
-        
+    finally:
+        conn.close()
+
 # ==============================
 # BACKBLAZE
 # ==============================
