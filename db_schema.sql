@@ -1,42 +1,6 @@
 PRAGMA foreign_keys = ON;
 
 -- =====================================================
--- 1. SERIES
--- =====================================================
-
-CREATE TABLE IF NOT EXISTS series (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    status TEXT DEFAULT 'active',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- =====================================================
--- 2. VISUAL NOVELS (Work Identity)
--- =====================================================
-
-CREATE TABLE IF NOT EXISTS visual_novels (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    series_id INTEGER,
-
-    -- Core metadata (work-level)
-    title TEXT NOT NULL,
-    developer TEXT,
-    release_status TEXT,
-    content_rating TEXT,
-
-    -- Legacy tracking column preserved
-    status TEXT DEFAULT 'processed',
-
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    FOREIGN KEY (series_id) REFERENCES series(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_visual_novels_title
-ON visual_novels(title);
-
--- =====================================================
 -- 3. CANON RELATIONSHIPS
 -- =====================================================
 
@@ -143,3 +107,103 @@ CREATE TABLE IF NOT EXISTS vn_tags (
     FOREIGN KEY (vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE,
     FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
 );
+
+-- =====================================================
+-- 1. SERIES
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS series (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    status TEXT DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =====================================================
+-- 2. VISUAL NOVELS (Work Identity)
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS visual_novels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    series_id INTEGER,
+    canonical_slug TEXT UNIQUE,
+    current_metadata_version_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (series_id) REFERENCES series(id),
+    FOREIGN KEY (current_metadata_version_id)
+        REFERENCES metadata_versions(id)
+);
+
+-- =====================================================
+-- 3. ARCHIVE OBJECTS (Content-Addressed Storage)
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS archive_objects (
+    sha256 TEXT PRIMARY KEY,
+    file_size INTEGER NOT NULL,
+    storage_path TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =====================================================
+-- 4. METADATA OBJECTS (Immutable Blob Store)
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS metadata_objects (
+    hash TEXT PRIMARY KEY,                 -- sha256 of canonical metadata JSON
+    schema_version INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =====================================================
+-- 5. METADATA VERSIONS (Version History Per VN)
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS metadata_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vn_id INTEGER NOT NULL,
+    metadata_hash TEXT NOT NULL,
+    parent_version_id INTEGER,
+    version_number INTEGER NOT NULL,
+    change_note TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_current INTEGER NOT NULL DEFAULT 0,
+
+    FOREIGN KEY (vn_id)
+        REFERENCES visual_novels(id)
+        ON DELETE CASCADE,
+
+    FOREIGN KEY (metadata_hash)
+        REFERENCES metadata_objects(hash)
+        ON DELETE RESTRICT,
+
+    FOREIGN KEY (parent_version_id)
+        REFERENCES metadata_versions(id)
+        ON DELETE SET NULL
+);
+
+-- =====================================================
+-- 6. UNIQUE CONSTRAINTS
+-- =====================================================
+
+-- Ensure only one current metadata version per VN
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_current_metadata
+ON metadata_versions(vn_id)
+WHERE is_current = 1;
+
+-- Ensure version_number increments uniquely per VN
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_version_number
+ON metadata_versions(vn_id, version_number);
+
+-- =====================================================
+-- 7. OPTIONAL: INDEXES FOR PERFORMANCE
+-- =====================================================
+
+CREATE INDEX IF NOT EXISTS idx_metadata_versions_vn
+ON metadata_versions(vn_id);
+
+CREATE INDEX IF NOT EXISTS idx_metadata_versions_hash
+ON metadata_versions(metadata_hash);
