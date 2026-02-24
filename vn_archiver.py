@@ -438,7 +438,7 @@ def insert_visual_novel(metadata):
                                  (build_id, platform_row["id"]))
 
                     # -------------------------------------------------
-                    # 5️⃣ INSERT ARCHIVE(S)
+                    # 5️⃣ INSERT ARCHIVES
                     # -------------------------------------------------
                     archives_to_process = []
 
