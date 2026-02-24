@@ -404,132 +404,46 @@ def edit_metadata_only():
 # =============================
 
 def process_archive():
-    zips = list_zips()
-    zip_filename = choose_from_list(zips, "Select VN ZIP to process")
-    if not zip_filename:
+    print(Fore.CYAN + "\n--- Process Archive ---")
+    if not os.path.exists(INCOMING_DIR):
+        os.makedirs(INCOMING_DIR)
+
+    files = [f for f in os.listdir(INCOMING_DIR) if os.path.isfile(os.path.join(INCOMING_DIR, f))]
+    if not files:
+        print(Fore.RED + f"No files found in '{INCOMING_DIR}' directory.")
         return
 
-    metadata_files = list_metadata()
-    metadata_filename = choose_from_list(metadata_files, "Select metadata YAML to use")
-    if not metadata_filename:
+    for i, f in enumerate(files, 1):
+        print(f"[{i}] {f}")
+
+    # Allow selecting multiple files (e.g., "1, 2, 4")
+    choice = input(
+        Fore.YELLOW + "\nSelect file numbers to process together (comma-separated), or 0 to cancel: ").strip()
+    if choice == "0" or not choice:
         return
 
-    zip_base = Path(zip_filename).stem
-    metadata_base = Path(metadata_filename).stem
+    try:
+        # Parse the comma-separated choices
+        indices = [int(idx.strip()) - 1 for idx in choice.split(",") if idx.strip().isdigit()]
+        selected_paths = []
+        for idx in indices:
+            if 0 <= idx < len(files):
+                selected_paths.append(os.path.join(INCOMING_DIR, files[idx]))
+            else:
+                print(Fore.RED + f"Invalid selection: {idx + 1}")
+                return
 
-    zip_path = Path(INCOMING_DIR) / zip_filename
-    metadata_path = Path(INCOMING_DIR) / metadata_filename
-
-    print(Fore.CYAN + "\n=== PROCESSING ARCHIVE ===\n")
-
-    # 🔎 Check filename match
-    if zip_base != metadata_base:
-        print(Fore.YELLOW + "WARNING: ZIP and metadata filenames do not match.")
-        print(Fore.YELLOW + f"ZIP: {zip_filename}")
-        print(Fore.YELLOW + f"Metadata: {metadata_filename}")
-        confirm = input(Fore.RED + "Are you sure you want to continue? (y/N): ").strip().lower()
-        if confirm != "y":
-            print(Fore.RED + "\nProcess cancelled.\n")
+        if not selected_paths:
+            print(Fore.RED + "No valid files selected.")
             return
 
-    # Step 1: Load metadata
-    print(Fore.BLUE + "Loading metadata...", end=" ")
-    try:
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            metadata = yaml.safe_load(f)
+        active_version = detect_latest_metadata_template_version()
 
-            # ---- Metadata schema version detection ----
-            metadata_version = metadata.get("metadata_version")
-            if metadata_version is None:
-                metadata_version = detect_latest_metadata_template_version()
-                metadata["metadata_version"] = metadata_version
+        # Pass the LIST of files to the backend
+        create_archive_only(selected_paths, metadata_version=active_version)
 
-            # Ensure an installed template exists for the metadata version in use.
-            load_metadata_template(metadata_version)
-
-    except Exception as e:
-        print(Fore.RED + "FAILED")
-        print(Fore.RED + f"Error reading metadata: {e}\n")
-        return
-
-    if not metadata:
-        print(Fore.RED + "FAILED")
-        print(Fore.RED + "Metadata file is empty.\n")
-        return
-
-    print(Fore.GREEN + "OK")
-
-    # Step 2: Creating archive
-    print(Fore.BLUE + "Creating archive (hashing + packaging)...", end=" ")
-    try:
-        archive_path, original_processed_path, vn_id = create_archive_only(zip_filename, metadata)
-    except Exception as e:
-        print(Fore.RED + "FAILED")
-        print(Fore.RED + f"Archive creation failed: {e}\n")
-        return
-
-    print(Fore.GREEN + "DONE")
-
-    # Step 3: Move metadata (with overwrite option)
-    print(Fore.BLUE + "Moving metadata to processed folder...", end=" ")
-
-    # ---- Structured metadata naming ----
-    from tools.db_manager import get_connection
-
-    with get_connection() as conn:
-        row = conn.execute(
-            """
-            SELECT vn.id
-            FROM archives a
-            JOIN builds b ON a.build_id = b.id
-            JOIN visual_novels vn ON b.vn_id = vn.id
-            WHERE a.sha256 = ?
-            """,
-            (metadata["sha256"],)
-        ).fetchone()
-
-    if not row:
-        print(Fore.RED + "Could not determine vn_id for metadata naming.\n")
-        return
-
-    title_slug = slugify_component(metadata.get("title"), "unknown")
-    build_slug = slugify_component(metadata.get("version"), "unknown")
-    sha8 = str(metadata.get("sha256", ""))[:8] or "unknown"
-
-    new_meta_name = (
-        f"{title_slug}_"
-        f"{build_slug}_"
-        f"{sha8}.meta.yml"
-    )
-
-    destination_path = Path(PROCESSED_DIR) / new_meta_name
-
-    try:
-        with open(destination_path, "w", encoding="utf-8") as f:
-
-            yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
-
-        metadata_path.unlink()
-
-    except Exception as e:
-        print(Fore.RED + "FAILED")
-        print(Fore.RED + f"Metadata move failed: {e}\n")
-        return
-
-    print(Fore.GREEN + "DONE")
-
-    # Step 4: Move original ZIP into uploaded local folder for local use
-    print(Fore.BLUE + "Moving original ZIP to uploaded local folder...", end=" ")
-    try:
-        local_original_path = move_original_to_uploaded_local(original_processed_path, metadata)
-    except Exception as e:
-        print(Fore.RED + "FAILED")
-        print(Fore.RED + f"Original ZIP local move failed: {e}\n")
-        return
-
-    print(Fore.GREEN + f"DONE ({local_original_path})")
-    print()
-
+    except ValueError:
+        print(Fore.RED + "Invalid input.")
 
 # =============================
 # UPLOAD

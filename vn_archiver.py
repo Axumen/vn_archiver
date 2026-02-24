@@ -698,59 +698,75 @@ def move_uploaded_archive(filepath, metadata):
 # ARCHIVE CREATION ONLY
 # ==============================
 
-def create_archive_only(filename, metadata):
-    ensure_directories()
+def create_archive_only(archive_paths, metadata_version=DEFAULT_METADATA_VERSION):
+    # Ensure it's a list even if called with a single string programmatically
+    if isinstance(archive_paths, str):
+        archive_paths = [archive_paths]
 
-    full_path = os.path.join(INCOMING_DIR, filename)
+    if not os.path.exists(PROCESSED_DIR):
+        os.makedirs(PROCESSED_DIR)
 
-    if not os.path.exists(full_path):
-        raise Exception("File not found.")
+    print(f"\nProcessing {len(archive_paths)} file(s)...")
 
-    metadata["original_filename"] = os.path.basename(full_path)
-    metadata["file_size_bytes"] = os.path.getsize(full_path)
-    metadata["sha256"] = sha256_file(full_path)
-    metadata["archived_at"] = datetime.utcnow().isoformat() + "Z"
+    # 1. Gather data for all archives
+    archives_data = []
+    for path in archive_paths:
+        print(f"Calculating SHA-256 for: {os.path.basename(path)}...")
+        sha256 = sha256_file(path)
+        file_size = os.path.getsize(path)
 
-    set_nested_value(metadata, "archive.filename", metadata["original_filename"])
-    set_nested_value(metadata, "archive.sha256", metadata["sha256"])
-    set_nested_value(metadata, "archive.file_size", metadata["file_size_bytes"])
+        archives_data.append({
+            "original_path": path,  # Temp key for moving the file later
+            "filename": os.path.basename(path),
+            "file_size_bytes": file_size,
+            "sha256": sha256
+        })
 
-    temp_name = filename.replace(".zip", "_archive_temp.zip")
-    temp_path = os.path.join(PROCESSED_DIR, temp_name)
+    # 2. Prepare metadata
+    metadata = load_metadata_template(metadata_version)
+    metadata = resolve_prompt_fields(metadata)
 
-    create_archive(full_path, metadata, temp_path)
+    # 3. Inject the multi-archive data into the metadata dictionary
+    # We drop the 'original_path' key before saving to YAML/DB
+    metadata["archives"] = [
+        {"filename": a["filename"], "file_size_bytes": a["file_size_bytes"], "sha256": a["sha256"]}
+        for a in archives_data
+    ]
 
-    # Insert into DB
+    # 4. Insert into Database (this will use our new versioning & multi-archive loop!)
     vn_id = insert_visual_novel(metadata)
+    if not vn_id:
+        print("Failed to insert visual novel into database.")
+        return
 
-    # Slug-safe naming
-    # ==============================
-    # Structured filename naming
-    # ==============================
+    # 5. Move and rename all physical files
+    title_slug = slugify_component(metadata.get("title"), "unknown_title")
+    build_slug = slugify_component(metadata.get("version"), "unknown_version")
 
-    title_slug = slugify_component(metadata.get("title"), "unknown")
-    build_slug = slugify_component(metadata.get("version"), "unknown")
-    sha8 = str(metadata.get("sha256", ""))[:8] or "unknown"
+    for arch in archives_data:
+        old_path = arch["original_path"]
+        ext = os.path.splitext(old_path)[1]
+        sha_prefix = str(arch["sha256"])[:8]
 
-    final_name = (
-        f"{title_slug}_"
-        f"{build_slug}_"
-        f"{sha8}.archive.zip"
-    )
+        # e.g., fate-stay-night_v1-0_a1b2c3d4.rar
+        new_filename = f"{title_slug}_{build_slug}_{sha_prefix}{ext}"
+        new_path = os.path.join(PROCESSED_DIR, new_filename)
 
-    final_path = os.path.join(PROCESSED_DIR, final_name)
+        print(f"Moving {arch['filename']} -> {new_path}")
+        shutil.move(old_path, new_path)
 
-    if os.path.exists(final_path):
-        raise Exception("Archive with same title and build already exists.")
+    # 6. Generate the Sidecar YAML for the build
+    # We'll name the sidecar based on the first archive's SHA just for a unique filename
+    first_sha_prefix = str(archives_data[0]["sha256"])[:8]
+    meta_filename = f"{title_slug}_{build_slug}_{first_sha_prefix}_meta.yml"
+    meta_path = os.path.join(PROCESSED_DIR, meta_filename)
 
-    os.rename(temp_path, final_path)
+    with open(meta_path, "w", encoding="utf-8") as f:
+        yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
 
-    original_processed_path = os.path.join(PROCESSED_DIR, filename)
-    shutil.move(full_path, original_processed_path)
+    print(f"\nMetadata saved to: {meta_path}")
+    print("Archive processing complete!")
 
-    # NOW RETURNS vn_id (required by tui.py)
-    return final_path, original_processed_path, vn_id
-    
 def move_original_to_uploaded_local(original_filepath, metadata):
     """Move original zip to uploaded/<title>/Latest Version/ using local naming only."""
     if not os.path.exists(original_filepath):
