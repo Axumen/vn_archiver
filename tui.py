@@ -438,7 +438,6 @@ def process_archive():
             return
 
         active_version = detect_latest_metadata_template_version()
-
         # Pass the LIST of files to the backend
         create_archive_only(selected_paths, metadata_version=active_version)
 
@@ -469,7 +468,7 @@ def upload_archives():
         return
 
     # ---- Load metadata + vn_id from DB ----
-    from tools.db_manager import get_connection
+
 
     metadata = None
     try:

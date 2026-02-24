@@ -698,15 +698,19 @@ def move_uploaded_archive(filepath, metadata):
 # ARCHIVE CREATION ONLY
 # ==============================
 
-def create_archive_only(archive_paths, metadata_version=DEFAULT_METADATA_VERSION):
-    # Ensure it's a list even if called with a single string programmatically
-    if isinstance(archive_paths, str):
+def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VERSION):
+    # Default to empty list to support "Create Metadata Only" (Option 1)
+    if archive_paths is None:
+        archive_paths = []
+    # Ensure it's a list even if called with a single string
+    elif isinstance(archive_paths, str):
         archive_paths = [archive_paths]
 
     if not os.path.exists(PROCESSED_DIR):
         os.makedirs(PROCESSED_DIR)
 
-    print(f"\nProcessing {len(archive_paths)} file(s)...")
+    if archive_paths:
+        print(f"\nProcessing {len(archive_paths)} file(s)...")
 
     # 1. Gather data for all archives
     archives_data = []
@@ -716,24 +720,80 @@ def create_archive_only(archive_paths, metadata_version=DEFAULT_METADATA_VERSION
         file_size = os.path.getsize(path)
 
         archives_data.append({
-            "original_path": path,  # Temp key for moving the file later
+            "original_path": path,
             "filename": os.path.basename(path),
             "file_size_bytes": file_size,
             "sha256": sha256
         })
 
-    # 2. Prepare metadata
-    metadata = load_metadata_template(metadata_version)
-    metadata = resolve_prompt_fields(metadata)
+        # -------------------------------------------------------------------
+        # 2. Prepare metadata (Beautiful TUI Prompts)
+        # -------------------------------------------------------------------
+        from colorama import Fore, Style
 
-    # 3. Inject the multi-archive data into the metadata dictionary
-    # We drop the 'original_path' key before saving to YAML/DB
-    metadata["archives"] = [
-        {"filename": a["filename"], "file_size_bytes": a["file_size_bytes"], "sha256": a["sha256"]}
-        for a in archives_data
-    ]
+        base_template = load_metadata_template(metadata_version)
+        prompt_fields = resolve_prompt_fields(base_template)
 
-    # 4. Insert into Database (this will use our new versioning & multi-archive loop!)
+        metadata = {"metadata_version": metadata_version}
+
+        FIELD_SUGGESTIONS = {
+            "release_status": ["ongoing", "completed", "hiatus", "cancelled", "abandoned"],
+            "distribution_model": ["free", "paid", "freemium", "donationware", "subscription", "patron_only"],
+            "build_type": ["full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "seasonal",
+                           "side-story"],
+            "language": ["japanese", "english", "chinese-simplified", "chinese-traditional", "korean", "spanish",
+                         "german", "french", "russian", "multi-language"],
+            "distribution_platform": ["steam", "itch.io", "dlsite", "fanza", "gumroad", "patreon", "booth",
+                                      "self-distributed", "other"],
+            "content_rating": ["all-ages", "teen", "mature", "18+", "unrated"],
+            "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
+            "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story",
+                             "non_canon_special"],
+            "tags": [
+                "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
+                "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
+                "nakige", "utsuge", "nukige", "moege", "dark", "wholesome", "tragic", "bittersweet",
+                "school", "modern", "adult"
+            ]
+        }
+
+        def normalize_list(val):
+            if not val: return None
+            return sorted(set([v.strip() for v in val.split(",") if v.strip()]))
+
+        print(Fore.MAGENTA + "\nFill Metadata (Press ENTER to skip fields)\n")
+
+        for field in prompt_fields:
+            # Fields that support multiple values
+            if field in ("tags", "target_platform", "aliases"):
+                suggestions = FIELD_SUGGESTIONS.get(field) or []
+                if suggestions:
+                    print(Fore.CYAN + f"Suggested {field}:")
+                    print(", ".join(suggestions))
+                value = input(Fore.YELLOW + f"{field} (comma separated): " + Style.RESET_ALL).strip()
+                metadata[field] = normalize_list(value)
+
+            # Standard single-value fields
+            else:
+                suggestions = FIELD_SUGGESTIONS.get(field)
+                if suggestions:
+                    print(Fore.CYAN + f"Suggested {field}:")
+                    print(", ".join(suggestions))
+                value = input(Fore.YELLOW + f"{field}: " + Style.RESET_ALL).strip()
+                metadata[field] = value if value else None
+
+    # 3. Inject the multi-archive data into the metadata dictionary (if any exist)
+    if archives_data:
+        archives_list = []
+        for a in archives_data:
+            archives_list.append({
+                "filename": a.get("filename"),
+                "file_size_bytes": a.get("file_size_bytes"),
+                "sha256": a.get("sha256")
+            })
+        metadata["archives"] = archives_list
+
+    # 4. Insert into Database
     vn_id = insert_visual_novel(metadata)
     if not vn_id:
         print("Failed to insert visual novel into database.")
@@ -748,7 +808,6 @@ def create_archive_only(archive_paths, metadata_version=DEFAULT_METADATA_VERSION
         ext = os.path.splitext(old_path)[1]
         sha_prefix = str(arch["sha256"])[:8]
 
-        # e.g., fate-stay-night_v1-0_a1b2c3d4.rar
         new_filename = f"{title_slug}_{build_slug}_{sha_prefix}{ext}"
         new_path = os.path.join(PROCESSED_DIR, new_filename)
 
@@ -756,8 +815,11 @@ def create_archive_only(archive_paths, metadata_version=DEFAULT_METADATA_VERSION
         shutil.move(old_path, new_path)
 
     # 6. Generate the Sidecar YAML for the build
-    # We'll name the sidecar based on the first archive's SHA just for a unique filename
-    first_sha_prefix = str(archives_data[0]["sha256"])[:8]
+    if archives_data:
+        first_sha_prefix = str(archives_data[0]["sha256"])[:8]
+    else:
+        first_sha_prefix = "no_archive"
+
     meta_filename = f"{title_slug}_{build_slug}_{first_sha_prefix}_meta.yml"
     meta_path = os.path.join(PROCESSED_DIR, meta_filename)
 
@@ -765,7 +827,10 @@ def create_archive_only(archive_paths, metadata_version=DEFAULT_METADATA_VERSION
         yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
 
     print(f"\nMetadata saved to: {meta_path}")
-    print("Archive processing complete!")
+    if archive_paths:
+        print("Archive processing complete!")
+    else:
+        print("Metadata creation complete!")
 
 def move_original_to_uploaded_local(original_filepath, metadata):
     """Move original zip to uploaded/<title>/Latest Version/ using local naming only."""
@@ -899,11 +964,14 @@ def upload_metadata_sidecar(metadata, vn_id):
     title_slug = slugify_component(metadata.get("title"), "unknown_title")
     build_slug = slugify_component(metadata.get("version"), "unknown")
 
-    sha256 = get_metadata_value(
-        metadata,
-        "sha256",
-        get_metadata_value(metadata, "archive.sha256")
-    )
+    # 1. Try to get top-level SHA (legacy)
+    sha256 = get_metadata_value(metadata, "sha256", get_metadata_value(metadata, "archive.sha256"))
+
+    # 2. Fallback to the first archive in the multi-archive list (new schema)
+    if not sha256 and metadata.get("archives") and isinstance(metadata["archives"], list) and len(
+            metadata["archives"]) > 0:
+        sha256 = metadata["archives"][0].get("sha256")
+
     sha_prefix = str(sha256 or "unknown")[:8]
 
     raw_platform = metadata.get("target_platform")
