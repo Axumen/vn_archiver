@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS visual_novels (
     release_status TEXT,
     content_rating TEXT,
     
+    status TEXT DEFAULT 'local', -- Added to track cloud upload status
+    
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (series_id) REFERENCES series(id)
@@ -73,7 +75,7 @@ CREATE TABLE IF NOT EXISTS builds (
     
     base_archive_sha256 TEXT, -- References the base game for patches/append discs
 
-    status TEXT DEFAULT 'processed',
+    status TEXT DEFAULT 'local', -- Updated default to 'local' for consistency
 
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
