@@ -46,7 +46,7 @@ SUGGESTED_DISTRIBUTION_MODEL = [
 ]
 
 SUGGESTED_BUILD_TYPE = [
-    "full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "seasonal", "side-story"
+    "full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc"
 ]
 
 SUGGESTED_LANGUAGE = [
