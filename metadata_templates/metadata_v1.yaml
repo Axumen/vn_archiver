@@ -21,9 +21,12 @@ optional:
   # -------------------------------------
   # VISUAL_NOVELS TABLE
   # -------------------------------------
+  - aliases             # Added: List of alternative titles (e.g., Romaji, Japanese)
   - developer
+  - publisher           # Added: Publisher (often different from developer in VNs)
   - release_status
   - content_rating
+  - description
   - tags
 
   # -------------------------------------
@@ -33,11 +36,13 @@ optional:
   - distribution_model
   - distribution_platform
   - language
+  - translator          # Added: Fan-translation group or official translator
   - edition
   - release_date
   - engine
   - engine_version
   - target_platform
+  - base_archive_sha256 # Added: Useful for patches/append discs to link to the base game
 
   # -------------------------------------
   # CANON RELATIONSHIPS
