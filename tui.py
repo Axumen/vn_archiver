@@ -27,6 +27,8 @@ from vn_archiver import (
     insert_visual_novel
 )
 
+UPLOADED_DIR = "uploaded"
+
 init(autoreset=True)
 
 SELECTED_METADATA_TEMPLATE_VERSION = None
@@ -451,116 +453,40 @@ def process_archive():
 # =============================
 
 def upload_archives():
-    archives = list_processed_archives()
-    filename = choose_from_list(archives, "Select archive to upload")
-    if not filename:
+    print(Fore.CYAN + "\n--- Upload Archive ---")
+    if not os.path.exists(UPLOADED_DIR):
+        print(Fore.RED + "Uploaded directory does not exist.")
         return
 
-    if not filename.endswith("archive.zip"):
-        print(Fore.RED + "Only repackaged files ending with 'archive.zip' can be uploaded.\n")
+    # Find all master .zip bundles recursively in the uploaded directory
+    bundle_files = []
+    for root, dirs, files in os.walk(UPLOADED_DIR):
+        for file in files:
+            if file.endswith(".zip"):
+                bundle_files.append(os.path.join(root, file))
+
+    if not bundle_files:
+        print(Fore.RED + "No master .zip bundles found in the uploaded directory.")
         return
 
-    archive_path = os.path.join(PROCESSED_DIR, filename)
+    # Display the list cleanly
+    for i, path in enumerate(bundle_files, 1):
+        rel_path = os.path.relpath(path, UPLOADED_DIR)
+        print(f"[{i}] {rel_path}")
 
-    try:
-        with open(archive_path, "rb") as f:
-            pass
-    except Exception as e:
-        print(Fore.RED + f"Cannot open archive: {e}\n")
-        return
-
-    # ---- Load metadata + vn_id from DB ----
-
-
-    metadata = None
-    try:
-        import zipfile
-        with zipfile.ZipFile(archive_path, "r") as archive:
-            if "metadata.yaml" not in archive.namelist():
-                print(Fore.RED + "Archive does not contain metadata.yaml. Upload blocked.\n")
-                return
-            with archive.open("metadata.yaml") as metadata_file:
-                metadata = yaml.safe_load(metadata_file.read().decode("utf-8")) or {}
-    except Exception as e:
-        print(Fore.RED + f"Failed to read metadata.yaml from archive: {e}\n")
-        return
-
-    archive_source_sha = metadata.get("sha256")
-    if not archive_source_sha:
-        print(Fore.RED + "metadata.yaml is missing sha256. Upload blocked.\n")
-        return
-
-    with get_connection() as conn:
-        row = conn.execute(
-            """
-            SELECT vn.id
-            FROM archives a
-            JOIN builds b ON a.build_id = b.id
-            JOIN visual_novels vn ON b.vn_id = vn.id
-            WHERE a.sha256 = ?
-            """,
-            (archive_source_sha,)
-        ).fetchone()
-
-    if not row:
-        print(Fore.RED + "Archive not found in database by SHA256.\n")
-        return
-
-    vn_id = f"{row['id']:06d}"
-
-    title_slug = slugify_component(metadata.get("title"), "unknown")
-    build_slug = slugify_component(metadata.get("version"), "unknown")
-    sha8 = str(metadata.get("sha256", ""))[:8] or "unknown"
-
-    expected_meta_name = (
-        f"{title_slug}_"
-        f"{build_slug}_"
-        f"{sha8}.meta.yaml"
-    )
-
-    expected_meta_path = Path(PROCESSED_DIR) / expected_meta_name
-
-    if not expected_meta_path.exists():
-        print(Fore.RED + f"Corresponding metadata sidecar not found: {expected_meta_name}\n")
-        return
-
-    # ---- Call structured upload ----
-    upload_successful = upload_archive(archive_path, metadata, vn_id)
-
-    if not upload_successful:
-        print(Fore.YELLOW + "Upload was not completed. Archive left in processed.\n")
-        return
-
-    upload_metadata = input(
-        Fore.YELLOW + "Upload metadata sidecar to B2 metadata/<title>/vn_<id>/build_<version>/v* namespace? [y/N]: "
-    ).strip().lower()
-
-    if upload_metadata in ("y", "yes"):
-        metadata_uploaded = upload_metadata_sidecar(metadata, vn_id)
-        if not metadata_uploaded:
-            print(Fore.YELLOW + "Metadata sidecar upload skipped/cancelled. Archive remains uploaded.\n")
-
-    try:
-        moved_path = move_uploaded_archive(archive_path, metadata)
-    except Exception as e:
-        print(Fore.RED + f"Upload succeeded but post-upload move failed: {e}\n")
+    choice = input(Fore.YELLOW + "\nSelect the bundle number to upload, or 0 to cancel: ").strip()
+    if choice == "0" or not choice:
         return
 
     try:
-        moved_meta_path = move_processed_metadata_to_uploaded(str(expected_meta_path), metadata)
-    except Exception as e:
-        print(Fore.RED + f"Upload succeeded but metadata move to uploaded failed: {e}\n")
-        return
-
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE visual_novels SET status = ? WHERE id = ?",
-            ("uploaded", row[0])
-        )
-
-    print(Fore.GREEN + f"Upload complete. Archive moved to: {moved_path}")
-    print(Fore.GREEN + f"Metadata moved to: {moved_meta_path}\n")
-
+        idx = int(choice) - 1
+        if 0 <= idx < len(bundle_files):
+            selected_file = bundle_files[idx]
+            upload_archive(selected_file)
+        else:
+            print(Fore.RED + "Invalid selection.")
+    except ValueError:
+        print(Fore.RED + "Invalid input.")
 
 # =============================
 # MAIN MENU

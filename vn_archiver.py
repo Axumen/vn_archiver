@@ -3,15 +3,15 @@
 import os
 import re
 import zipfile
-import hashlib
 import shutil
 import sys
 import yaml
-import json
 import tempfile
 import time
 import json
 import hashlib
+from tqdm import tqdm
+from colorama import Fore
 from datetime import datetime
 from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
@@ -933,37 +933,192 @@ def move_file_to_uploaded_dir(source_filepath, target_dir, destination_name=None
 # ==============================
 # STRUCTURED ARCHIVE UPLOAD
 # ==============================
+def get_b2_bucket():
 
-def upload_archive(filepath, metadata=None, vn_id=None):
-    """
-    Structured upload using:
-    archives/<Title>/vn_<id>/build_<version>/
+    # 1. Check if the config file exists
+    if not os.path.exists(B2_CONFIG_FILE):
+        print(Fore.RED + f"Config file '{B2_CONFIG_FILE}' not found.")
+        print(Fore.YELLOW + "Creating a blank template. Please fill it out and try again.")
 
-    Backward compatible:
-    If metadata or vn_id is missing, falls back to simple archives/ upload.
-    """
+        template = {
+            "b2_key_id": "YOUR_KEY_ID_HERE",
+            "b2_application_key": "YOUR_APPLICATION_KEY_HERE",
+            "b2_bucket_name": "YOUR_BUCKET_NAME_HERE"
+        }
+        with open(B2_CONFIG_FILE, "w", encoding="utf-8") as f:
+            yaml.dump(template, f, default_flow_style=False, sort_keys=False)
 
-    if not os.path.exists(filepath):
-        raise Exception("Archive not found.")
+        return None, None
 
-    # ---------------------------
-    # Fallback mode (old behavior)
-    # ---------------------------
-    if metadata is None or vn_id is None:
-        return upload_to_b2(filepath, remote_folder="archives")
+    # 2. Read credentials from the YAML file
+    try:
+        with open(B2_CONFIG_FILE, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+    except Exception as e:
+        print(Fore.RED + f"Failed to read '{B2_CONFIG_FILE}': {e}")
+        return None, None
 
-    title_folder = slugify_component(metadata.get("title"), "unknown_title")
-    build_version = slugify_component(metadata.get("version"), "unknown")
+    b2_key_id = config.get("b2_key_id")
+    b2_application_key = config.get("b2_application_key")
+    b2_bucket_name = config.get("b2_bucket_name")
 
-    remote_folder = (
-        f"archives/"
-        f"{title_folder}/"
-        f"vn_{vn_id}/"
-        f"build_{build_version}"
-    )
+    # 3. Block upload if credentials are still the default placeholders
+    if not b2_key_id or not b2_application_key or not b2_bucket_name or b2_key_id == "YOUR_KEY_ID_HERE":
+        print(Fore.RED + f"Credentials missing. Please edit '{B2_CONFIG_FILE}' with your actual B2 keys.")
+        return None, None
 
-    return upload_to_b2(filepath, remote_folder=remote_folder)
-    
+    # 4. Authenticate with Backblaze
+    info = InMemoryAccountInfo()
+    api = B2Api(info)
+    try:
+        api.authorize_account("production", b2_key_id, b2_application_key)
+        bucket = api.get_bucket_by_name(b2_bucket_name)
+        return api, bucket
+    except Exception as e:
+        print(Fore.RED + f"Failed to authorize Backblaze B2: {e}")
+        return None, None
+
+
+def upload_archive(file_path):
+    from colorama import Fore
+    import zipfile
+    import yaml
+    import os
+    from b2sdk.v2 import InMemoryAccountInfo, B2Api
+    from tqdm import tqdm
+
+    if not os.path.exists(file_path):
+        print(Fore.RED + f"File not found: {file_path}")
+        return False
+
+    print(Fore.CYAN + f"\nAnalyzing {os.path.basename(file_path)}...")
+
+    # -------------------------------------------------------------------
+    # 1. Read metadata.yaml from inside the master bundle
+    # -------------------------------------------------------------------
+    try:
+        with zipfile.ZipFile(file_path, 'r') as z:
+            if 'metadata.yaml' not in z.namelist():
+                print(Fore.RED + "Upload Blocked: No 'metadata.yaml' found inside the zip.")
+                print(Fore.YELLOW + "This does not appear to be a valid processed bundle.")
+                return False
+
+            with z.open('metadata.yaml') as f:
+                yaml_content = f.read().decode('utf-8')
+                metadata = yaml.safe_load(yaml_content)
+    except zipfile.BadZipFile:
+        print(Fore.RED + "Upload Blocked: File is not a valid zip archive.")
+        return False
+
+    # Strictly convert to string to prevent YAML from reading "1.0" as a float
+    title = str(metadata.get("title", ""))
+    version = str(metadata.get("version", ""))
+
+    if not title or not version:
+        print(Fore.RED + "Upload Blocked: 'metadata.yaml' is missing 'title' or 'version'.")
+        return False
+
+    # -------------------------------------------------------------------
+    # 2. Block upload if it wasn't inserted into the Database
+    # -------------------------------------------------------------------
+    vn_id = None
+    build_id = None
+    with get_connection() as conn:
+        # Check if the VN exists
+        vn_row = conn.execute("SELECT id FROM visual_novels WHERE title = ?", (title,)).fetchone()
+        if not vn_row:
+            print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' does not exist in the database.")
+            print(Fore.YELLOW + "Please run '(3) Process Archive' to register it before uploading.")
+            return False
+
+        vn_id = vn_row[0]
+
+        # Check if this specific version build exists
+        build_row = conn.execute("SELECT id FROM builds WHERE vn_id = ? AND version = ?", (vn_id, version)).fetchone()
+        if not build_row:
+            print(Fore.RED + f"Upload Blocked: Version '{version}' for '{title}' does not exist in the database.")
+            print(Fore.YELLOW + "Please run '(3) Process Archive' to register this build before uploading.")
+            return False
+
+        build_id = build_row[0]
+
+    # -------------------------------------------------------------------
+    # 3. Formulate the Strict Cloud Naming Scheme
+    # -------------------------------------------------------------------
+    title_slug = slugify_component(title, "unknown")
+    version_slug = slugify_component(version, "unknown")
+
+    print(Fore.CYAN + "Calculating outer bundle SHA-256 for cloud verification...")
+    bundle_sha256 = sha256_file(file_path)
+    short_hash = bundle_sha256[:8]
+
+    ext = os.path.splitext(file_path)[1].lower()
+
+    # Cloud Object Key: archives / [title-slug] / vn-[id] / [version-slug] / [title-slug]_[version-slug]_[hash].zip
+    cloud_filename = f"{title_slug}_{version_slug}_{short_hash}{ext}"
+    cloud_path = f"archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{cloud_filename}"
+
+    print(Fore.GREEN + f"Database verification passed (VN ID: {vn_id})")
+    print(Fore.CYAN + f"Target Cloud Path: {cloud_path}")
+
+    # -------------------------------------------------------------------
+    # 4. Backblaze B2 Authentication via Config
+    # -------------------------------------------------------------------
+    try:
+        key_id, app_key, bucket_name, dry_run = load_b2_config()
+
+        info = InMemoryAccountInfo()
+        api = B2Api(info)
+        api.authorize_account("production", key_id, app_key)
+        bucket = api.get_bucket_by_name(bucket_name)
+    except Exception as e:
+        print(Fore.RED + f"B2 Authentication failed: {e}")
+        return False
+
+    # -------------------------------------------------------------------
+    # 5. Actual Upload with Progress Bar
+    # -------------------------------------------------------------------
+    if dry_run:
+        print(Fore.YELLOW + f"[DRY RUN] Would upload to: {cloud_path}")
+        return True
+
+    print(Fore.YELLOW + f"Uploading to Backblaze B2. This may take a while...")
+    file_size = os.path.getsize(file_path)
+
+    with tqdm(total=file_size, unit='B', unit_scale=True, desc="Progress", colour="green") as pbar:
+        # b2sdk expects exactly these three methods
+        class TqdmProgressListener:
+            def set_total_bytes(self, total_bytes):
+                pass
+
+            def bytes_completed(self, byte_count):
+                # Update progress by calculating the delta
+                pbar.update(byte_count - pbar.n)
+
+            def close(self):
+                pass
+
+        try:
+            bucket.upload_local_file(
+                local_file=str(file_path),
+                file_name=cloud_path,
+                progress_listener=TqdmProgressListener()
+            )
+        except Exception as e:
+            print(Fore.RED + f"\nUpload failed: {e}")
+            return False
+
+    print(Fore.GREEN + "\nUpload Complete!")
+
+    # Safely attempt to update status (ignores error if your table doesn't have a status column)
+    with get_connection() as conn:
+        try:
+            conn.execute("UPDATE builds SET status = ? WHERE id = ?", ("uploaded", build_id))
+            conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
+        except Exception:
+            pass
+
+    return True
 def slugify_component(value, fallback):
     """
     Slugify using:
