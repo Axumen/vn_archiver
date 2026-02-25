@@ -1,7 +1,0 @@
-# Backblaze B2 credentials
-# Fill these values before uploading.
-key_id: "0040eef1f10244d0000000005"
-application_key: "K004IbWKu4/37EkU7vgGDm3+x2U7BCo"
-bucket_name: "vn-archive"
-# Safety switch. Keep true to preview uploads without sending files.
-dry_run: false

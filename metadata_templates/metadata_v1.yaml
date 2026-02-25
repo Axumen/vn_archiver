@@ -1,0 +1,62 @@
+metadata_version: 1
+
+# =====================================
+# REQUIRED FIELDS
+# =====================================
+required:
+  # Visual Novel (Work Identity)
+  - title
+  - version
+
+# =====================================
+# OPTIONAL FIELDS
+# =====================================
+optional:
+
+  # -------------------------------------
+  # SERIES TABLE
+  # -------------------------------------
+  - series
+
+  # -------------------------------------
+  # VISUAL_NOVELS TABLE
+  # -------------------------------------
+  - aliases             # Added: List of alternative titles (e.g., Romaji, Japanese)
+  - developer
+  - publisher           # Added: Publisher (often different from developer in VNs)
+  - release_status
+  - content_rating
+  - description
+  - tags
+
+  # -------------------------------------
+  # BUILDS TABLE
+  # -------------------------------------
+  - build_type
+  - distribution_model
+  - distribution_platform
+  - language
+  - translator          # Added: Fan-translation group or official translator
+  - edition
+  - release_date
+  - engine
+  - engine_version
+  - target_platform
+  - base_archive_sha256 # Added: Useful for patches/append discs to link to the base game
+
+  # -------------------------------------
+  # CANON RELATIONSHIPS
+  # -------------------------------------
+  - parent_vn_title
+  - relationship_type
+  
+  # -------------------------------------
+  # MISC
+  # -------------------------------------
+  - source
+  - notes
+
+# Multi-archive support (optional)
+archives:
+  - filename:
+    sha256:

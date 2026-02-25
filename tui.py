@@ -3,7 +3,10 @@
 import os
 import yaml
 import shutil
-from tools.db_manager import initialize_database
+import subprocess
+import tempfile
+import json
+from db_manager import initialize_database, get_connection
 from pathlib import Path
 from colorama import init, Fore, Style
 from vn_archiver import (
@@ -16,18 +19,17 @@ from vn_archiver import (
     INCOMING_DIR,
     PROCESSED_DIR,
     sha256_file,
+    slugify_component,
     load_metadata_template,
     resolve_prompt_fields,
     get_available_metadata_template_versions,
     detect_latest_metadata_template_version,
+    insert_visual_novel
 )
 
+UPLOADED_DIR = "uploaded"
 
 init(autoreset=True)
-
-
-SELECTED_METADATA_TEMPLATE_VERSION = None
-
 
 SELECTED_METADATA_TEMPLATE_VERSION = None
 
@@ -44,7 +46,7 @@ SUGGESTED_DISTRIBUTION_MODEL = [
 ]
 
 SUGGESTED_BUILD_TYPE = [
-    "full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc" , "seasonal" , "side-story"
+    "full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc"
 ]
 
 SUGGESTED_LANGUAGE = [
@@ -70,10 +72,10 @@ SUGGESTED_CONTENT_TYPE = [
     "april_fools", "side_story", "non_canon_special"
 ]
 
+
 # =============================
 # HELPERS
 # =============================
-
 
 
 def header():
@@ -87,7 +89,6 @@ def header():
     print(Fore.CYAN + line)
     print(Style.BRIGHT + Fore.WHITE + centered_title)
     print(Fore.CYAN + line + "\n")
-
 
 
 def list_zips():
@@ -104,6 +105,7 @@ def list_processed_archives():
     return [f for f in os.listdir(PROCESSED_DIR)
             if f.endswith("archive.zip")]
 
+
 def normalize_value(value):
     return value.strip() if value else None
 
@@ -112,7 +114,8 @@ def normalize_list(value):
     if not value:
         return None
     return sorted(set([v.strip() for v in value.split(",") if v.strip()]))
-    
+
+
 def show_file_info(filename):
     path = Path(INCOMING_DIR) / filename
     size = path.stat().st_size
@@ -269,7 +272,6 @@ def configure_metadata_template_version():
 # =============================
 
 def create_metadata_only():
-    
     zips = list_zips()
     filename = choose_from_list(zips, "Select VN to create metadata for")
     if not filename:
@@ -333,268 +335,166 @@ def create_metadata_only():
 # METADATA EDITING
 # =============================
 
+# Make sure to import insert_visual_novel if this is in tui.py
+
 def edit_metadata_only():
-    metadata_files = list_metadata()
-    filename = choose_from_list(metadata_files, "Select metadata file to edit")
-    if not filename:
-        return
+    conn = get_connection()
+    try:
+        # 1. List available Visual Novels
+        print("\n--- Select Visual Novel to Edit ---")
+        vns = conn.execute("SELECT id, title FROM visual_novels").fetchall()
+        if not vns:
+            print("No visual novels in the database yet.")
+            return
 
-    path = Path(INCOMING_DIR) / filename
+        for vn in vns:
+            print(f"[{vn['id']}] {vn['title']}")
 
-    with open(path, "r", encoding="utf-8") as f:
-        metadata = yaml.safe_load(f) or {}
+        vn_id_str = input("\nEnter VN ID to edit (or press Enter to cancel): ").strip()
+        if not vn_id_str.isdigit():
+            return
+        vn_id = int(vn_id_str)
 
-    print(Fore.MAGENTA + "\nPress ENTER to keep current value.\n")
+        # 2. Fetch the current active metadata
+        row = conn.execute('''
+            SELECT mo.metadata_json 
+            FROM metadata_versions mv
+            JOIN metadata_objects mo ON mv.metadata_hash = mo.hash
+            WHERE mv.vn_id = ? AND mv.is_current = 1
+        ''', (vn_id,)).fetchone()
 
-    for key, value in metadata.items():
-        new_value = input(Fore.YELLOW + f"{key} [{value}]: ").strip()
-        if new_value:
-            if key in ["tags", "target_platform"]:
-                metadata[key] = [x.strip() for x in new_value.split(",")]
-            else:
-                metadata[key] = new_value
+        if not row:
+            print("No current metadata found for this VN.")
+            return
 
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.dump(metadata, f, sort_keys=False)
+        current_metadata = json.loads(row["metadata_json"])
 
-    print(Fore.GREEN + "\nMetadata updated.\n")
+    finally:
+        conn.close()
 
+    # 3. Open in System Text Editor
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as tf:
+        yaml.dump(current_metadata, tf, sort_keys=False, allow_unicode=True)
+        temp_path = tf.name
+
+    # Chooses 'notepad' on Windows, 'nano' or system default on Linux/Mac
+    editor = os.environ.get('EDITOR', 'notepad' if os.name == 'nt' else 'nano')
+
+    print(f"\nOpening metadata in {editor}... Save and close the file when finished.")
+    subprocess.call([editor, temp_path])
+
+    # 4. Read the edited file and save
+    try:
+        with open(temp_path, "r", encoding="utf-8") as f:
+            updated_metadata = yaml.safe_load(f)
+
+        if updated_metadata == current_metadata:
+            print("\nNo changes detected. Aborting update.")
+            return
+
+        # Re-run it through the engine. It will update the rows and create a new version!
+        insert_visual_novel(updated_metadata)
+        print("\nMetadata successfully updated and a new version history was created!")
+
+    except Exception as e:
+        print(f"\nFailed to save metadata: {e}")
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 # =============================
 # PROCESS ARCHIVE
 # =============================
 
 def process_archive():
-    zips = list_zips()
-    zip_filename = choose_from_list(zips, "Select VN ZIP to process")
-    if not zip_filename:
+    print(Fore.CYAN + "\n--- Process Archive ---")
+    if not os.path.exists(INCOMING_DIR):
+        os.makedirs(INCOMING_DIR)
+
+    files = [f for f in os.listdir(INCOMING_DIR) if os.path.isfile(os.path.join(INCOMING_DIR, f))]
+    if not files:
+        print(Fore.RED + f"No files found in '{INCOMING_DIR}' directory.")
         return
 
-    metadata_files = list_metadata()
-    metadata_filename = choose_from_list(metadata_files, "Select metadata YAML to use")
-    if not metadata_filename:
+    for i, f in enumerate(files, 1):
+        print(f"[{i}] {f}")
+
+    choice = input(
+        Fore.YELLOW + "\nSelect file numbers to process together (comma-separated), or 0 to cancel: ").strip()
+    if choice == "0" or not choice:
         return
 
-    zip_base = Path(zip_filename).stem
-    metadata_base = Path(metadata_filename).stem
+    try:
+        indices = [int(idx.strip()) - 1 for idx in choice.split(",") if idx.strip().isdigit()]
+        selected_paths = []
 
-    zip_path = Path(INCOMING_DIR) / zip_filename
-    metadata_path = Path(INCOMING_DIR) / metadata_filename
+        # Gathering files in a loop
+        for idx in indices:
+            if 0 <= idx < len(files):
+                selected_paths.append(os.path.join(INCOMING_DIR, files[idx]))
+            else:
+                print(Fore.RED + f"Invalid selection: {idx + 1}")
+                return
 
-    print(Fore.CYAN + "\n=== PROCESSING ARCHIVE ===\n")
-
-    # 🔎 Check filename match
-    if zip_base != metadata_base:
-        print(Fore.YELLOW + "WARNING: ZIP and metadata filenames do not match.")
-        print(Fore.YELLOW + f"ZIP: {zip_filename}")
-        print(Fore.YELLOW + f"Metadata: {metadata_filename}")
-        confirm = input(Fore.RED + "Are you sure you want to continue? (y/N): ").strip().lower()
-        if confirm != "y":
-            print(Fore.RED + "\nProcess cancelled.\n")
+        if not selected_paths:
+            print(Fore.RED + "No valid files selected.")
             return
 
-    # Step 1: Load metadata
-    print(Fore.BLUE + "Loading metadata...", end=" ")
-    try:
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            metadata = yaml.safe_load(f)
-            
-            # ---- Metadata schema version detection ----
-            metadata_version = metadata.get("metadata_version")
-            if metadata_version is None:
-                metadata_version = detect_latest_metadata_template_version()
-                metadata["metadata_version"] = metadata_version
+        active_version = detect_latest_metadata_template_version()
 
-            # Ensure an installed template exists for the metadata version in use.
-            load_metadata_template(metadata_version)
-                
-    except Exception as e:
-        print(Fore.RED + "FAILED")
-        print(Fore.RED + f"Error reading metadata: {e}\n")
-        return
+        # Passing the gathered list ONCE to the backend
+        create_archive_only(selected_paths, metadata_version=active_version)
 
-    if not metadata:
-        print(Fore.RED + "FAILED")
-        print(Fore.RED + "Metadata file is empty.\n")
-        return
-
-    print(Fore.GREEN + "OK")
-
-    # Step 2: Creating archive
-    print(Fore.BLUE + "Creating archive (hashing + packaging)...", end=" ")
-    try:
-        archive_path, original_processed_path = create_archive_only(zip_filename, metadata)
-    except Exception as e:
-        print(Fore.RED + "FAILED")
-        print(Fore.RED + f"Archive creation failed: {e}\n")
-        return
-
-    print(Fore.GREEN + "DONE")
-
-    # Step 3: Move metadata (with overwrite option)
-    print(Fore.BLUE + "Moving metadata to processed folder...", end=" ")
-
-    # ---- Structured metadata naming ----
-    from tools.db_manager import get_connection
-
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT id FROM visual_novels WHERE sha256 = ?",
-            (metadata["sha256"],)
-        ).fetchone()
-
-    if not row:
-        print(Fore.RED + "Could not determine vn_id for metadata naming.\n")
-        return
-
-    def sanitize(value):
-        return str(value).strip().replace(" ", "_")
-
-    title = sanitize(metadata.get("title") or "Unknown_Title")
-    build_version = sanitize(metadata.get("version") or "unknown")
-    meta_version = metadata.get("metadata_version", 1)
-
-    new_meta_name = f"{title}_build_{build_version}_meta_v{meta_version}.yml"
-    destination_path = Path(PROCESSED_DIR) / new_meta_name
-
-    try:
-        with open(destination_path, "w", encoding="utf-8") as f:
-            yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
-
-        metadata_path.unlink()
-
-    except Exception as e:
-        print(Fore.RED + "FAILED")
-        print(Fore.RED + f"Metadata move failed: {e}\n")
-        return
-
-    print(Fore.GREEN + "DONE")
-
-    # Step 4: Move original ZIP into uploaded local folder for local use
-    print(Fore.BLUE + "Moving original ZIP to uploaded local folder...", end=" ")
-    try:
-        local_original_path = move_original_to_uploaded_local(original_processed_path, metadata)
-    except Exception as e:
-        print(Fore.RED + "FAILED")
-        print(Fore.RED + f"Original ZIP local move failed: {e}\n")
-        return
-
-    print(Fore.GREEN + f"DONE ({local_original_path})")
-    print()
-
+    except ValueError:
+        print(Fore.RED + "Invalid input.")
 
 # =============================
 # UPLOAD
 # =============================
 
 def upload_archives():
-    archives = list_processed_archives()
-    filename = choose_from_list(archives, "Select archive to upload")
-    if not filename:
+    print(Fore.CYAN + "\n--- Upload Archive ---")
+    if not os.path.exists(UPLOADED_DIR):
+        print(Fore.RED + "Uploaded directory does not exist.")
         return
 
-    if not filename.endswith("archive.zip"):
-        print(Fore.RED + "Only repackaged files ending with 'archive.zip' can be uploaded.\n")
+    # Find all master .zip bundles recursively in the uploaded directory
+    bundle_files = []
+    for root, dirs, files in os.walk(UPLOADED_DIR):
+        for file in files:
+            if file.endswith(".zip"):
+                bundle_files.append(os.path.join(root, file))
+
+    if not bundle_files:
+        print(Fore.RED + "No master .zip bundles found in the uploaded directory.")
         return
 
-    archive_path = os.path.join(PROCESSED_DIR, filename)
+    # Display the list cleanly
+    for i, path in enumerate(bundle_files, 1):
+        rel_path = os.path.relpath(path, UPLOADED_DIR)
+        print(f"[{i}] {rel_path}")
 
-    try:
-        with open(archive_path, "rb") as f:
-            pass
-    except Exception as e:
-        print(Fore.RED + f"Cannot open archive: {e}\n")
-        return
-
-    # ---- Load metadata + vn_id from DB ----
-    from tools.db_manager import get_connection
-
-    metadata = None
-    try:
-        import zipfile
-        with zipfile.ZipFile(archive_path, "r") as archive:
-            if "metadata.yml" not in archive.namelist():
-                print(Fore.RED + "Archive does not contain metadata.yml. Upload blocked.\n")
-                return
-            with archive.open("metadata.yml") as metadata_file:
-                metadata = yaml.safe_load(metadata_file.read().decode("utf-8")) or {}
-    except Exception as e:
-        print(Fore.RED + f"Failed to read metadata.yml from archive: {e}\n")
-        return
-
-    archive_source_sha = metadata.get("sha256")
-    if not archive_source_sha:
-        print(Fore.RED + "metadata.yml is missing sha256. Upload blocked.\n")
-        return
-
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT id, metadata_json FROM visual_novels WHERE sha256 = ?",
-            (archive_source_sha,)
-        ).fetchone()
-
-    if not row:
-        print(Fore.RED + "Archive not found in database by SHA256.\n")
-        return
-
-    vn_id = f"{row['id']:06d}"
-
-    meta_version = metadata.get("metadata_version", 1)
-    title = str(metadata.get("title") or "Unknown_Title").strip().replace(" ", "_")
-    build_version = str(metadata.get("version") or "unknown").strip().replace(" ", "_")
-    expected_meta_name = f"{title}_build_{build_version}_meta_v{meta_version}.yml"
-    expected_meta_path = Path(PROCESSED_DIR) / expected_meta_name
-
-    if not expected_meta_path.exists():
-        print(Fore.RED + f"Corresponding metadata sidecar not found: {expected_meta_name}\n")
-        return
-
-    # ---- Call structured upload ----
-    upload_successful = upload_archive(archive_path, metadata, vn_id)
-
-    if not upload_successful:
-        print(Fore.YELLOW + "Upload was not completed. Archive left in processed.\n")
-        return
-
-    upload_metadata = input(
-        Fore.YELLOW + "Upload metadata sidecar to B2 metadata/<title>/vn_<id>/build_<version>/v* namespace? [y/N]: "
-    ).strip().lower()
-
-    if upload_metadata in ("y", "yes"):
-        metadata_uploaded = upload_metadata_sidecar(metadata, vn_id)
-        if not metadata_uploaded:
-            print(Fore.YELLOW + "Metadata sidecar upload skipped/cancelled. Archive remains uploaded.\n")
-
-    try:
-        moved_path = move_uploaded_archive(archive_path, metadata)
-    except Exception as e:
-        print(Fore.RED + f"Upload succeeded but post-upload move failed: {e}\n")
+    choice = input(Fore.YELLOW + "\nSelect the bundle number to upload, or 0 to cancel: ").strip()
+    if choice == "0" or not choice:
         return
 
     try:
-        moved_meta_path = move_processed_metadata_to_uploaded(str(expected_meta_path), metadata)
-    except Exception as e:
-        print(Fore.RED + f"Upload succeeded but metadata move to uploaded failed: {e}\n")
-        return
-
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE visual_novels SET status = ? WHERE id = ?",
-            ("uploaded", row["id"])
-        )
-
-    print(Fore.GREEN + f"Upload complete. Archive moved to: {moved_path}")
-    print(Fore.GREEN + f"Metadata moved to: {moved_meta_path}\n")
-
+        idx = int(choice) - 1
+        if 0 <= idx < len(bundle_files):
+            selected_file = bundle_files[idx]
+            upload_archive(selected_file)
+        else:
+            print(Fore.RED + "Invalid selection.")
+    except ValueError:
+        print(Fore.RED + "Invalid input.")
 
 # =============================
 # MAIN MENU
 # =============================
 
 def main():
-    
     initialize_database()
-    
+
     while True:
         header()
 
