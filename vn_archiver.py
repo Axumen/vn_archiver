@@ -701,7 +701,7 @@ def move_uploaded_archive(filepath, metadata):
 
 def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VERSION):
     from colorama import Fore, Style
-    import zipfile
+    import shutil
 
     if archive_paths is None:
         archive_paths = []
@@ -802,70 +802,54 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         print(Fore.RED + "Failed to insert visual novel into database.")
         return
 
-        # -------------------------------------------------------------------
-        # 5 & 6. Repackage ZIP & Update Dynamic Parent Folder
-        # -------------------------------------------------------------------
+    # -------------------------------------------------------------------
+    # 5 & 6. Create Sidecar Directory Structure
+    # -------------------------------------------------------------------
 
-        # Grab the exact strings the user typed
     proper_title = str(metadata.get("title", "Unknown Title"))
     proper_version = str(metadata.get("version", "Unknown Version"))
 
-    # Safely remove invalid Windows/Linux file characters but KEEP spaces and casing
     safe_title = re.sub(r'[\\/*?:"<>|]', "", proper_title).strip()
     safe_version = re.sub(r'[\\/*?:"<>|]', "", proper_version).strip()
 
     if archives_data:
-        # 1. Package the master zip file
-        bundle_filename = f"{safe_title} {safe_version}.zip"
-        bundle_path = os.path.join(PROCESSED_DIR, bundle_filename)
-
-        print(Fore.CYAN + f"\nPackaging files into {bundle_filename}...")
-
-        with zipfile.ZipFile(bundle_path, 'w', zipfile.ZIP_DEFLATED) as bundle_zip:
-            yaml_str = yaml.dump(metadata, sort_keys=False, allow_unicode=True)
-            bundle_zip.writestr("metadata.yaml", yaml_str)
-
-            for arch in archives_data:
-                bundle_zip.write(arch["original_path"], arch["filename"])
-                os.remove(arch["original_path"])
-
-        print(Fore.GREEN + f"Bundle successfully created at: {bundle_path}")
-
-        # 2. Bulletproof Parent Folder Renaming Logic
+        # Bulletproof Parent Folder Renaming Logic
         new_parent_name = f"{safe_title} {safe_version}"
         new_parent_path = os.path.join(UPLOADED_DIR, new_parent_name)
 
         if os.path.exists(UPLOADED_DIR):
             for existing_folder in os.listdir(UPLOADED_DIR):
                 old_parent_path = os.path.join(UPLOADED_DIR, existing_folder)
-
-                # Check if it's a directory and starts with "Title " (with a space)
                 if os.path.isdir(old_parent_path) and existing_folder.startswith(safe_title + " "):
-
-                    # Deduce what the old version string was based on the folder name
                     possible_old_version = existing_folder[len(safe_title) + 1:].strip()
-
-                    # Verify it's actually the matching game by checking if that version subfolder exists inside it
                     if os.path.isdir(os.path.join(old_parent_path, possible_old_version)):
                         if existing_folder != new_parent_name:
-                            print(
-                                Fore.YELLOW + f"Updating parent folder: '{existing_folder}' -> '{new_parent_name}'")
+                            print(Fore.YELLOW + f"Updating parent folder: '{existing_folder}' -> '{new_parent_name}'")
                             os.rename(old_parent_path, new_parent_path)
                         break
 
-        # 3. Create the final subfolder and move the zip
+        # Create the final subfolder
         uploaded_dest_dir = os.path.join(new_parent_path, safe_version)
         os.makedirs(uploaded_dest_dir, exist_ok=True)
 
-        uploaded_dest_path = os.path.join(uploaded_dest_dir, bundle_filename)
-        shutil.copy2(bundle_path, uploaded_dest_path)
+        print(Fore.CYAN + f"\nMoving files to sidecar directory: {uploaded_dest_dir}...")
 
-        print(Fore.GREEN + f"Bundle copied to: {uploaded_dest_path}")
+        # Write metadata.yaml loosely in the folder
+        meta_path = os.path.join(uploaded_dest_dir, "metadata.yaml")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
+
+        # Move the original archives into the folder
+        for arch in archives_data:
+            dest_file = os.path.join(uploaded_dest_dir, arch["filename"])
+            shutil.move(arch["original_path"], dest_file)
+            print(Fore.GREEN + f"Moved: {arch['filename']}")
+
+        print(Fore.GREEN + f"\nSidecar bundle successfully created at: {uploaded_dest_dir}")
         print(Fore.GREEN + "Archive processing complete!")
 
     else:
         # Option 1 Fallback (No physical files selected)
-        # Safely names it strictly metadata.yaml inside the processed folder
         meta_filename = "metadata.yaml"
         meta_path = os.path.join(PROCESSED_DIR, meta_filename)
 
@@ -979,38 +963,34 @@ def get_b2_bucket():
         return None, None
 
 
-def upload_archive(file_path):
+def upload_archive(folder_path):
     from colorama import Fore
-    import zipfile
     import yaml
     import os
     from b2sdk.v2 import InMemoryAccountInfo, B2Api
     from tqdm import tqdm
 
-    if not os.path.exists(file_path):
-        print(Fore.RED + f"File not found: {file_path}")
+    if not os.path.isdir(folder_path):
+        print(Fore.RED + f"Directory not found: {folder_path}")
         return False
 
-    print(Fore.CYAN + f"\nAnalyzing {os.path.basename(file_path)}...")
+    print(Fore.CYAN + f"\nAnalyzing release directory {os.path.basename(folder_path)}...")
 
     # -------------------------------------------------------------------
-    # 1. Read metadata.yaml from inside the master bundle
+    # 1. Read loose metadata.yaml from the directory
     # -------------------------------------------------------------------
+    meta_path = os.path.join(folder_path, "metadata.yaml")
+    if not os.path.exists(meta_path):
+        print(Fore.RED + f"Upload Blocked: No 'metadata.yaml' found in {folder_path}.")
+        return False
+
     try:
-        with zipfile.ZipFile(file_path, 'r') as z:
-            if 'metadata.yaml' not in z.namelist():
-                print(Fore.RED + "Upload Blocked: No 'metadata.yaml' found inside the zip.")
-                print(Fore.YELLOW + "This does not appear to be a valid processed bundle.")
-                return False
-
-            with z.open('metadata.yaml') as f:
-                yaml_content = f.read().decode('utf-8')
-                metadata = yaml.safe_load(yaml_content)
-    except zipfile.BadZipFile:
-        print(Fore.RED + "Upload Blocked: File is not a valid zip archive.")
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            metadata = yaml.safe_load(f)
+    except Exception as e:
+        print(Fore.RED + f"Upload Blocked: Could not read metadata.yaml: {e}")
         return False
 
-    # Strictly convert to string to prevent YAML from reading "1.0" as a float
     title = str(metadata.get("title", ""))
     version = str(metadata.get("version", ""))
 
@@ -1024,49 +1004,40 @@ def upload_archive(file_path):
     vn_id = None
     build_id = None
     with get_connection() as conn:
-        # Check if the VN exists
         vn_row = conn.execute("SELECT id FROM visual_novels WHERE title = ?", (title,)).fetchone()
         if not vn_row:
             print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' does not exist in the database.")
-            print(Fore.YELLOW + "Please run '(3) Process Archive' to register it before uploading.")
             return False
-
         vn_id = vn_row[0]
 
-        # Check if this specific version build exists
         build_row = conn.execute("SELECT id FROM builds WHERE vn_id = ? AND version = ?", (vn_id, version)).fetchone()
         if not build_row:
             print(Fore.RED + f"Upload Blocked: Version '{version}' for '{title}' does not exist in the database.")
-            print(Fore.YELLOW + "Please run '(3) Process Archive' to register this build before uploading.")
             return False
-
         build_id = build_row[0]
 
-    # -------------------------------------------------------------------
-    # 3. Formulate the Strict Cloud Naming Scheme
-    # -------------------------------------------------------------------
-    title_slug = slugify_component(title, "unknown")
-    version_slug = slugify_component(version, "unknown")
+    # Find the target archives inside the folder
+    archives_to_upload = []
+    if metadata.get("archives"):
+        for arch in metadata["archives"]:
+            arch_path = os.path.join(folder_path, arch["filename"])
+            if os.path.exists(arch_path):
+                archives_to_upload.append((arch_path, arch["sha256"]))
+    else:
+        for f in os.listdir(folder_path):
+            if f.endswith(".zip"):
+                path = os.path.join(folder_path, f)
+                archives_to_upload.append((path, sha256_file(path)))
 
-    print(Fore.CYAN + "Calculating outer bundle SHA-256 for cloud verification...")
-    bundle_sha256 = sha256_file(file_path)
-    short_hash = bundle_sha256[:8]
-
-    ext = os.path.splitext(file_path)[1].lower()
-
-    # Cloud Object Key: archives / [title-slug] / vn-[id] / [version-slug] / [title-slug]_[version-slug]_[hash].zip
-    cloud_filename = f"{title_slug}_{version_slug}_{short_hash}{ext}"
-    cloud_path = f"archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{cloud_filename}"
-
-    print(Fore.GREEN + f"Database verification passed (VN ID: {vn_id})")
-    print(Fore.CYAN + f"Target Cloud Path: {cloud_path}")
+    if not archives_to_upload:
+        print(Fore.RED + "Upload Blocked: No archive files found in the directory.")
+        return False
 
     # -------------------------------------------------------------------
-    # 4. Backblaze B2 Authentication via Config
+    # 3. Backblaze B2 Authentication via Config
     # -------------------------------------------------------------------
     try:
         key_id, app_key, bucket_name, dry_run = load_b2_config()
-
         info = InMemoryAccountInfo()
         api = B2Api(info)
         api.authorize_account("production", key_id, app_key)
@@ -1076,49 +1047,69 @@ def upload_archive(file_path):
         return False
 
     # -------------------------------------------------------------------
-    # 5. Actual Upload with Progress Bar
+    # 4. Upload Raw Game Archive(s)
     # -------------------------------------------------------------------
-    if dry_run:
-        print(Fore.YELLOW + f"[DRY RUN] Would upload to: {cloud_path}")
-        return True
+    title_slug = slugify_component(title, "unknown")
+    version_slug = slugify_component(version, "unknown")
 
-    print(Fore.YELLOW + f"Uploading to Backblaze B2. This may take a while...")
-    file_size = os.path.getsize(file_path)
+    for file_path, file_sha in archives_to_upload:
+        filename = os.path.basename(file_path)
+        short_hash = file_sha[:8] if file_sha else "unknown"
+        ext = os.path.splitext(filename)[1].lower()
 
-    with tqdm(total=file_size, unit='B', unit_scale=True, desc="Progress", colour="green") as pbar:
-        # b2sdk expects exactly these three methods
-        class TqdmProgressListener:
-            def set_total_bytes(self, total_bytes):
-                pass
+        # We no longer strictly enforce the "slug_slug_hash" name for the raw file, keeping original filename clarity
+        cloud_filename = f"{filename.replace(ext, '')}_{short_hash}{ext}"
+        cloud_path = f"archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{cloud_filename}"
 
-            def bytes_completed(self, byte_count):
-                # Update progress by calculating the delta
-                pbar.update(byte_count - pbar.n)
+        if dry_run:
+            print(Fore.YELLOW + f"[DRY RUN] Would upload {filename} to: {cloud_path}")
+            continue
 
-            def close(self):
-                pass
+        print(Fore.YELLOW + f"\nUploading {filename} to Backblaze B2...")
+        file_size = os.path.getsize(file_path)
 
-        try:
-            bucket.upload_local_file(
-                local_file=str(file_path),
-                file_name=cloud_path,
-                progress_listener=TqdmProgressListener()
-            )
-        except Exception as e:
-            print(Fore.RED + f"\nUpload failed: {e}")
-            return False
+        with tqdm(total=file_size, unit='B', unit_scale=True, desc="Progress", colour="green") as pbar:
+            class TqdmProgressListener:
+                def set_total_bytes(self, total_bytes): pass
 
-    print(Fore.GREEN + "\nUpload Complete!")
+                def bytes_completed(self, byte_count): pbar.update(byte_count - pbar.n)
 
-    # Safely attempt to update status (ignores error if your table doesn't have a status column)
+                def close(self): pass
+
+            try:
+                bucket.upload_local_file(
+                    local_file=str(file_path),
+                    file_name=cloud_path,
+                    progress_listener=TqdmProgressListener()
+                )
+            except Exception as e:
+                print(Fore.RED + f"\nUpload failed for {filename}: {e}")
+                return False
+
+        # Database Deduplication / Object tracking
+        with get_connection() as conn:
+            try:
+                conn.execute('''
+                    INSERT OR IGNORE INTO archive_objects (sha256, file_size, storage_path)
+                    VALUES (?, ?, ?)
+                ''', (file_sha, file_size, cloud_path))
+            except Exception as e:
+                print(Fore.RED + f"Notice: Non-fatal database update error: {e}")
+
+    # -------------------------------------------------------------------
+    # 5. Push the Metadata Sidecar
+    # -------------------------------------------------------------------
+    if not dry_run:
+        print(Fore.CYAN + f"\nPushing metadata sidecar to separate namespace...")
+        upload_metadata_sidecar(metadata, vn_id)
+
     with get_connection() as conn:
-        try:
-            conn.execute("UPDATE builds SET status = ? WHERE id = ?", ("uploaded", build_id))
-            conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
-        except Exception:
-            pass
+        conn.execute("UPDATE builds SET status = ? WHERE id = ?", ("uploaded", build_id))
+        conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
 
+    print(Fore.GREEN + "\nComplete Sidecar Upload Finished!")
     return True
+
 def slugify_component(value, fallback):
     """
     Slugify using:
@@ -1189,7 +1180,7 @@ def upload_metadata_sidecar(metadata, vn_id):
     remote_folder = (
         f"metadata/"
         f"{title_slug}/"
-        f"vn_{vn_id}/"
+        f"vn_{vn_id:05d}/"
         f"build_{build_slug}/"
         f"v{metadata_version}"
     )

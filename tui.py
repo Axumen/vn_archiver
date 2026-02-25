@@ -458,31 +458,29 @@ def upload_archives():
         print(Fore.RED + "Uploaded directory does not exist.")
         return
 
-    # Find all master .zip bundles recursively in the uploaded directory
-    bundle_files = []
+    # Find all directories that contain a metadata.yaml
+    release_folders = []
     for root, dirs, files in os.walk(UPLOADED_DIR):
-        for file in files:
-            if file.endswith(".zip"):
-                bundle_files.append(os.path.join(root, file))
+        if "metadata.yaml" in files:
+            release_folders.append(root)
 
-    if not bundle_files:
-        print(Fore.RED + "No master .zip bundles found in the uploaded directory.")
+    if not release_folders:
+        print(Fore.RED + "No processed release folders found in the uploaded directory.")
         return
 
-    # Display the list cleanly
-    for i, path in enumerate(bundle_files, 1):
+    for i, path in enumerate(release_folders, 1):
         rel_path = os.path.relpath(path, UPLOADED_DIR)
         print(f"[{i}] {rel_path}")
 
-    choice = input(Fore.YELLOW + "\nSelect the bundle number to upload, or 0 to cancel: ").strip()
+    choice = input(Fore.YELLOW + "\nSelect the release folder number to upload, or 0 to cancel: ").strip()
     if choice == "0" or not choice:
         return
 
     try:
         idx = int(choice) - 1
-        if 0 <= idx < len(bundle_files):
-            selected_file = bundle_files[idx]
-            upload_archive(selected_file)
+        if 0 <= idx < len(release_folders):
+            selected_folder = release_folders[idx]
+            upload_archive(selected_folder)
         else:
             print(Fore.RED + "Invalid selection.")
     except ValueError:
