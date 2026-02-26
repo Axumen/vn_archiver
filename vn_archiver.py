@@ -213,14 +213,14 @@ def select_base_archive_from_db(current_series=None, current_title=None):
     from colorama import Fore
 
     with get_connection() as conn:
-        # Base query to fetch standard standalone games
+        # Removed the restrictive WHERE clause.
+        # Now demos, append discs, and even other patches can act as a base!
         base_query = '''
             SELECT a.sha256, v.title, b.version, b.build_type, s.name as series_name
             FROM archives a
             JOIN builds b ON a.build_id = b.id
             JOIN visual_novels v ON b.vn_id = v.id
             LEFT JOIN series s ON v.series_id = s.id
-            WHERE b.build_type IN ('full', 'release-candidate')
         '''
 
         rows = []
@@ -246,7 +246,8 @@ def select_base_archive_from_db(current_series=None, current_title=None):
                     conditions.append("v.title LIKE ?")
                     params.append(f"%{current_title}%")
 
-                query = base_query + " AND (" + " OR ".join(conditions) + ") ORDER BY v.title, b.version"
+                # Changed from AND to WHERE since the base_query no longer has a WHERE clause
+                query = base_query + " WHERE (" + " OR ".join(conditions) + ") ORDER BY v.title, b.version"
                 rows = conn.execute(query, params).fetchall()
 
                 if not rows:
@@ -300,7 +301,6 @@ def prompt_field(field_name, current_value):
     value = input(f"{field_name} [{current_value}]: ").strip()
     return value if value else current_value
 
-
 def prompt_tags():
     print("\nSuggested Tags:")
     print(", ".join(SUGGESTED_TAGS))
@@ -308,38 +308,6 @@ def prompt_tags():
     if not user_input:
         return []
     return [t.strip() for t in user_input.split(",")]
-
-
-def select_base_archive_from_db():
-    from db_manager import get_connection
-    with get_connection() as conn:
-        # Fetch existing archives that are likely "base" games (e.g., full builds)
-        rows = conn.execute('''
-            SELECT a.sha256, v.title, b.version, b.build_type
-            FROM archives a
-            JOIN builds b ON a.build_id = b.id
-            JOIN visual_novels v ON b.vn_id = v.id
-            WHERE b.build_type IN ('full', 'release-candidate')
-            ORDER BY v.title, b.version
-        ''').fetchall()
-
-    if not rows:
-        return None
-
-    print("\nAvailable Base Archives in Database:")
-    for i, row in enumerate(rows, 1):
-        print(f"{i}) {row['title']} (v{row['version']}) [{row['build_type']}] - {row['sha256'][:8]}...")
-
-    choice = input("\nSelect the base archive number (or press Enter to skip/paste manually): ").strip()
-    try:
-        if choice:
-            idx = int(choice) - 1
-            if 0 <= idx < len(rows):
-                return rows[idx]['sha256']
-    except ValueError:
-        pass
-
-    return None
 
 def create_metadata(zip_path):
     template = load_metadata_template()
@@ -572,6 +540,7 @@ def insert_visual_novel(metadata):
 
                     # 2. Check for multi-archive list (from the YAML template)
                     multi_archives = metadata.get("archives", [])
+
                     if isinstance(multi_archives, list):
                         for arch in multi_archives:
                             # Make sure the array item is actually a dictionary and has a SHA
@@ -582,6 +551,8 @@ def insert_visual_novel(metadata):
                                 })
 
                     # 3. Insert all gathered archives safely
+                    print(f"\nDEBUG: Found {len(archives_to_process)} archives to insert. Data: {archives_to_process}")
+
                     for arch_data in archives_to_process:
                         sha256 = arch_data["sha256"]
                         file_size = arch_data["file_size_bytes"]
@@ -831,8 +802,6 @@ def move_uploaded_archive(file_path):
 # ==============================
 
 def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VERSION):
-    from colorama import Fore, Style
-    import shutil
 
     if archive_paths is None:
         archive_paths = []
