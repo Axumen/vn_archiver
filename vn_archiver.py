@@ -14,7 +14,7 @@ from colorama import Fore
 from datetime import datetime
 from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
-from db_manager import get_connection, exclusive_transaction
+from db_manager import get_connection
 
 # ==============================
 # CONFIGURATION
@@ -377,7 +377,6 @@ def sha_exists(build_id, sha256):
             (build_id, sha256)
         ).fetchone()
         return row is not None
-
 
 def get_metadata_value(metadata, key, fallback=None):
     value = metadata.get(key)
@@ -883,15 +882,22 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         # ==========================================
         elif field == "base_archive_sha256":
             print(
-                Fore.CYAN + "\n[Dependency] Use this for ANY dependent archive (e.g., patch, fan-disc, append-disc, mod, engine-port).")
+                Fore.CYAN + "\n[Dependency] This links dependent archives (e.g., patches, fan-discs, mods, engine-ports) to their base game.")
 
-            # Fetch the context the user just typed earlier in the loop
-            current_series = metadata.get("series")
-            current_title = metadata.get("title")
+            # 1. Ask the user if a dependency exists
+            has_dep = input(Fore.YELLOW + "Does this archive depend on a base game/archive? [y/N]: ").strip().lower()
 
-            selected_sha = select_base_archive_from_db(current_series, current_title)
-            if selected_sha:
-                metadata[field] = selected_sha
+            if has_dep in ('y', 'yes'):
+                # 2. If yes, proceed to the database lookup function
+                current_series = metadata.get("series")
+                current_title = metadata.get("title")
+
+                selected_sha = select_base_archive_from_db(current_series, current_title)
+                if selected_sha:
+                    metadata[field] = selected_sha
+            else:
+                # 3. If no, skip and proceed with insertion
+                print(Fore.MAGENTA + "Skipping dependency linking. Treating as a standalone archive.")
         # ==========================================
 
         else:
