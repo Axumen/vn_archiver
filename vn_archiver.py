@@ -658,6 +658,13 @@ def insert_visual_novel(metadata):
                 # ==========================================================
                 return vn_id
 
+        # ==========================================================
+        # RETURN VALUE (For new inserts and metadata-only operations)
+        # ==========================================================
+        # If we reached this point, the VN/build metadata was inserted or
+        # updated successfully even when no archive row existed yet.
+        return vn_id
+
 
 # ==============================
 # BACKBLAZE
