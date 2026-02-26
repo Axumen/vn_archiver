@@ -22,7 +22,7 @@ from vn_archiver import (
     detect_latest_metadata_template_version,
     insert_visual_novel,
     get_current_metadata_version_number,
-    build_recommended_metadata_name
+    stage_metadata_yaml_for_upload
 )
 
 init(autoreset=True)
@@ -426,20 +426,7 @@ def edit_metadata_only():
         print(Fore.CYAN + f"\nUpdated Metadata Copy (v{metadata_version_number}):")
         print(Fore.WHITE + yaml.dump(updated_metadata, sort_keys=False, allow_unicode=True))
 
-        meta_sha = updated_metadata.get('sha256')
-        if not meta_sha and isinstance(updated_metadata.get('archives'), list) and updated_metadata['archives']:
-            first_arch = updated_metadata['archives'][0]
-            if isinstance(first_arch, dict):
-                meta_sha = first_arch.get('sha256')
-
-        staged_name = build_recommended_metadata_name(updated_metadata, meta_sha, metadata_version_number)
-        title = str(updated_metadata.get('title') or 'Unknown Title').strip() or 'Unknown Title'
-        upload_dir = Path(UPLOADING_DIR) / f"{title} Latest Version"
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        staged_path = upload_dir / staged_name
-
-        with open(staged_path, 'w', encoding='utf-8') as handle:
-            yaml.dump(updated_metadata, handle, sort_keys=False, allow_unicode=True)
+        staged_path = stage_metadata_yaml_for_upload(updated_metadata, metadata_version_number)
 
         print(Fore.GREEN + f"Staged metadata copy for upload: {staged_path}")
 

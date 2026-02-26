@@ -1145,11 +1145,15 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
 
         print(Fore.CYAN + f"\nMoving files to upload queue directory: {uploaded_dest_dir}...")
 
-        bundle_sha = metadata.get("sha256") or (archives_data[0].get("sha256") if archives_data else "")
-        meta_filename = build_recommended_metadata_name(metadata, bundle_sha, metadata_version_number)
-        meta_path = os.path.join(uploaded_dest_dir, meta_filename)
-        with open(meta_path, "w", encoding="utf-8") as f:
-            yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
+        staged_meta_path = stage_metadata_yaml_for_upload(
+            metadata,
+            metadata_version_number,
+            target_dir=uploaded_dest_dir
+        )
+        print(Fore.GREEN + f"Staged metadata for upload: {staged_meta_path}")
+
+        latest_meta_path = stage_metadata_yaml_for_upload(metadata, metadata_version_number)
+        print(Fore.GREEN + f"Staged metadata in latest upload folder: {latest_meta_path}")
 
         # Move archives into uploading queue, then copy+unzip into
         # vn archive/<title> <latest-version>/<version>/
@@ -1184,14 +1188,9 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
 
     else:
         # Option 1 Fallback (No physical files selected)
-        bundle_sha = metadata.get("sha256") or get_nested_value(metadata, "archive.sha256")
-        meta_filename = build_recommended_metadata_name(metadata, bundle_sha, metadata_version_number)
-        meta_path = os.path.join(PROCESSED_DIR, meta_filename)
+        staged_meta_path = stage_metadata_yaml_for_upload(metadata, metadata_version_number)
 
-        with open(meta_path, "w", encoding="utf-8") as f:
-            yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
-
-        print(Fore.GREEN + f"\nMetadata saved to: {meta_path}")
+        print(Fore.GREEN + f"\nMetadata staged for upload: {staged_meta_path}")
         print(Fore.GREEN + "Metadata creation complete!")
 
 
@@ -1279,6 +1278,32 @@ def build_recommended_metadata_name(metadata, sha256, metadata_version_number):
     version_slug = slugify_component(metadata.get('version'), 'unknown')
     short_hash = (sha256 or 'nohash')[:8]
     return f"{title_slug}_{version_slug}_{short_hash}_v{metadata_version_number}_meta.yaml"
+
+
+def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None):
+    """Create a metadata.yaml copy and stage it in uploading/ with recommended naming."""
+    meta_sha = metadata.get('sha256') or get_nested_value(metadata, 'archive.sha256')
+    if not meta_sha and isinstance(metadata.get('archives'), list) and metadata['archives']:
+        first_arch = metadata['archives'][0]
+        if isinstance(first_arch, dict):
+            meta_sha = first_arch.get('sha256')
+
+    final_name = build_recommended_metadata_name(metadata, meta_sha, metadata_version_number)
+
+    if target_dir is None:
+        target_dir = get_uploading_latest_dir(metadata)
+    target_dir = Path(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    temp_meta_path = target_dir / 'metadata.yaml'
+    with open(temp_meta_path, 'w', encoding='utf-8') as handle:
+        yaml.dump(metadata, handle, sort_keys=False, allow_unicode=True)
+
+    final_path = target_dir / final_name
+    if final_path.exists():
+        final_path.unlink()
+    temp_meta_path.rename(final_path)
+    return final_path
 
 
 def normalize_version_for_sort(version_text):

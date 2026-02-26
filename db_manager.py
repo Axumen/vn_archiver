@@ -7,7 +7,7 @@ SCHEMA_PATH = "db_schema.sql"
 
 # Define the current required version of your database schema
 ## Increment this number only when a schema migration is required for existing DBs.
-TARGET_SCHEMA_VERSION = 1
+TARGET_SCHEMA_VERSION = 2
 
 
 def get_connection():
