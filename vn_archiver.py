@@ -421,7 +421,7 @@ def insert_visual_novel(metadata):
                 build_id = build_cursor.lastrowid
 
             # -------------------------------------------------
-            # 4️⃣ PLATFORM NORMALIZATION
+            # 4. PLATFORM NORMALIZATION
             # -------------------------------------------------
             raw_platforms = metadata.get("target_platform", [])
             if isinstance(raw_platforms, str):
