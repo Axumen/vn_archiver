@@ -401,6 +401,35 @@ def normalize_metadata_list(metadata, field_name):
     return values
 
 
+def get_latest_metadata_for_title(title):
+    """Fetch the current metadata blob for an existing VN title, if present."""
+    if not title:
+        return {}
+
+    with get_connection() as conn:
+        row = conn.execute(
+            '''
+            SELECT mo.metadata_json
+            FROM visual_novels v
+            JOIN metadata_versions mv ON mv.vn_id = v.id AND mv.is_current = 1
+            JOIN metadata_objects mo ON mo.hash = mv.metadata_hash
+            WHERE v.title = ?
+            ORDER BY mv.version_number DESC
+            LIMIT 1
+            ''',
+            (title,)
+        ).fetchone()
+
+    if not row or not row['metadata_json']:
+        return {}
+
+    try:
+        parsed = json.loads(row['metadata_json'])
+        return parsed if isinstance(parsed, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
 def upsert_series(conn, metadata):
     if not metadata.get('series'):
         return None
@@ -965,6 +994,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
     prompt_fields = resolve_prompt_fields(base_template)
 
     metadata = {"metadata_version": metadata_version}
+    defaults = {}
 
     FIELD_SUGGESTIONS = {
         "release_status": ["ongoing", "completed", "hiatus", "cancelled", "abandoned"],
@@ -992,14 +1022,26 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         return sorted(set([v.strip() for v in val.split(",") if v.strip()]))
 
     print(Fore.MAGENTA + "\nFill Metadata (Press ENTER to skip fields)\n")
+    print(Fore.CYAN + "Tip: when a [default] is shown, press ENTER to keep it, or type '-' to clear it.")
 
     for field in prompt_fields:
         if field in ("tags", "target_platform", "aliases"):
             suggestions = FIELD_SUGGESTIONS.get(field) or []
             if suggestions:
                 print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
-            raw_val = input(Fore.YELLOW + f"{field} (comma separated): ").strip()
-            metadata[field] = normalize_list(raw_val)
+            default_val = defaults.get(field)
+            default_display = ", ".join(default_val) if isinstance(default_val, list) else ""
+            prompt = f"{field} (comma separated)"
+            if default_display:
+                prompt += f" [{default_display}]"
+            raw_val = input(Fore.YELLOW + f"{prompt}: ").strip()
+
+            if raw_val == "-":
+                metadata[field] = []
+            elif raw_val:
+                metadata[field] = normalize_list(raw_val)
+            elif isinstance(default_val, list):
+                metadata[field] = default_val
 
         # ==========================================
         # ADD THIS NEW ELIF BLOCK FOR THE SHA256
@@ -1028,9 +1070,24 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
             suggestions = FIELD_SUGGESTIONS.get(field) or []
             if suggestions:
                 print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
-            raw_val = input(Fore.YELLOW + f"{field}: ").strip()
-            if raw_val:
+            default_val = defaults.get(field)
+            prompt = f"{field}"
+            if default_val not in (None, ""):
+                prompt += f" [{default_val}]"
+            raw_val = input(Fore.YELLOW + f"{prompt}: ").strip()
+
+            if raw_val == "-":
+                metadata[field] = ""
+            elif raw_val:
                 metadata[field] = raw_val
+                if field == "title":
+                    defaults = get_latest_metadata_for_title(raw_val)
+                    if defaults:
+                        print(Fore.GREEN + f"Loaded defaults from latest metadata for '{raw_val}'.")
+                        defaults.pop('archives', None)
+                        defaults.pop('metadata_version', None)
+            elif default_val not in (None, ""):
+                metadata[field] = default_val
 
     # -------------------------------------------------------------------
     # 3. Inject the multi-archive data
