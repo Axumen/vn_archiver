@@ -17,6 +17,7 @@ optional:
   # SERIES TABLE
   # -------------------------------------
   - series
+  - series_description
 
   # -------------------------------------
   # VISUAL_NOVELS TABLE
@@ -26,7 +27,8 @@ optional:
   - publisher           # Added: Publisher (often different from developer in VNs)
   - release_status
   - content_rating
-  - description
+  - description         # VN-level description
+  - source              # VN/build source (URL/store/origin)
   - tags
 
   # -------------------------------------
@@ -52,8 +54,8 @@ optional:
   # -------------------------------------
   # MISC
   # -------------------------------------
-  - source
   - notes
+  - change_note         # Optional metadata revision note
   - base_archive_sha256 # Added: Useful for patches/append discs to link to the base game
 
 
