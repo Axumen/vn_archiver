@@ -662,7 +662,6 @@ def insert_visual_novel(metadata):
 # ==============================
 # BACKBLAZE
 # ==============================
-
 def get_b2_api():
     key_id, application_key, _, _ = load_b2_config()
 
