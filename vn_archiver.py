@@ -556,45 +556,62 @@ def collect_archives_for_db(metadata):
                     'file_size': archive.get('file_size_bytes', 0)
                 })
 
+    if not top_level_sha and archives_to_process:
+        top_level_sha = archives_to_process[0].get('sha256')
+
     return archives_to_process, top_level_sha
 
 
-def finalize_metadata_objects(conn, metadata, top_level_sha, vn_id):
+def finalize_metadata_objects(conn, metadata, vn_id):
     try:
-        db_version_number = int(metadata.get('metadata_version') or 1)
+        schema_version = int(metadata.get('metadata_version') or 1)
     except (ValueError, TypeError):
-        db_version_number = 1
+        schema_version = 1
 
-    try:
-        file_size_val = int(metadata.get('file_size_bytes') or 0)
-    except (ValueError, TypeError):
-        file_size_val = 0
+    safe_metadata_json = json.dumps(
+        metadata,
+        default=safe_json_serialize,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":")
+    )
+    metadata_hash = hashlib.sha256(safe_metadata_json.encode("utf-8")).hexdigest()
 
-    if top_level_sha:
-        safe_metadata_json = json.dumps(metadata, default=safe_json_serialize)
+    conn.execute('''
+        INSERT OR IGNORE INTO metadata_objects (hash, schema_version, metadata_json)
+        VALUES (?, ?, ?)
+    ''', (metadata_hash, schema_version, safe_metadata_json))
 
-        conn.execute('''
-            INSERT OR IGNORE INTO metadata_objects (hash, storage_path, file_size, raw_json)
-            VALUES (?, ?, ?, ?)
-        ''', (top_level_sha, 'local_only', file_size_val, safe_metadata_json))
+    current_row = conn.execute(
+        'SELECT id, metadata_hash FROM metadata_versions WHERE vn_id = ? AND is_current = 1',
+        (vn_id,)
+    ).fetchone()
 
-        conn.execute('''
-            INSERT OR IGNORE INTO metadata_versions (vn_id, metadata_hash, version_number)
-            VALUES (?, ?, ?)
-        ''', (vn_id, top_level_sha, db_version_number))
+    if current_row and current_row['metadata_hash'] == metadata_hash:
+        print(Fore.MAGENTA + f'[DEBUG] Metadata version unchanged for VN {vn_id}; current pointer retained.')
+        return
 
-        conn.execute('''
-            UPDATE metadata_versions
-            SET metadata_hash = ?
-            WHERE vn_id = ? AND version_number = ?
-        ''', (top_level_sha, vn_id, db_version_number))
+    parent_version_id = current_row['id'] if current_row else None
+    next_version_number = conn.execute(
+        'SELECT COALESCE(MAX(version_number), 0) + 1 FROM metadata_versions WHERE vn_id = ?',
+        (vn_id,)
+    ).fetchone()[0]
 
-        print(Fore.GREEN + f'[DEBUG] Successfully finalized metadata_objects for {top_level_sha[:8]}.')
-    else:
-        print(Fore.YELLOW + '[DEBUG] No top_level_sha present; skipping metadata_objects update.')
+    conn.execute(
+        'UPDATE metadata_versions SET is_current = 0 WHERE vn_id = ? AND is_current = 1',
+        (vn_id,)
+    )
+
+    conn.execute('''
+        INSERT INTO metadata_versions (
+            vn_id, metadata_hash, parent_version_id, version_number, is_current
+        ) VALUES (?, ?, ?, ?, 1)
+    ''', (vn_id, metadata_hash, parent_version_id, next_version_number))
+
+    print(Fore.GREEN + f'[DEBUG] Metadata version v{next_version_number} recorded for VN {vn_id}.')
 
 
-def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_process, top_level_sha):
+def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_process):
     print(Fore.CYAN + f'\n[DEBUG] Found {len(archives_to_process)} archive(s) to process for DB.')
 
     for arch_data in archives_to_process:
@@ -632,20 +649,20 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
 
         print(Fore.MAGENTA + f'[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.')
 
-        try:
-            finalize_metadata_objects(conn, metadata, top_level_sha, vn_id)
-        except Exception as e:
-            print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
-            raise e
+    try:
+        finalize_metadata_objects(conn, metadata, vn_id)
+    except Exception as e:
+        print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
+        raise e
 
-        try:
-            conn.commit()
-            print(Fore.GREEN + '[DEBUG] Database transaction committed successfully!')
-        except Exception as e:
-            print(Fore.RED + f'[CRITICAL] SQLite Commit Failed: {e}')
-            raise e
+    try:
+        conn.commit()
+        print(Fore.GREEN + '[DEBUG] Database transaction committed successfully!')
+    except Exception as e:
+        print(Fore.RED + f'[CRITICAL] SQLite Commit Failed: {e}')
+        raise e
 
-        return vn_id
+    return vn_id
 
     return None
 
@@ -667,15 +684,14 @@ def insert_visual_novel(metadata):
         build_id = upsert_build_record(conn, vn_id, metadata)
         sync_build_target_platforms(conn, build_id, metadata)
 
-        archives_to_process, top_level_sha = collect_archives_for_db(metadata)
+        archives_to_process, _ = collect_archives_for_db(metadata)
 
         early_return_vn_id = process_archives_for_build(
             conn,
             build_id,
             metadata,
             vn_id,
-            archives_to_process,
-            top_level_sha
+            archives_to_process
         )
         if early_return_vn_id:
             return early_return_vn_id
