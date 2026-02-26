@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS builds (
     source TEXT,
     
     base_archive_sha256 TEXT, -- References the base game for patches/append discs
+    archive_object_sha256 TEXT, -- Uploaded bundle object (CAS pointer)
 
     status TEXT DEFAULT 'local', -- Updated default to 'local' for consistency
 
@@ -90,7 +91,8 @@ CREATE TABLE IF NOT EXISTS builds (
 
     UNIQUE(vn_id, version),
 
-    FOREIGN KEY (vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE
+    FOREIGN KEY (vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE,
+    FOREIGN KEY (archive_object_sha256) REFERENCES archive_objects(sha256) ON DELETE SET NULL
 );
 
 -- =====================================================
@@ -143,6 +145,10 @@ ON archives(build_id);
 
 CREATE INDEX IF NOT EXISTS idx_archives_sha256
 ON archives(sha256);
+
+CREATE INDEX IF NOT EXISTS idx_builds_archive_object_sha256
+ON builds(archive_object_sha256);
+
 
 -- =====================================================
 -- 7. TAGS (Work-Level)
