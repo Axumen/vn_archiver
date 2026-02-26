@@ -5,9 +5,8 @@ import contextlib
 DB_PATH = "archive.db"
 SCHEMA_PATH = "db_schema.sql"
 
-# Define the current required version of your database schema
-## Increment this number only when a schema migration is required for existing DBs.
-TARGET_SCHEMA_VERSION = 2
+# Database is treated as fresh-initialized from db_schema.sql.
+TARGET_SCHEMA_VERSION = 1
 
 
 def get_connection():
@@ -47,14 +46,9 @@ def initialize_database():
             conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
         print("Database initialized successfully.")
     else:
-        # The DB exists. Let's check if it needs an upgrade!
+        # Existing DBs are expected to already match the checked-in schema.
         with get_connection() as conn:
-            current_version = conn.execute("PRAGMA user_version;").fetchone()[0]
-
-            if current_version < TARGET_SCHEMA_VERSION:
-                print(f"Upgrading database from v{current_version} to v{TARGET_SCHEMA_VERSION}...")
-                run_migrations(conn, current_version)
-                print("Database upgrade complete!")
+            conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
 
 
 def _column_exists(conn, table_name, column_name):
@@ -64,22 +58,10 @@ def _column_exists(conn, table_name, column_name):
 
 def run_migrations(conn, current_version):
     """
-    Applies incremental updates to the database schema.
+    No-op: migrations are intentionally disabled in the current fresh-schema workflow.
     """
     with exclusive_transaction(conn):
-        if current_version < 2:
-            # Link builds to uploaded CAS objects for traceable deduplication.
-            if not _column_exists(conn, "builds", "archive_object_sha256"):
-                conn.execute("ALTER TABLE builds ADD COLUMN archive_object_sha256 TEXT;")
-
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_archives_sha256 ON archives(sha256);")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_canon_parent ON canon_relationships(parent_vn_id);")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_canon_child ON canon_relationships(child_vn_id);")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_builds_archive_object_sha256 ON builds(archive_object_sha256);")
-
-            current_version = 2
-
-        # Finally, stamp the DB with the newest version
+        # Stamp DB at the single supported schema version.
         conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
 
 
