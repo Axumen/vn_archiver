@@ -7,7 +7,7 @@ SCHEMA_PATH = "db_schema.sql"
 
 # Define the current required version of your database schema
 # Increment this number by 1 every time you make a change to db_schema.sql!
-TARGET_SCHEMA_VERSION = 1
+TARGET_SCHEMA_VERSION = 2
 
 
 def get_connection():
@@ -57,20 +57,28 @@ def initialize_database():
                 print("Database upgrade complete!")
 
 
+def _column_exists(conn, table_name, column_name):
+    cols = conn.execute(f"PRAGMA table_info({table_name});").fetchall()
+    return any(col[1] == column_name for col in cols)
+
+
 def run_migrations(conn, current_version):
     """
     Applies incremental updates to the database schema.
     """
     with exclusive_transaction(conn):
         if current_version < 2:
-            conn.execute("ALTER TABLE visual_novels ADD COLUMN description TEXT;")
-            conn.execute("ALTER TABLE visual_novels ADD COLUMN source TEXT;")
-            conn.execute("ALTER TABLE builds ADD COLUMN source TEXT;")
+            # Link builds to uploaded CAS objects for traceable deduplication.
+            if not _column_exists(conn, "builds", "archive_object_sha256"):
+                conn.execute("ALTER TABLE builds ADD COLUMN archive_object_sha256 TEXT;")
+
             conn.execute("CREATE INDEX IF NOT EXISTS idx_archives_sha256 ON archives(sha256);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_canon_parent ON canon_relationships(parent_vn_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_canon_child ON canon_relationships(child_vn_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_builds_archive_object_sha256 ON builds(archive_object_sha256);")
+
             current_version = 2
-        
+
         # Finally, stamp the DB with the newest version
         conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
 
@@ -79,12 +87,12 @@ def cleanup_orphaned_metadata(conn):
     """
     Garbage collection: Removes orphaned JSON blobs from metadata_objects
     that are no longer referenced by any metadata_versions.
-    
+
     Returns the number of deleted blobs.
     """
     cursor = conn.cursor()
     cursor.execute('''
-        DELETE FROM metadata_objects 
+        DELETE FROM metadata_objects
         WHERE hash NOT IN (SELECT metadata_hash FROM metadata_versions);
     ''')
     deleted_count = cursor.rowcount
