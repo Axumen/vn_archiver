@@ -1131,9 +1131,10 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         latest_meta_path = stage_metadata_yaml_for_upload(metadata, metadata_version_number)
         print(Fore.GREEN + f"Staged metadata in latest upload folder: {latest_meta_path}")
 
-        # Move archives into uploading queue, then copy originals into vn archive/
-        vn_archive_dir = Path(VN_ARCHIVE_DIR)
-        vn_archive_dir.mkdir(parents=True, exist_ok=True)
+        # Move archives into uploading queue and mirror source assets into versioned vn archive/
+        vn_archive_version_dir = get_vn_archive_version_dir(metadata)
+        metadata_copy_name = Path(staged_meta_path).name
+        shutil.copy2(staged_meta_path, vn_archive_version_dir / metadata_copy_name)
 
         for arch in archives_data:
             original_ext = os.path.splitext(arch["filename"])[1].lower() or ".zip"
@@ -1143,15 +1144,26 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
                 ext=original_ext
             )
 
+            # Copy original zip name to vn archive before we rename for upload queue.
+            original_copy = vn_archive_version_dir / arch["filename"]
+            shutil.copy2(arch["original_path"], original_copy)
+
+            # Move companion extracted folder (same stem as zip) from incoming/ into vn archive.
+            archive_stem = Path(arch["filename"]).stem
+            source_folder = Path(arch["original_path"]).parent / archive_stem
+            target_folder = vn_archive_version_dir / archive_stem
+            if source_folder.is_dir():
+                if target_folder.exists():
+                    shutil.rmtree(target_folder)
+                shutil.move(str(source_folder), str(target_folder))
+
             dest_file = os.path.join(uploaded_dest_dir, recommended_name)
             shutil.move(arch["original_path"], dest_file)
 
-            vn_archive_copy = vn_archive_dir / arch["filename"]
-            shutil.copy2(dest_file, vn_archive_copy)
-            print(Fore.GREEN + f"Moved to uploading + copied to VN archive: {arch['filename']}")
+            print(Fore.GREEN + f"Moved to uploading and mirrored to VN archive: {arch['filename']}")
 
         print(Fore.GREEN + f"\nSidecar bundle successfully created at: {uploaded_dest_dir}")
-        print(Fore.GREEN + f"VN archive updated at: {vn_archive_dir}")
+        print(Fore.GREEN + f"VN archive updated at: {vn_archive_version_dir}")
         print(Fore.GREEN + "Archive processing complete!")
 
     else:
@@ -1163,7 +1175,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
 
 
 def move_original_to_uploaded_local(original_filepath, metadata):
-    """Move original zip to uploading/ and mirror original filename to vn archive/."""
+    """Move original zip to uploading/ and mirror original filename to vn archive/<title latest>/<version>/."""
     if not os.path.exists(original_filepath):
         raise Exception("Original file not found for local move.")
 
@@ -1183,8 +1195,7 @@ def move_original_to_uploaded_local(original_filepath, metadata):
 
     uploading_path = move_file_to_uploaded_dir(original_filepath, target_dir, cleaned_name)
 
-    archive_dir = Path(VN_ARCHIVE_DIR)
-    archive_dir.mkdir(parents=True, exist_ok=True)
+    archive_dir = get_vn_archive_version_dir(metadata)
     archive_zip = archive_dir / Path(original_filepath).name
     shutil.copy2(uploading_path, archive_zip)
 
@@ -1274,6 +1285,77 @@ def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir
 def get_uploading_latest_dir(metadata):
     # Keep upload queue flat (no title/version folder structure required).
     return Path(UPLOADING_DIR)
+
+
+def normalize_version_for_sort(version_text):
+    """Convert versions like '1.10.2' into sortable tuples with text fallback."""
+    text = str(version_text or "").strip()
+    if not text:
+        return (0,)
+
+    cleaned = re.sub(r"[^0-9A-Za-z\.\-_]", "", text)
+    tokens = re.split(r"[\.\-_]+", cleaned)
+    sortable = []
+    for tok in tokens:
+        if tok.isdigit():
+            sortable.append((0, int(tok)))
+        else:
+            sortable.append((1, tok.lower()))
+    return tuple(sortable)
+
+
+def determine_latest_version(versions):
+    valid_versions = [str(v).strip() for v in versions if str(v).strip()]
+    if not valid_versions:
+        return "unknown"
+    return max(valid_versions, key=normalize_version_for_sort)
+
+
+def get_vn_archive_version_dir(metadata):
+    title = format_uploaded_component(metadata.get("title"), "Unknown Title")
+    current_version = format_uploaded_component(metadata.get("version"), "unknown")
+
+    title_root = Path(VN_ARCHIVE_DIR)
+    title_root.mkdir(parents=True, exist_ok=True)
+
+    sibling_versions = [current_version]
+    existing_title_parent = None
+    for entry in title_root.iterdir():
+        if not entry.is_dir():
+            continue
+        prefix = f"{title} "
+        if not entry.name.startswith(prefix):
+            continue
+        existing_title_parent = entry
+        parent_version = entry.name[len(prefix):].strip()
+        if parent_version:
+            sibling_versions.append(parent_version)
+        for child in entry.iterdir():
+            if child.is_dir() and child.name:
+                sibling_versions.append(child.name)
+        break
+
+    latest_version = determine_latest_version(sibling_versions)
+    target_parent = title_root / f"{title} {latest_version}"
+
+    if existing_title_parent and existing_title_parent != target_parent:
+        if target_parent.exists():
+            for child in existing_title_parent.iterdir():
+                destination = target_parent / child.name
+                if destination.exists():
+                    if destination.is_dir():
+                        shutil.rmtree(destination)
+                    else:
+                        destination.unlink(missing_ok=True)
+                shutil.move(str(child), str(destination))
+            existing_title_parent.rmdir()
+        else:
+            existing_title_parent.rename(target_parent)
+
+    target_parent.mkdir(parents=True, exist_ok=True)
+    target_version_dir = target_parent / current_version
+    target_version_dir.mkdir(parents=True, exist_ok=True)
+    return target_version_dir
 
 
 def move_file_to_uploaded_dir(source_filepath, target_dir, destination_name=None):
