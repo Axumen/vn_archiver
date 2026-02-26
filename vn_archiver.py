@@ -1117,30 +1117,8 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
     # 5 & 6. Create Sidecar Directory Structure
     # -------------------------------------------------------------------
 
-    proper_title = str(metadata.get("title", "Unknown Title"))
-    proper_version = str(metadata.get("version", "Unknown Version"))
-
-    safe_title = re.sub(r'[\\/*?:"<>|]', "", proper_title).strip()
-    safe_version = re.sub(r'[\\/*?:"<>|]', "", proper_version).strip()
-
     if archives_data:
-        # Bulletproof Parent Folder Renaming Logic
-        new_parent_name = f"{safe_title} {safe_version}"
-        new_parent_path = os.path.join(UPLOADING_DIR, new_parent_name)
-
-        if os.path.exists(UPLOADING_DIR):
-            for existing_folder in os.listdir(UPLOADING_DIR):
-                old_parent_path = os.path.join(UPLOADING_DIR, existing_folder)
-                if os.path.isdir(old_parent_path) and existing_folder.startswith(safe_title + " "):
-                    possible_old_version = existing_folder[len(safe_title) + 1:].strip()
-                    if os.path.isdir(os.path.join(old_parent_path, possible_old_version)):
-                        if existing_folder != new_parent_name:
-                            print(Fore.YELLOW + f"Updating parent folder: '{existing_folder}' -> '{new_parent_name}'")
-                            os.rename(old_parent_path, new_parent_path)
-                        break
-
-        # Create the final subfolder
-        uploaded_dest_dir = os.path.join(new_parent_path, safe_version)
+        uploaded_dest_dir = os.path.join(UPLOADING_DIR)
         os.makedirs(uploaded_dest_dir, exist_ok=True)
 
         print(Fore.CYAN + f"\nMoving files to upload queue directory: {uploaded_dest_dir}...")
@@ -1227,7 +1205,7 @@ def move_original_to_uploaded_local(original_filepath, metadata):
 
 
 def move_processed_metadata_to_uploaded(metadata_filepath, metadata):
-    """Move processed metadata YAML to uploading/<title>/Latest Version/."""
+    """Move processed metadata YAML to uploading/."""
     if not os.path.exists(metadata_filepath):
         raise Exception("Metadata file not found for post-upload move.")
 
@@ -1331,8 +1309,8 @@ def determine_latest_version(versions):
 
 
 def get_uploading_latest_dir(metadata):
-    title = format_uploaded_component(metadata.get("title"), "Unknown Title")
-    return Path(UPLOADING_DIR) / title / "Latest Version"
+    # Keep upload queue flat (no title/version folder structure required).
+    return Path(UPLOADING_DIR)
 
 
 def get_vn_archive_version_dir(metadata):
@@ -1475,11 +1453,11 @@ def upload_archive(file_path):
         print(Fore.RED + "Upload Blocked: File is not a valid zip archive.")
         return False
 
-    title = str(metadata.get("title", ""))
-    version = str(metadata.get("version", ""))
+    title = str(metadata.get("title", "")).strip()
+    version = str(metadata.get("version", "")).strip()
 
-    if not title or not version:
-        print(Fore.RED + "Upload Blocked: 'metadata.yaml' is missing 'title' or 'version'.")
+    if not title:
+        print(Fore.RED + "Upload Blocked: 'metadata.yaml' is missing 'title'.")
         return False
 
     # -------------------------------------------------------------------
@@ -1496,13 +1474,28 @@ def upload_archive(file_path):
 
         vn_id = vn_row[0]
 
-        build_row = conn.execute("SELECT id FROM builds WHERE vn_id = ? AND version = ?", (vn_id, version)).fetchone()
-        if not build_row:
-            print(Fore.RED + f"Upload Blocked: Version '{version}' for '{title}' does not exist in the database.")
-            print(Fore.YELLOW + "Please run '(1) Create Metadata' to register this build before uploading.")
-            return False
+        if version:
+            build_row = conn.execute(
+                "SELECT id, version FROM builds WHERE vn_id = ? AND version = ?",
+                (vn_id, version)
+            ).fetchone()
+            if not build_row:
+                print(Fore.RED + f"Upload Blocked: Version '{version}' for '{title}' does not exist in the database.")
+                print(Fore.YELLOW + "Please run '(1) Create Metadata' to register this build before uploading.")
+                return False
+        else:
+            build_row = conn.execute(
+                "SELECT id, version FROM builds WHERE vn_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+                (vn_id,)
+            ).fetchone()
+            if not build_row:
+                print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' has no builds in the database.")
+                print(Fore.YELLOW + "Please run '(1) Create Metadata' to register a build before uploading.")
+                return False
+            version = str(build_row["version"]).strip()
+            print(Fore.YELLOW + f"No version supplied in metadata.yaml; using latest DB build version: {version}")
 
-        build_id = build_row[0]
+        build_id = build_row["id"]
 
     # -------------------------------------------------------------------
     # 3. Formulate the Strict Cloud Naming Scheme & Hash
