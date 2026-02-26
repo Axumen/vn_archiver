@@ -402,15 +402,28 @@ def upsert_series(conn, metadata):
         return None
 
     series_name = metadata['series'].strip()
+    series_description = get_metadata_value(metadata, 'series_description')
+    if series_description is None:
+        # Backward-compatible mapping for template field `description`.
+        # We treat it as series-level description when explicit series_description is absent.
+        series_description = get_metadata_value(metadata, 'description')
     series_row = conn.execute(
-        'SELECT id FROM series WHERE name = ?',
+        'SELECT id, description FROM series WHERE name = ?',
         (series_name,)
     ).fetchone()
 
     if series_row:
+        if series_description is not None and series_description != series_row['description']:
+            conn.execute(
+                'UPDATE series SET description = ? WHERE id = ?',
+                (series_description, series_row['id'])
+            )
         return series_row['id']
 
-    conn.execute('INSERT INTO series (name) VALUES (?)', (series_name,))
+    conn.execute(
+        'INSERT INTO series (name, description) VALUES (?, ?)',
+        (series_name, series_description)
+    )
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
 
 
@@ -477,21 +490,36 @@ def sync_vn_tags(conn, vn_id, metadata):
 
 
 def upsert_build_record(conn, vn_id, metadata):
+    build_version = metadata.get('version', '1.0')
     build_exists = conn.execute(
-        'SELECT id FROM builds WHERE vn_id = ? AND version = ?',
-        (vn_id, metadata.get('version', '1.0'))
+        '''
+        SELECT id, build_type, distribution_model, distribution_platform,
+               language, translator, edition, release_date, engine,
+               engine_version, base_archive_sha256
+        FROM builds
+        WHERE vn_id = ? AND version = ?
+        ''',
+        (vn_id, build_version)
     ).fetchone()
 
+    existing = build_exists if build_exists else {}
+
+    def effective(field_name):
+        if field_name in metadata:
+            return metadata.get(field_name)
+        return existing[field_name] if build_exists else None
+
     values = (
-        metadata.get('build_type'),
-        metadata.get('distribution_model'),
-        metadata.get('distribution_platform'),
-        metadata.get('language'),
-        metadata.get('edition'),
-        metadata.get('release_date'),
-        metadata.get('engine'),
-        metadata.get('engine_version'),
-        metadata.get('base_archive_sha256')
+        effective('build_type'),
+        effective('distribution_model'),
+        effective('distribution_platform'),
+        effective('language'),
+        effective('translator'),
+        effective('edition'),
+        effective('release_date'),
+        effective('engine'),
+        effective('engine_version'),
+        effective('base_archive_sha256')
     )
 
     if build_exists:
@@ -499,8 +527,8 @@ def upsert_build_record(conn, vn_id, metadata):
         conn.execute('''
             UPDATE builds SET
                 build_type = ?, distribution_model = ?, distribution_platform = ?,
-                language = ?, edition = ?, release_date = ?, engine = ?, engine_version = ?,
-                base_archive_sha256 = ?
+                language = ?, translator = ?, edition = ?, release_date = ?,
+                engine = ?, engine_version = ?, base_archive_sha256 = ?
             WHERE id = ?
         ''', values + (build_id,))
         return build_id
@@ -508,15 +536,43 @@ def upsert_build_record(conn, vn_id, metadata):
     conn.execute('''
         INSERT INTO builds (
             vn_id, version, build_type, distribution_model,
-            distribution_platform, language, edition, release_date,
-            engine, engine_version, base_archive_sha256
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            distribution_platform, language, translator, edition,
+            release_date, engine, engine_version, base_archive_sha256
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         vn_id,
-        metadata.get('version', '1.0'),
+        build_version,
         *values
     ))
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+
+def sync_canon_relationship(conn, vn_id, metadata):
+    parent_title = (metadata.get('parent_vn_title') or '').strip()
+    relationship_type = (metadata.get('relationship_type') or '').strip()
+
+    # Keep behavior explicit: only write relationship rows when both values are provided.
+    conn.execute('DELETE FROM canon_relationships WHERE child_vn_id = ?', (vn_id,))
+
+    if not parent_title or not relationship_type:
+        return
+
+    parent_row = conn.execute(
+        'SELECT id FROM visual_novels WHERE title = ?',
+        (parent_title,)
+    ).fetchone()
+
+    if not parent_row:
+        print(Fore.YELLOW + f"[DEBUG] Parent VN '{parent_title}' not found; skipping canon_relationship insert.")
+        return
+
+    conn.execute(
+        '''
+        INSERT INTO canon_relationships (parent_vn_id, child_vn_id, relationship_type)
+        VALUES (?, ?, ?)
+        ''',
+        (parent_row['id'], vn_id, relationship_type)
+    )
 
 
 def sync_build_target_platforms(conn, build_id, metadata):
@@ -556,45 +612,68 @@ def collect_archives_for_db(metadata):
                     'file_size': archive.get('file_size_bytes', 0)
                 })
 
+    if not top_level_sha and archives_to_process:
+        top_level_sha = archives_to_process[0].get('sha256')
+
     return archives_to_process, top_level_sha
 
 
-def finalize_metadata_objects(conn, metadata, top_level_sha, vn_id):
+def finalize_metadata_objects(conn, metadata, vn_id):
     try:
-        db_version_number = int(metadata.get('metadata_version') or 1)
+        schema_version = int(metadata.get('metadata_version') or 1)
     except (ValueError, TypeError):
-        db_version_number = 1
+        schema_version = 1
 
-    try:
-        file_size_val = int(metadata.get('file_size_bytes') or 0)
-    except (ValueError, TypeError):
-        file_size_val = 0
+    safe_metadata_json = json.dumps(
+        metadata,
+        default=safe_json_serialize,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":")
+    )
+    metadata_hash = hashlib.sha256(safe_metadata_json.encode("utf-8")).hexdigest()
 
-    if top_level_sha:
-        safe_metadata_json = json.dumps(metadata, default=safe_json_serialize)
+    conn.execute('''
+        INSERT OR IGNORE INTO metadata_objects (hash, schema_version, metadata_json)
+        VALUES (?, ?, ?)
+    ''', (metadata_hash, schema_version, safe_metadata_json))
 
-        conn.execute('''
-            INSERT OR IGNORE INTO metadata_objects (hash, storage_path, file_size, raw_json)
-            VALUES (?, ?, ?, ?)
-        ''', (top_level_sha, 'local_only', file_size_val, safe_metadata_json))
+    current_row = conn.execute(
+        'SELECT id, metadata_hash FROM metadata_versions WHERE vn_id = ? AND is_current = 1',
+        (vn_id,)
+    ).fetchone()
 
-        conn.execute('''
-            INSERT OR IGNORE INTO metadata_versions (vn_id, metadata_hash, version_number)
-            VALUES (?, ?, ?)
-        ''', (vn_id, top_level_sha, db_version_number))
+    if current_row and current_row['metadata_hash'] == metadata_hash:
+        print(Fore.MAGENTA + f'[DEBUG] Metadata version unchanged for VN {vn_id}; current pointer retained.')
+        return
 
-        conn.execute('''
-            UPDATE metadata_versions
-            SET metadata_hash = ?
-            WHERE vn_id = ? AND version_number = ?
-        ''', (top_level_sha, vn_id, db_version_number))
+    parent_version_id = current_row['id'] if current_row else None
+    next_version_number = conn.execute(
+        'SELECT COALESCE(MAX(version_number), 0) + 1 FROM metadata_versions WHERE vn_id = ?',
+        (vn_id,)
+    ).fetchone()[0]
 
-        print(Fore.GREEN + f'[DEBUG] Successfully finalized metadata_objects for {top_level_sha[:8]}.')
-    else:
-        print(Fore.YELLOW + '[DEBUG] No top_level_sha present; skipping metadata_objects update.')
+    conn.execute(
+        'UPDATE metadata_versions SET is_current = 0 WHERE vn_id = ? AND is_current = 1',
+        (vn_id,)
+    )
+
+    conn.execute('''
+        INSERT INTO metadata_versions (
+            vn_id, metadata_hash, parent_version_id, version_number, change_note, is_current
+        ) VALUES (?, ?, ?, ?, ?, 1)
+    ''', (
+        vn_id,
+        metadata_hash,
+        parent_version_id,
+        next_version_number,
+        metadata.get('change_note') or metadata.get('notes')
+    ))
+
+    print(Fore.GREEN + f'[DEBUG] Metadata version v{next_version_number} recorded for VN {vn_id}.')
 
 
-def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_process, top_level_sha):
+def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_process):
     print(Fore.CYAN + f'\n[DEBUG] Found {len(archives_to_process)} archive(s) to process for DB.')
 
     for arch_data in archives_to_process:
@@ -632,20 +711,20 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
 
         print(Fore.MAGENTA + f'[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.')
 
-        try:
-            finalize_metadata_objects(conn, metadata, top_level_sha, vn_id)
-        except Exception as e:
-            print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
-            raise e
+    try:
+        finalize_metadata_objects(conn, metadata, vn_id)
+    except Exception as e:
+        print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
+        raise e
 
-        try:
-            conn.commit()
-            print(Fore.GREEN + '[DEBUG] Database transaction committed successfully!')
-        except Exception as e:
-            print(Fore.RED + f'[CRITICAL] SQLite Commit Failed: {e}')
-            raise e
+    try:
+        conn.commit()
+        print(Fore.GREEN + '[DEBUG] Database transaction committed successfully!')
+    except Exception as e:
+        print(Fore.RED + f'[CRITICAL] SQLite Commit Failed: {e}')
+        raise e
 
-        return vn_id
+    return vn_id
 
     return None
 
@@ -666,16 +745,16 @@ def insert_visual_novel(metadata):
 
         build_id = upsert_build_record(conn, vn_id, metadata)
         sync_build_target_platforms(conn, build_id, metadata)
+        sync_canon_relationship(conn, vn_id, metadata)
 
-        archives_to_process, top_level_sha = collect_archives_for_db(metadata)
+        archives_to_process, _ = collect_archives_for_db(metadata)
 
         early_return_vn_id = process_archives_for_build(
             conn,
             build_id,
             metadata,
             vn_id,
-            archives_to_process,
-            top_level_sha
+            archives_to_process
         )
         if early_return_vn_id:
             return early_return_vn_id
