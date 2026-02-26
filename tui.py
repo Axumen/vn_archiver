@@ -422,7 +422,15 @@ def edit_metadata_only():
         vn_id = insert_visual_novel(updated_metadata)
         print(Fore.GREEN + "\nMetadata successfully updated!")
 
-        metadata_version_number = get_current_metadata_version_number(vn_id)
+        build_row = None
+        with get_connection() as conn:
+            build_row = conn.execute(
+                "SELECT id FROM builds WHERE vn_id = ? AND version = ?",
+                (vn_id, updated_metadata.get("version"))
+            ).fetchone()
+
+        build_id = build_row["id"] if build_row else None
+        metadata_version_number = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
         print(Fore.CYAN + f"\nUpdated Metadata Copy (v{metadata_version_number}):")
         print(Fore.WHITE + yaml.dump(updated_metadata, sort_keys=False, allow_unicode=True))
 

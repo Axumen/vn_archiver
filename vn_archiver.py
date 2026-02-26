@@ -663,7 +663,7 @@ def collect_archives_for_db(metadata):
     return archives_to_process, top_level_sha
 
 
-def finalize_metadata_objects(conn, metadata, vn_id):
+def finalize_metadata_objects(conn, metadata, vn_id, build_id):
     try:
         schema_version = int(metadata.get('metadata_version') or 1)
     except (ValueError, TypeError):
@@ -684,38 +684,39 @@ def finalize_metadata_objects(conn, metadata, vn_id):
     ''', (metadata_hash, schema_version, safe_metadata_json))
 
     current_row = conn.execute(
-        'SELECT id, metadata_hash FROM metadata_versions WHERE vn_id = ? AND is_current = 1',
-        (vn_id,)
+        'SELECT id, metadata_hash FROM metadata_versions WHERE build_id = ? AND is_current = 1',
+        (build_id,)
     ).fetchone()
 
     if current_row and current_row['metadata_hash'] == metadata_hash:
-        print(Fore.MAGENTA + f'[DEBUG] Metadata version unchanged for VN {vn_id}; current pointer retained.')
+        print(Fore.MAGENTA + f'[DEBUG] Metadata version unchanged for build {build_id}; current pointer retained.')
         return
 
     parent_version_id = current_row['id'] if current_row else None
     next_version_number = conn.execute(
-        'SELECT COALESCE(MAX(version_number), 0) + 1 FROM metadata_versions WHERE vn_id = ?',
-        (vn_id,)
+        'SELECT COALESCE(MAX(version_number), 0) + 1 FROM metadata_versions WHERE build_id = ?',
+        (build_id,)
     ).fetchone()[0]
 
     conn.execute(
-        'UPDATE metadata_versions SET is_current = 0 WHERE vn_id = ? AND is_current = 1',
-        (vn_id,)
+        'UPDATE metadata_versions SET is_current = 0 WHERE build_id = ? AND is_current = 1',
+        (build_id,)
     )
 
     conn.execute('''
         INSERT INTO metadata_versions (
-            vn_id, metadata_hash, parent_version_id, version_number, change_note, is_current
-        ) VALUES (?, ?, ?, ?, ?, 1)
+            vn_id, build_id, metadata_hash, parent_version_id, version_number, change_note, is_current
+        ) VALUES (?, ?, ?, ?, ?, ?, 1)
     ''', (
         vn_id,
+        build_id,
         metadata_hash,
         parent_version_id,
         next_version_number,
         metadata.get('change_note') or metadata.get('notes')
     ))
 
-    print(Fore.GREEN + f'[DEBUG] Metadata version v{next_version_number} recorded for VN {vn_id}.')
+    print(Fore.GREEN + f'[DEBUG] Metadata version v{next_version_number} recorded for build {build_id}.')
 
 
 def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_process):
@@ -757,7 +758,7 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
         print(Fore.MAGENTA + f'[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.')
 
     try:
-        finalize_metadata_objects(conn, metadata, vn_id)
+        finalize_metadata_objects(conn, metadata, vn_id, build_id)
     except Exception as e:
         print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
         raise e
@@ -1110,7 +1111,16 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         print(Fore.RED + "Failed to insert visual novel into database.")
         return
 
-    metadata_version_number = get_current_metadata_version_number(vn_id)
+    build_id = None
+    with get_connection() as conn:
+        build_row = conn.execute(
+            'SELECT id FROM builds WHERE vn_id = ? AND version = ?',
+            (vn_id, metadata.get('version'))
+        ).fetchone()
+        if build_row:
+            build_id = build_row['id']
+
+    metadata_version_number = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
 
     # -------------------------------------------------------------------
     # 5 & 6. Create Sidecar Directory Structure
@@ -1209,12 +1219,19 @@ def move_processed_metadata_to_uploaded(metadata_filepath, metadata):
         raise Exception("Metadata file not found for post-upload move.")
 
     vn_id = None
+    build_id = None
     with get_connection() as conn:
         vn_row = conn.execute('SELECT id FROM visual_novels WHERE title = ?', (metadata.get('title'),)).fetchone()
         if vn_row:
             vn_id = vn_row['id']
+            build_row = conn.execute(
+                'SELECT id FROM builds WHERE vn_id = ? AND version = ?',
+                (vn_id, metadata.get('version'))
+            ).fetchone()
+            if build_row:
+                build_id = build_row['id']
 
-    metadata_version_number = get_current_metadata_version_number(vn_id) if vn_id else 1
+    metadata_version_number = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
     meta_sha = metadata.get('sha256') or get_nested_value(metadata, 'archive.sha256')
     cleaned_name = build_recommended_metadata_name(metadata, meta_sha, metadata_version_number)
 
@@ -1228,16 +1245,22 @@ def format_uploaded_component(value, fallback):
     return text or fallback
 
 
-def get_current_metadata_version_number(vn_id):
-    """Return the active metadata_versions.version_number for a VN."""
-    if not vn_id:
+def get_current_metadata_version_number(vn_id=None, build_id=None):
+    """Return active metadata_versions.version_number for a build (or fallback VN scope)."""
+    if not build_id and not vn_id:
         return 1
 
     with get_connection() as conn:
-        row = conn.execute(
-            'SELECT version_number FROM metadata_versions WHERE vn_id = ? AND is_current = 1',
-            (vn_id,)
-        ).fetchone()
+        if build_id:
+            row = conn.execute(
+                'SELECT version_number FROM metadata_versions WHERE build_id = ? AND is_current = 1',
+                (build_id,)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                'SELECT version_number FROM metadata_versions WHERE vn_id = ? AND is_current = 1 ORDER BY created_at DESC, id DESC LIMIT 1',
+                (vn_id,)
+            ).fetchone()
 
     return int(row['version_number']) if row and row['version_number'] is not None else 1
 

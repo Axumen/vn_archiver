@@ -194,12 +194,13 @@ CREATE TABLE IF NOT EXISTS metadata_objects (
 );
 
 -- =====================================================
--- 10. METADATA VERSIONS (Version History Per VN)
+-- 10. METADATA VERSIONS (Version History Per Build)
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS metadata_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     vn_id INTEGER NOT NULL,
+    build_id INTEGER NOT NULL,
     metadata_hash TEXT NOT NULL,
     parent_version_id INTEGER,
     version_number INTEGER NOT NULL,
@@ -210,6 +211,10 @@ CREATE TABLE IF NOT EXISTS metadata_versions (
 
     FOREIGN KEY (vn_id)
         REFERENCES visual_novels(id)
+        ON DELETE CASCADE,
+
+    FOREIGN KEY (build_id)
+        REFERENCES builds(id)
         ON DELETE CASCADE,
 
     FOREIGN KEY (metadata_hash)
@@ -225,14 +230,14 @@ CREATE TABLE IF NOT EXISTS metadata_versions (
 -- 11. UNIQUE CONSTRAINTS
 -- =====================================================
 
--- Ensure only one current metadata version per VN
+-- Ensure only one current metadata version per build
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_current_metadata
-ON metadata_versions(vn_id)
+ON metadata_versions(build_id)
 WHERE is_current = 1;
 
--- Ensure version_number increments uniquely per VN
+-- Ensure version_number increments uniquely per build
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_version_number
-ON metadata_versions(vn_id, version_number);
+ON metadata_versions(build_id, version_number);
 
 -- =====================================================
 -- 12. INDEXES FOR PERFORMANCE
@@ -240,6 +245,9 @@ ON metadata_versions(vn_id, version_number);
 
 CREATE INDEX IF NOT EXISTS idx_metadata_versions_vn
 ON metadata_versions(vn_id);
+
+CREATE INDEX IF NOT EXISTS idx_metadata_versions_build
+ON metadata_versions(build_id);
 
 CREATE INDEX IF NOT EXISTS idx_metadata_versions_hash
 ON metadata_versions(metadata_hash);
