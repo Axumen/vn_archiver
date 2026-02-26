@@ -413,43 +413,55 @@ def edit_metadata_only():
             return
         build_id = int(build_id_str)
 
-        # 3. Fetch metadata for the specific build
+        # 3. Fetch metadata for the specific build.
+        # Prefer the canonical current metadata version first, then fall back to
+        # archive-layer metadata for legacy rows, then VN-level metadata.
         row = conn.execute('''
-                    SELECT metadata_json 
-                    FROM archives 
-                    WHERE build_id = ?
+                    SELECT mo.metadata_json
+                    FROM metadata_versions mv
+                    JOIN metadata_objects mo ON mv.metadata_hash = mo.hash
+                    WHERE mv.build_id = ? AND mv.is_current = 1
+                    ORDER BY mv.created_at DESC, mv.id DESC
                     LIMIT 1
                 ''', (build_id,)).fetchone()
 
-        if row:
-            # Load metadata from the archive layer if physical files exist
-            current_metadata = json.loads(row["metadata_json"])
-        else:
+        if not row:
+            row = conn.execute('''
+                        SELECT metadata_json
+                        FROM archives
+                        WHERE build_id = ?
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                    ''', (build_id,)).fetchone()
+
+        if not row:
             # FALLBACK: If "Create Metadata Only" was used, no archives exist.
             # Fetch the active master metadata for the Visual Novel instead.
-            vn_row = conn.execute('''
-                        SELECT mo.metadata_json 
+            row = conn.execute('''
+                        SELECT mo.metadata_json
                         FROM metadata_versions mv
                         JOIN metadata_objects mo ON mv.metadata_hash = mo.hash
                         WHERE mv.vn_id = ? AND mv.is_current = 1
+                        ORDER BY mv.created_at DESC, mv.id DESC
+                        LIMIT 1
                     ''', (vn_id,)).fetchone()
 
-            if not vn_row:
-                notify("No metadata found in the database for this Visual Novel.", "error")
-                return
+        if not row:
+            notify("No metadata found in the database for this Visual Novel.", "error")
+            return
 
-            current_metadata = json.loads(vn_row["metadata_json"])
+        current_metadata = json.loads(row["metadata_json"])
 
-            # Dynamically update the dictionary with the selected build's specifics
-            # so the text editor shows the correct build version you selected.
-            build_info = conn.execute(
-                "SELECT version, build_type FROM builds WHERE id = ?",
-                (build_id,)
-            ).fetchone()
+        # Ensure build-specific fields reflect the selected build so the user
+        # confirms/edits against the exact build context they chose.
+        build_info = conn.execute(
+            "SELECT version, build_type FROM builds WHERE id = ?",
+            (build_id,)
+        ).fetchone()
 
-            if build_info:
-                current_metadata["version"] = build_info["version"]
-                current_metadata["build_type"] = build_info["build_type"]
+        if build_info:
+            current_metadata["version"] = build_info["version"]
+            current_metadata["build_type"] = build_info["build_type"]
 
     finally:
         conn.close()
