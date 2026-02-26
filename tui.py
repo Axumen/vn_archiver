@@ -355,35 +355,83 @@ def edit_metadata_only():
             return
         vn_id = int(vn_id_str)
 
-        # 2. Fetch the current active metadata
-        row = conn.execute('''
-            SELECT mo.metadata_json 
-            FROM metadata_versions mv
-            JOIN metadata_objects mo ON mv.metadata_hash = mo.hash
-            WHERE mv.vn_id = ? AND mv.is_current = 1
-        ''', (vn_id,)).fetchone()
-
-        if not row:
-            print("No current metadata found for this VN.")
+        # 2. List available builds for the selected VN
+        print("\n--- Select Build to Edit ---")
+        builds = conn.execute("SELECT id, version, build_type FROM builds WHERE vn_id = ?", (vn_id,)).fetchall()
+        if not builds:
+            print("No builds found for this visual novel.")
             return
 
-        current_metadata = json.loads(row["metadata_json"])
+        for build in builds:
+            print(f"[{build['id']}] Version: {build['version']} - Type: {build['build_type']}")
+
+        build_id_str = input("\nEnter Build ID to edit (or press Enter to cancel): ").strip()
+        if not build_id_str.isdigit():
+            return
+        build_id = int(build_id_str)
+
+        # 3. Fetch metadata for the specific build
+        row = conn.execute('''
+                    SELECT metadata_json 
+                    FROM archives 
+                    WHERE build_id = ?
+                    LIMIT 1
+                ''', (build_id,)).fetchone()
+
+        if row:
+            # Load metadata from the archive layer if physical files exist
+            current_metadata = json.loads(row["metadata_json"])
+        else:
+            # FALLBACK: If "Create Metadata Only" was used, no archives exist.
+            # Fetch the active master metadata for the Visual Novel instead.
+            vn_row = conn.execute('''
+                        SELECT mo.metadata_json 
+                        FROM metadata_versions mv
+                        JOIN metadata_objects mo ON mv.metadata_hash = mo.hash
+                        WHERE mv.vn_id = ? AND mv.is_current = 1
+                    ''', (vn_id,)).fetchone()
+
+            if not vn_row:
+                print(Fore.RED + "No metadata found in the database for this Visual Novel.")
+                return
+
+            current_metadata = json.loads(vn_row["metadata_json"])
+
+            # Dynamically update the dictionary with the selected build's specifics
+            # so the text editor shows the correct build version you selected.
+            build_info = conn.execute(
+                "SELECT version, build_type FROM builds WHERE id = ?",
+                (build_id,)
+            ).fetchone()
+
+            if build_info:
+                current_metadata["version"] = build_info["version"]
+                current_metadata["build_type"] = build_info["build_type"]
 
     finally:
         conn.close()
 
-    # 3. Open in System Text Editor
+    # 4. Show the entire metadata to the user for review
+    print(Fore.CYAN + "\n--- Current Metadata Review ---")
+    print(Fore.WHITE + yaml.dump(current_metadata, sort_keys=False, allow_unicode=True))
+    print(Fore.CYAN + "-------------------------------")
+
+    confirm = input(Fore.YELLOW + "\nDo you want to continue editing this metadata? [y/N]: ").strip().lower()
+    if confirm not in ("y", "yes"):
+        print(Fore.YELLOW + "Editing cancelled.")
+        return
+
+    # 5. Open in System Text Editor
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as tf:
         yaml.dump(current_metadata, tf, sort_keys=False, allow_unicode=True)
         temp_path = tf.name
 
-    # Chooses 'notepad' on Windows, 'nano' or system default on Linux/Mac
     editor = os.environ.get('EDITOR', 'notepad' if os.name == 'nt' else 'nano')
 
     print(f"\nOpening metadata in {editor}... Save and close the file when finished.")
     subprocess.call([editor, temp_path])
 
-    # 4. Read the edited file and save
+    # 6. Read the edited file and save
     try:
         with open(temp_path, "r", encoding="utf-8") as f:
             updated_metadata = yaml.safe_load(f)
@@ -392,12 +440,12 @@ def edit_metadata_only():
             print("\nNo changes detected. Aborting update.")
             return
 
-        # Re-run it through the engine. It will update the rows and create a new version!
+        # Pass the updated metadata back to the insert function
         insert_visual_novel(updated_metadata)
-        print("\nMetadata successfully updated and a new version history was created!")
+        print(Fore.GREEN + "\nMetadata successfully updated!")
 
     except Exception as e:
-        print(f"\nFailed to save metadata: {e}")
+        print(Fore.RED + f"\nFailed to save metadata: {e}")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -458,31 +506,29 @@ def upload_archives():
         print(Fore.RED + "Uploaded directory does not exist.")
         return
 
-    # Find all master .zip bundles recursively in the uploaded directory
-    bundle_files = []
+    # Find all directories that contain a metadata.yaml
+    release_folders = []
     for root, dirs, files in os.walk(UPLOADED_DIR):
-        for file in files:
-            if file.endswith(".zip"):
-                bundle_files.append(os.path.join(root, file))
+        if "metadata.yaml" in files:
+            release_folders.append(root)
 
-    if not bundle_files:
-        print(Fore.RED + "No master .zip bundles found in the uploaded directory.")
+    if not release_folders:
+        print(Fore.RED + "No processed release folders found in the uploaded directory.")
         return
 
-    # Display the list cleanly
-    for i, path in enumerate(bundle_files, 1):
+    for i, path in enumerate(release_folders, 1):
         rel_path = os.path.relpath(path, UPLOADED_DIR)
         print(f"[{i}] {rel_path}")
 
-    choice = input(Fore.YELLOW + "\nSelect the bundle number to upload, or 0 to cancel: ").strip()
+    choice = input(Fore.YELLOW + "\nSelect the release folder number to upload, or 0 to cancel: ").strip()
     if choice == "0" or not choice:
         return
 
     try:
         idx = int(choice) - 1
-        if 0 <= idx < len(bundle_files):
-            selected_file = bundle_files[idx]
-            upload_archive(selected_file)
+        if 0 <= idx < len(release_folders):
+            selected_folder = release_folders[idx]
+            upload_archive(selected_folder)
         else:
             print(Fore.RED + "Invalid selection.")
     except ValueError:
