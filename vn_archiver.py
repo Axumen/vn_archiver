@@ -23,7 +23,7 @@ from db_manager import get_connection
 INCOMING_DIR = "incoming"
 PROCESSED_DIR = "processed"
 UPLOADING_DIR = "uploading"
-VN_ARCHIVE_DIR = "vn-archive"
+VN_ARCHIVE_DIR = "vn archive"
 # Backward-compatible alias
 UPLOADED_DIR = UPLOADING_DIR
 METADATA_TEMPLATE_DIR = Path("metadata_templates")
@@ -1086,7 +1086,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
             yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
 
         # Move archives into uploading queue, then copy+unzip into
-        # vn-archive/<title> <latest-version>/<version>/
+        # vn archive/<title> <latest-version>/<version>/
         vn_archive_version_dir = get_vn_archive_version_dir(metadata)
         ensure_clean_directory(vn_archive_version_dir)
 
