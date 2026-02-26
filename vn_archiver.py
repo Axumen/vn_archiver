@@ -1103,9 +1103,11 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
             })
         metadata["archives"] = archives_list
 
-    # -------------------------------------------------------------------
-    # 4. Insert into Database
-    # -------------------------------------------------------------------
+    finalize_archive_creation(metadata, archives_data)
+
+
+def finalize_archive_creation(metadata, archives_data):
+    """Shared finalization flow for prompted and pre-filled metadata runs."""
     vn_id = insert_visual_novel(metadata)
     if not vn_id:
         print(Fore.RED + "Failed to insert visual novel into database.")
@@ -1121,10 +1123,6 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
             build_id = build_row['id']
 
     metadata_version_number = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
-
-    # -------------------------------------------------------------------
-    # 5 & 6. Create Sidecar Directory Structure
-    # -------------------------------------------------------------------
 
     if archives_data:
         uploaded_dest_dir = os.path.join(UPLOADING_DIR)
@@ -1155,11 +1153,9 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
                 ext=original_ext
             )
 
-            # Copy original zip name to vn archive before we rename for upload queue.
             original_copy = vn_archive_version_dir / arch["filename"]
             shutil.copy2(arch["original_path"], original_copy)
 
-            # Move companion extracted folder (same stem as zip) from incoming/ into vn archive.
             archive_stem = Path(arch["filename"]).stem
             source_folder = Path(arch["original_path"]).parent / archive_stem
             target_folder = vn_archive_version_dir / archive_stem
@@ -1176,13 +1172,39 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         print(Fore.GREEN + f"\nSidecar bundle successfully created at: {uploaded_dest_dir}")
         print(Fore.GREEN + f"VN archive updated at: {vn_archive_version_dir}")
         print(Fore.GREEN + "Archive processing complete!")
-
     else:
-        # Option 1 Fallback (No physical files selected)
         staged_meta_path = stage_metadata_yaml_for_upload(metadata, metadata_version_number)
-
         print(Fore.GREEN + f"\nMetadata staged for upload: {staged_meta_path}")
         print(Fore.GREEN + "Metadata creation complete!")
+
+
+def create_archive_from_metadata_file(archive_paths, metadata):
+    """Create archive pipeline from existing metadata.yaml without prompts."""
+    archives_data = []
+    for path in archive_paths:
+        print(f"Calculating SHA-256 for: {os.path.basename(path)}...")
+        sha256 = sha256_file(path)
+        file_size = os.path.getsize(path)
+        archives_data.append({
+            "original_path": path,
+            "filename": os.path.basename(path),
+            "file_size_bytes": file_size,
+            "sha256": sha256
+        })
+
+    prepared = dict(metadata or {})
+    prepared.setdefault("metadata_version", detect_latest_metadata_template_version())
+    if archives_data:
+        prepared["archives"] = [
+            {
+                "filename": a["filename"],
+                "file_size_bytes": a["file_size_bytes"],
+                "sha256": a["sha256"]
+            }
+            for a in archives_data
+        ]
+
+    finalize_archive_creation(prepared, archives_data)
 
 
 def move_original_to_uploaded_local(original_filepath, metadata):

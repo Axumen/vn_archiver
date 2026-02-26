@@ -11,6 +11,7 @@ from pathlib import Path
 from colorama import init, Fore, Style
 from vn_archiver import (
     create_archive_only,
+    create_archive_from_metadata_file,
     upload_archive,
     INCOMING_DIR,
     UPLOADING_DIR,
@@ -297,6 +298,80 @@ def create_metadata_only():
         notify("Invalid input.", "error")
 
 
+def quick_process_with_metadata_yaml():
+    print()
+    panel("Quick Process (Archive + Metadata YAML)")
+
+    if not os.path.exists(INCOMING_DIR):
+        os.makedirs(INCOMING_DIR)
+
+    zip_files = [f for f in os.listdir(INCOMING_DIR) if f.lower().endswith(".zip")]
+    yaml_files = [f for f in os.listdir(INCOMING_DIR) if f.lower().endswith((".yaml", ".yml"))]
+
+    if not zip_files:
+        notify(f"No zip files found in '{INCOMING_DIR}'.", "error")
+        return
+    if not yaml_files:
+        notify(f"No metadata yaml files found in '{INCOMING_DIR}'.", "error")
+        return
+
+    panel("Select ZIP file(s)")
+    for i, filename in enumerate(zip_files, 1):
+        print(TEXT + f"[{i}] {filename}")
+
+    zip_choice = prompt("Select zip file numbers (comma-separated), or 0 to cancel: ")
+    if zip_choice in ("", "0"):
+        return
+
+    panel("Select Metadata YAML")
+    for i, filename in enumerate(yaml_files, 1):
+        print(TEXT + f"[{i}] {filename}")
+
+    yaml_choice = prompt("Select metadata yaml number, or 0 to cancel: ")
+    if yaml_choice in ("", "0"):
+        return
+
+    try:
+        selected_paths = []
+        indices = [int(idx.strip()) - 1 for idx in zip_choice.split(",") if idx.strip().isdigit()]
+        for idx in indices:
+            if 0 <= idx < len(zip_files):
+                selected_filename = zip_files[idx]
+                show_file_info(selected_filename)
+                selected_paths.append(os.path.join(INCOMING_DIR, selected_filename))
+            else:
+                notify(f"Invalid zip selection: {idx + 1}", "error")
+                return
+
+        if not selected_paths:
+            notify("No valid zip files selected.", "error")
+            return
+
+        y_idx = int(yaml_choice) - 1
+        if not (0 <= y_idx < len(yaml_files)):
+            notify("Invalid metadata yaml selection.", "error")
+            return
+
+        metadata_path = os.path.join(INCOMING_DIR, yaml_files[y_idx])
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            metadata = yaml.safe_load(f) or {}
+
+        if not isinstance(metadata, dict):
+            notify("Selected metadata yaml is not a valid object.", "error")
+            return
+
+        if not metadata.get("title"):
+            notify("Metadata must include 'title'.", "error")
+            return
+        if not metadata.get("version"):
+            notify("Metadata must include 'version'.", "error")
+            return
+
+        create_archive_from_metadata_file(selected_paths, metadata)
+    except ValueError:
+        notify("Invalid input.", "error")
+
+
 # =============================
 # METADATA EDITING
 # =============================
@@ -490,10 +565,11 @@ def main():
 
         panel("Main Menu")
         print(PRIMARY + "  1) Create Metadata")
-        print(PRIMARY + "  2) Edit Metadata")
-        print(PRIMARY + "  3) Upload Archive")
-        print(PRIMARY + "  4) Config")
-        print(PRIMARY + "  5) Quit\n")
+        print(PRIMARY + "  2) Quick Process (Zip + Metadata YAML)")
+        print(PRIMARY + "  3) Edit Metadata")
+        print(PRIMARY + "  4) Upload Archive")
+        print(PRIMARY + "  5) Config")
+        print(PRIMARY + "  6) Quit\n")
 
         active_version = get_active_metadata_template_version()
         notify(f"Active metadata template: v{active_version}")
@@ -504,12 +580,14 @@ def main():
         if choice == "1":
             create_metadata_only()
         elif choice == "2":
-            edit_metadata_only()
+            quick_process_with_metadata_yaml()
         elif choice == "3":
-            upload_archives()
+            edit_metadata_only()
         elif choice == "4":
-            configure_metadata_template_version()
+            upload_archives()
         elif choice == "5":
+            configure_metadata_template_version()
+        elif choice == "6":
             print()
             panel("Goodbye", "Session closed")
             print()
