@@ -403,10 +403,6 @@ def upsert_series(conn, metadata):
 
     series_name = metadata['series'].strip()
     series_description = get_metadata_value(metadata, 'series_description')
-    if series_description is None:
-        # Backward-compatible mapping for template field `description`.
-        # We treat it as series-level description when explicit series_description is absent.
-        series_description = get_metadata_value(metadata, 'description')
     series_row = conn.execute(
         'SELECT id, description FROM series WHERE name = ?',
         (series_name,)
@@ -432,28 +428,35 @@ def upsert_visual_novel_record(conn, metadata, series_id):
     title = metadata['title']
 
     vn_exists = conn.execute(
-        'SELECT id FROM visual_novels WHERE title = ?',
+        'SELECT id, description, source FROM visual_novels WHERE title = ?',
         (title,)
     ).fetchone()
 
     slug = slugify_component(title, 'unknown-title')
+
+    def effective_vn(field_name):
+        if field_name in metadata:
+            return metadata.get(field_name)
+        return vn_exists[field_name] if vn_exists else None
 
     if vn_exists:
         vn_id = vn_exists['id']
         conn.execute('''
             UPDATE visual_novels SET
                 series_id = ?, canonical_slug = ?, aliases = ?,
-                developer = ?, publisher = ?, release_status = ?,
-                content_rating = ?
+                developer = ?, publisher = ?, description = ?, release_status = ?,
+                content_rating = ?, source = ?
             WHERE id = ?
         ''', (
             series_id,
             slug,
             json.dumps(aliases),
-            metadata.get('developer'),
-            metadata.get('publisher'),
-            metadata.get('release_status'),
-            metadata.get('content_rating'),
+            effective_vn('developer'),
+            effective_vn('publisher'),
+            effective_vn('description'),
+            effective_vn('release_status'),
+            effective_vn('content_rating'),
+            effective_vn('source'),
             vn_id
         ))
         return vn_id
@@ -461,8 +464,8 @@ def upsert_visual_novel_record(conn, metadata, series_id):
     conn.execute('''
         INSERT INTO visual_novels (
             series_id, title, canonical_slug, aliases,
-            developer, publisher, release_status, content_rating
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            developer, publisher, description, release_status, content_rating, source
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         series_id,
         title,
@@ -470,8 +473,10 @@ def upsert_visual_novel_record(conn, metadata, series_id):
         json.dumps(aliases),
         metadata.get('developer'),
         metadata.get('publisher'),
+        metadata.get('description'),
         metadata.get('release_status'),
-        metadata.get('content_rating')
+        metadata.get('content_rating'),
+        metadata.get('source')
     ))
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
 
@@ -495,7 +500,7 @@ def upsert_build_record(conn, vn_id, metadata):
         '''
         SELECT id, build_type, distribution_model, distribution_platform,
                language, translator, edition, release_date, engine,
-               engine_version, base_archive_sha256
+               engine_version, source, base_archive_sha256
         FROM builds
         WHERE vn_id = ? AND version = ?
         ''',
@@ -519,6 +524,7 @@ def upsert_build_record(conn, vn_id, metadata):
         effective('release_date'),
         effective('engine'),
         effective('engine_version'),
+        effective('source'),
         effective('base_archive_sha256')
     )
 
@@ -528,7 +534,7 @@ def upsert_build_record(conn, vn_id, metadata):
             UPDATE builds SET
                 build_type = ?, distribution_model = ?, distribution_platform = ?,
                 language = ?, translator = ?, edition = ?, release_date = ?,
-                engine = ?, engine_version = ?, base_archive_sha256 = ?
+                engine = ?, engine_version = ?, source = ?, base_archive_sha256 = ?
             WHERE id = ?
         ''', values + (build_id,))
         return build_id
@@ -537,8 +543,8 @@ def upsert_build_record(conn, vn_id, metadata):
         INSERT INTO builds (
             vn_id, version, build_type, distribution_model,
             distribution_platform, language, translator, edition,
-            release_date, engine, engine_version, base_archive_sha256
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            release_date, engine, engine_version, source, base_archive_sha256
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         vn_id,
         build_version,
