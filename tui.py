@@ -13,6 +13,7 @@ from vn_archiver import (
     create_archive_only,
     upload_archive,
     INCOMING_DIR,
+    UPLOADING_DIR,
     PROCESSED_DIR,
     sha256_file,
     load_metadata_template,
@@ -21,8 +22,6 @@ from vn_archiver import (
     detect_latest_metadata_template_version,
     insert_visual_novel
 )
-
-UPLOADED_DIR = "uploaded"
 
 init(autoreset=True)
 
@@ -434,33 +433,34 @@ def edit_metadata_only():
 
 def upload_archives():
     print(Fore.CYAN + "\n--- Upload Archive ---")
-    if not os.path.exists(UPLOADED_DIR):
-        print(Fore.RED + "Uploaded directory does not exist.")
+    if not os.path.exists(UPLOADING_DIR):
+        print(Fore.RED + "Uploading directory does not exist.")
         return
 
-    # Find all directories that contain a metadata.yaml
-    release_folders = []
-    for root, dirs, files in os.walk(UPLOADED_DIR):
-        if "metadata.yaml" in files:
-            release_folders.append(root)
+    # Find all zip files queued for upload
+    upload_files = []
+    for root, _, files in os.walk(UPLOADING_DIR):
+        for file in files:
+            if file.lower().endswith(".zip"):
+                upload_files.append(os.path.join(root, file))
 
-    if not release_folders:
-        print(Fore.RED + "No processed release folders found in the uploaded directory.")
+    if not upload_files:
+        print(Fore.RED + "No zip files found in the uploading directory.")
         return
 
-    for i, path in enumerate(release_folders, 1):
-        rel_path = os.path.relpath(path, UPLOADED_DIR)
+    for i, path in enumerate(upload_files, 1):
+        rel_path = os.path.relpath(path, UPLOADING_DIR)
         print(f"[{i}] {rel_path}")
 
-    choice = input(Fore.YELLOW + "\nSelect the release folder number to upload, or 0 to cancel: ").strip()
+    choice = input(Fore.YELLOW + "\nSelect zip number to upload, or 0 to cancel: ").strip()
     if choice == "0" or not choice:
         return
 
     try:
         idx = int(choice) - 1
-        if 0 <= idx < len(release_folders):
-            selected_folder = release_folders[idx]
-            upload_archive(selected_folder)
+        if 0 <= idx < len(upload_files):
+            selected_file = upload_files[idx]
+            upload_archive(selected_file)
         else:
             print(Fore.RED + "Invalid selection.")
     except ValueError:

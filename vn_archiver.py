@@ -22,7 +22,10 @@ from db_manager import get_connection
 
 INCOMING_DIR = "incoming"
 PROCESSED_DIR = "processed"
-UPLOADED_DIR = "uploaded"
+UPLOADING_DIR = "uploading"
+VN_ARCHIVE_DIR = "vn-archive"
+# Backward-compatible alias
+UPLOADED_DIR = UPLOADING_DIR
 METADATA_TEMPLATE_DIR = Path("metadata_templates")
 DEFAULT_METADATA_VERSION = 1
 B2_CONFIG_FILE = "backblaze_config.yaml"
@@ -61,7 +64,8 @@ AUTO_METADATA_FIELDS = {
 def ensure_directories():
     Path(INCOMING_DIR).mkdir(exist_ok=True)
     Path(PROCESSED_DIR).mkdir(exist_ok=True)
-    Path(UPLOADED_DIR).mkdir(exist_ok=True)
+    Path(UPLOADING_DIR).mkdir(exist_ok=True)
+    Path(VN_ARCHIVE_DIR).mkdir(exist_ok=True)
 
 
 def sha256_file(filepath):
@@ -895,13 +899,13 @@ def upload_to_b2(filepath, remote_folder=None):
 
 
 def move_uploaded_archive(file_path):
-    if not os.path.exists(UPLOADED_DIR):
-        os.makedirs(UPLOADED_DIR)
+    if not os.path.exists(UPLOADING_DIR):
+        os.makedirs(UPLOADING_DIR)
 
     file_name = os.path.basename(file_path)
 
     # Explicitly define the full destination path including the file name
-    destination_path = os.path.join(UPLOADED_DIR, file_name)
+    destination_path = os.path.join(UPLOADING_DIR, file_name)
 
     print(Fore.CYAN + f"Moving local file to: {destination_path}")
 
@@ -912,7 +916,7 @@ def move_uploaded_archive(file_path):
             os.remove(destination_path)
 
         shutil.move(file_path, destination_path)
-        print(Fore.GREEN + f"Successfully moved {file_name} to the uploaded directory.")
+        print(Fore.GREEN + f"Successfully moved {file_name} to the uploading directory.")
     except Exception as e:
         print(Fore.RED + f"Failed to move {file_name}: {e}")
 
@@ -1057,11 +1061,11 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
     if archives_data:
         # Bulletproof Parent Folder Renaming Logic
         new_parent_name = f"{safe_title} {safe_version}"
-        new_parent_path = os.path.join(UPLOADED_DIR, new_parent_name)
+        new_parent_path = os.path.join(UPLOADING_DIR, new_parent_name)
 
-        if os.path.exists(UPLOADED_DIR):
-            for existing_folder in os.listdir(UPLOADED_DIR):
-                old_parent_path = os.path.join(UPLOADED_DIR, existing_folder)
+        if os.path.exists(UPLOADING_DIR):
+            for existing_folder in os.listdir(UPLOADING_DIR):
+                old_parent_path = os.path.join(UPLOADING_DIR, existing_folder)
                 if os.path.isdir(old_parent_path) and existing_folder.startswith(safe_title + " "):
                     possible_old_version = existing_folder[len(safe_title) + 1:].strip()
                     if os.path.isdir(os.path.join(old_parent_path, possible_old_version)):
@@ -1074,20 +1078,34 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         uploaded_dest_dir = os.path.join(new_parent_path, safe_version)
         os.makedirs(uploaded_dest_dir, exist_ok=True)
 
-        print(Fore.CYAN + f"\nMoving files to sidecar directory: {uploaded_dest_dir}...")
+        print(Fore.CYAN + f"\nMoving files to upload queue directory: {uploaded_dest_dir}...")
 
         # Write metadata.yaml loosely in the folder
         meta_path = os.path.join(uploaded_dest_dir, "metadata.yaml")
         with open(meta_path, "w", encoding="utf-8") as f:
             yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
 
-        # Move the original archives into the folder
+        # Move archives into uploading queue, then copy+unzip into
+        # vn-archive/<title> <latest-version>/<version>/
+        vn_archive_version_dir = get_vn_archive_version_dir(metadata)
+        ensure_clean_directory(vn_archive_version_dir)
+
         for arch in archives_data:
             dest_file = os.path.join(uploaded_dest_dir, arch["filename"])
             shutil.move(arch["original_path"], dest_file)
-            print(Fore.GREEN + f"Moved: {arch['filename']}")
+
+            vn_archive_copy = vn_archive_version_dir / arch["filename"]
+            shutil.copy2(dest_file, vn_archive_copy)
+
+            try:
+                with zipfile.ZipFile(vn_archive_copy, "r") as zf:
+                    zf.extractall(vn_archive_version_dir)
+                print(Fore.GREEN + f"Moved to uploading + copied/unzipped: {arch['filename']}")
+            except zipfile.BadZipFile:
+                print(Fore.YELLOW + f"Copied to VN archive but skipped unzip (not a valid zip): {arch['filename']}")
 
         print(Fore.GREEN + f"\nSidecar bundle successfully created at: {uploaded_dest_dir}")
+        print(Fore.GREEN + f"VN archive version updated at: {vn_archive_version_dir}")
         print(Fore.GREEN + "Archive processing complete!")
 
     else:
@@ -1103,26 +1121,35 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
 
 
 def move_original_to_uploaded_local(original_filepath, metadata):
-    """Move original zip to uploaded/<title>/Latest Version/ using local naming only."""
+    """Move original zip to uploading/ and mirror it to vn archive latest version."""
     if not os.path.exists(original_filepath):
         raise Exception("Original file not found for local move.")
 
-    target_dir = get_uploaded_latest_dir(metadata)
-    ensure_clean_directory(target_dir)
+    target_dir = get_uploading_latest_dir(metadata)
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     title = format_uploaded_component(metadata.get("title"), "Unknown Title")
     build_version = format_uploaded_component(metadata.get("version"), "unknown")
     cleaned_name = f"{title} {build_version}.zip"
 
-    return move_file_to_uploaded_dir(original_filepath, target_dir, cleaned_name)
+    uploading_path = move_file_to_uploaded_dir(original_filepath, target_dir, cleaned_name)
+
+    archive_version_dir = get_vn_archive_version_dir(metadata)
+    ensure_clean_directory(archive_version_dir)
+    archive_zip = archive_version_dir / cleaned_name
+    shutil.copy2(uploading_path, archive_zip)
+    with zipfile.ZipFile(archive_zip, "r") as zf:
+        zf.extractall(archive_version_dir)
+
+    return uploading_path
 
 
 def move_processed_metadata_to_uploaded(metadata_filepath, metadata):
-    """Move processed metadata YAML to uploaded/<title>/Latest Version/."""
+    """Move processed metadata YAML to uploading/<title>/Latest Version/."""
     if not os.path.exists(metadata_filepath):
         raise Exception("Metadata file not found for post-upload move.")
 
-    target_dir = get_uploaded_latest_dir(metadata)
+    target_dir = get_uploading_latest_dir(metadata)
     return move_file_to_uploaded_dir(metadata_filepath, target_dir)
 
 
@@ -1132,9 +1159,80 @@ def format_uploaded_component(value, fallback):
     return text or fallback
 
 
-def get_uploaded_latest_dir(metadata):
+def normalize_version_for_sort(version_text):
+    """Convert versions like '1.10.2' into sortable tuples with text fallback."""
+    text = str(version_text or "").strip()
+    if not text:
+        return (0,)
+
+    cleaned = re.sub(r"[^0-9A-Za-z\.\-_]", "", text)
+    tokens = re.split(r"[\.\-_]+", cleaned)
+    sortable = []
+    for tok in tokens:
+        if tok.isdigit():
+            sortable.append((0, int(tok)))
+        else:
+            sortable.append((1, tok.lower()))
+    return tuple(sortable)
+
+
+def determine_latest_version(versions):
+    valid_versions = [str(v).strip() for v in versions if str(v).strip()]
+    if not valid_versions:
+        return "unknown"
+    return max(valid_versions, key=normalize_version_for_sort)
+
+
+def get_uploading_latest_dir(metadata):
     title = format_uploaded_component(metadata.get("title"), "Unknown Title")
-    return Path(UPLOADED_DIR) / title / "Latest Version"
+    return Path(UPLOADING_DIR) / title / "Latest Version"
+
+
+def get_vn_archive_version_dir(metadata):
+    title = format_uploaded_component(metadata.get("title"), "Unknown Title")
+    current_version = format_uploaded_component(metadata.get("version"), "unknown")
+
+    title_root = Path(VN_ARCHIVE_DIR)
+    title_root.mkdir(parents=True, exist_ok=True)
+
+    sibling_versions = [current_version]
+    existing_title_parent = None
+    for entry in title_root.iterdir():
+        if not entry.is_dir():
+            continue
+        prefix = f"{title} "
+        if not entry.name.startswith(prefix):
+            continue
+        existing_title_parent = entry
+        parent_version = entry.name[len(prefix):].strip()
+        if parent_version:
+            sibling_versions.append(parent_version)
+        for child in entry.iterdir():
+            if child.is_dir() and child.name:
+                sibling_versions.append(child.name)
+        break
+
+    latest_version = determine_latest_version(sibling_versions)
+    target_parent = title_root / f"{title} {latest_version}"
+
+    if existing_title_parent and existing_title_parent != target_parent:
+        if target_parent.exists():
+            for child in existing_title_parent.iterdir():
+                destination = target_parent / child.name
+                if destination.exists():
+                    if destination.is_dir():
+                        shutil.rmtree(destination)
+                    else:
+                        destination.unlink(missing_ok=True)
+                shutil.move(str(child), str(destination))
+            existing_title_parent.rmdir()
+        else:
+            existing_title_parent.rename(target_parent)
+
+    target_parent.mkdir(parents=True, exist_ok=True)
+    target_version_dir = target_parent / current_version
+    target_version_dir.mkdir(parents=True, exist_ok=True)
+    return target_version_dir
 
 
 def ensure_clean_directory(target_dir):
@@ -1246,7 +1344,7 @@ def upload_archive(file_path):
         vn_row = conn.execute("SELECT id FROM visual_novels WHERE title = ?", (title,)).fetchone()
         if not vn_row:
             print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' does not exist in the database.")
-            print(Fore.YELLOW + "Please run '(3) Process Archive' to register it before uploading.")
+            print(Fore.YELLOW + "Please run '(1) Create Metadata' to register it before uploading.")
             return False
 
         vn_id = vn_row[0]
@@ -1254,7 +1352,7 @@ def upload_archive(file_path):
         build_row = conn.execute("SELECT id FROM builds WHERE vn_id = ? AND version = ?", (vn_id, version)).fetchone()
         if not build_row:
             print(Fore.RED + f"Upload Blocked: Version '{version}' for '{title}' does not exist in the database.")
-            print(Fore.YELLOW + "Please run '(3) Process Archive' to register this build before uploading.")
+            print(Fore.YELLOW + "Please run '(1) Create Metadata' to register this build before uploading.")
             return False
 
         build_id = build_row[0]
