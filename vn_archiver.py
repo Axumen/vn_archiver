@@ -14,9 +14,7 @@ from colorama import Fore
 from datetime import datetime
 from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
-from db_manager import get_connection, exclusive_transaction
-
-
+from db_manager import get_connection
 
 # ==============================
 # CONFIGURATION
@@ -55,6 +53,7 @@ AUTO_METADATA_FIELDS = {
     "archive.file_size": lambda zip_path: os.path.getsize(zip_path),
 }
 
+
 # ==============================
 # UTILITY
 # ==============================
@@ -91,6 +90,13 @@ def get_available_metadata_template_versions():
             continue
 
     return sorted(set(versions))
+
+
+def safe_json_serialize(obj):
+    """Helper to serialize datetime objects to strings for JSON dumping."""
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} not serializable")
 
 
 def detect_latest_metadata_template_version():
@@ -208,10 +214,96 @@ def load_b2_config(config_path=B2_CONFIG_FILE):
     return key_id, application_key, bucket_name, bool(dry_run)
 
 
+def select_base_archive_from_db(current_series=None, current_title=None):
+    from db_manager import get_connection
+    from colorama import Fore
+
+    with get_connection() as conn:
+        # Removed the restrictive WHERE clause.
+        # Now demos, append discs, and even other patches can act as a base!
+        base_query = '''
+            SELECT a.sha256, v.title, b.version, b.build_type, s.name as series_name
+            FROM archives a
+            JOIN builds b ON a.build_id = b.id
+            JOIN visual_novels v ON b.vn_id = v.id
+            LEFT JOIN series s ON v.series_id = s.id
+        '''
+
+        rows = []
+        use_filter = False
+
+        # 1. Ask the user if they want to filter using the context they just provided
+        if current_series or current_title:
+            filter_desc = []
+            if current_series: filter_desc.append(f"Series: '{current_series}'")
+            if current_title: filter_desc.append(f"Title: '{current_title}'")
+
+            print(Fore.CYAN + f"\nDetected contextual info: {' and '.join(filter_desc)}")
+            ans = input(Fore.YELLOW + "Filter available base archives using this info? [Y/n]: ").strip().lower()
+
+            if ans in ('', 'y', 'yes'):
+                use_filter = True
+                conditions = []
+                params = []
+                if current_series:
+                    conditions.append("s.name LIKE ?")
+                    params.append(f"%{current_series}%")
+                if current_title:
+                    conditions.append("v.title LIKE ?")
+                    params.append(f"%{current_title}%")
+
+                # Changed from AND to WHERE since the base_query no longer has a WHERE clause
+                query = base_query + " WHERE (" + " OR ".join(conditions) + ") ORDER BY v.title, b.version"
+                rows = conn.execute(query, params).fetchall()
+
+                if not rows:
+                    print(
+                        Fore.RED + "No matching base archives found with that filter. Falling back to the entire database...")
+                    use_filter = False
+
+        # 2. If user said 'No' or the filter returned 0 results, show the whole database
+        if not use_filter:
+            query = base_query + " ORDER BY v.title, b.version"
+            rows = conn.execute(query).fetchall()
+
+    # 3. Handle edge case where the database is completely empty
+    if not rows:
+        print(Fore.RED + "No base archives found in the database.")
+        return input(Fore.YELLOW + "Enter base_archive_sha256 manually (or press Enter to skip): ").strip()
+
+    # 4. Display the formatted menu
+    print(Fore.MAGENTA + "\nAvailable Base Archives:")
+    for i, row in enumerate(rows, 1):
+        series_str = f"[{row['series_name']}] " if row['series_name'] else ""
+        print(
+            Fore.GREEN + f"{i}) {series_str}{row['title']} (v{row['version']}) [{row['build_type']}] -> {row['sha256'][:8]}...")
+
+    # 5. Process user choice
+    choice = input(Fore.YELLOW + "\nSelect the base archive number (or press Enter to paste manually): ").strip()
+    try:
+        if choice:
+            idx = int(choice) - 1
+            if 0 <= idx < len(rows):
+                return rows[idx]['sha256']
+    except ValueError:
+        pass
+
+    # Fallback if they just press Enter to paste a hash manually
+    return input(Fore.YELLOW + "base_archive_sha256: ").strip()
+
+
 def prompt_field(field_name, current_value):
+    # Existing content_type suggestion logic...
     if field_name == "content_type":
         print("\nSuggested content_type:")
         print(", ".join(SUGGESTED_CONTENT_TYPE))
+
+    # Add specific handling for base_archive_sha256
+    if field_name == "base_archive_sha256":
+        selected_sha = select_base_archive_from_db()
+        if selected_sha:
+            print(f"Selected SHA: {selected_sha}")
+            return selected_sha
 
     value = input(f"{field_name} [{current_value}]: ").strip()
     return value if value else current_value
@@ -256,7 +348,6 @@ def create_metadata(zip_path):
 
 
 def create_archive(original_zip, metadata_dict, output_path):
-
     # Ensure metadata_version exists
     metadata_dict.setdefault(
         "metadata_version",
@@ -274,6 +365,7 @@ def create_archive(original_zip, metadata_dict, output_path):
 
     os.remove(temp_metadata_path)
 
+
 # ==============================
 # DATABASE
 # ==============================
@@ -285,7 +377,6 @@ def sha_exists(build_id, sha256):
             (build_id, sha256)
         ).fetchone()
         return row is not None
-
 
 def get_metadata_value(metadata, key, fallback=None):
     value = metadata.get(key)
@@ -300,277 +391,277 @@ def get_metadata_value(metadata, key, fallback=None):
 
 
 def insert_visual_novel(metadata):
-    conn = get_connection()
-    try:
-        # Wrap everything in an exclusive transaction to prevent race conditions
-        with exclusive_transaction(conn):
+    """
+    Inserts or updates the normalized metadata into the SQLite database.
+    """
 
-            title = metadata.get("title")
-            if not title:
-                raise Exception("Title is required.")
+    with get_connection() as conn:
+        # ==========================================================
+        # VALIDATE REQUIRED FIELDS
+        # ==========================================================
+        if not metadata.get("title"):
+            raise ValueError("Title is required.")
 
-            # -------------------------------------------------
-            # 1️⃣ SERIES NORMALIZATION
-            # -------------------------------------------------
-            series_name = metadata.get("series")
-            series_id = None
-
-            if series_name:
-                conn.execute("INSERT OR IGNORE INTO series (name) VALUES (?)", (series_name,))
-                series_row = conn.execute("SELECT id FROM series WHERE name = ?", (series_name,)).fetchone()
-                if series_row:
-                    series_id = series_row["id"]
-
-            # -------------------------------------------------
-            # 2️⃣ INSERT OR FETCH VISUAL NOVEL
-            # -------------------------------------------------
-            existing_row = conn.execute("SELECT id FROM visual_novels WHERE title = ?", (title,)).fetchone()
-            is_new_work = False
-
-            # Format aliases as JSON array
-            aliases_raw = metadata.get("aliases", [])
-            if isinstance(aliases_raw, str):
-                aliases_raw = [a.strip() for a in aliases_raw.split(",") if a.strip()]
-            aliases_json = json.dumps(aliases_raw, ensure_ascii=False) if aliases_raw else None
-
-            if existing_row:
-                vn_id = existing_row["id"]
-                # UPDATE existing VN details with any edits
-                conn.execute(
-                    """
-                    UPDATE visual_novels 
-                    SET aliases = ?, developer = ?, publisher = ?, release_status = ?, content_rating = ?
-                    WHERE id = ?
-                    """,
-                    (aliases_json, metadata.get("developer"), metadata.get("publisher"),
-                     metadata.get("release_status"), metadata.get("content_rating"), vn_id)
-                )
-            else:
-                is_new_work = True
-
-                cursor = conn.execute(
-                    """
-                    INSERT INTO visual_novels
-                    (series_id, title, aliases, developer, publisher, release_status, content_rating)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        series_id,
-                        title,
-                        aliases_json,
-                        metadata.get("developer"),
-                        metadata.get("publisher"),  # NEW FIELD
-                        metadata.get("release_status"),
-                        metadata.get("content_rating"),
-                    )
-                )
-                vn_id = cursor.lastrowid
-
-            # -------------------------------------------------
-            # 3️⃣ INSERT OR FETCH BUILD (FIXED BUG)
-            # -------------------------------------------------
-            build_version = metadata.get("version")
-            existing_build = conn.execute(
-                "SELECT id FROM builds WHERE vn_id = ? AND version = ?",
-                (vn_id, build_version)
+        # ==========================================================
+        # SERIES TABLE
+        # ==========================================================
+        series_id = None
+        if metadata.get("series"):
+            series_name = metadata["series"].strip()
+            series_row = conn.execute(
+                "SELECT id FROM series WHERE name = ?",
+                (series_name,)
             ).fetchone()
 
-            if existing_build:
-                build_id = existing_build["id"]
-                # UPDATE existing build details with any edits
-                conn.execute(
-                    """
-                    UPDATE builds
-                    SET build_type = ?, distribution_model = ?, distribution_platform = ?,
-                        language = ?, translator = ?, edition = ?, release_date = ?,
-                        engine = ?, engine_version = ?, base_archive_sha256 = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        metadata.get("build_type"), metadata.get("distribution_model"),
-                        metadata.get("distribution_platform"), metadata.get("language"),
-                        metadata.get("translator"), metadata.get("edition"),
-                        metadata.get("release_date"), metadata.get("engine"),
-                        metadata.get("engine_version"), metadata.get("base_archive_sha256"),
-                        build_id
-                    )
-                )
+            if series_row:
+                series_id = series_row["id"]
             else:
-                build_cursor = conn.execute(
-                    """
-                    INSERT INTO builds
-                    (vn_id, version, build_type, distribution_model, distribution_platform,
-                     language, translator, edition, release_date, engine, engine_version, base_archive_sha256)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        vn_id,
-                        build_version,
-                        metadata.get("build_type"),
-                        metadata.get("distribution_model"),
-                        metadata.get("distribution_platform"),
-                        metadata.get("language"),
-                        metadata.get("translator"),
-                        metadata.get("edition"),
-                        metadata.get("release_date"),
-                        metadata.get("engine"),
-                        metadata.get("engine_version"),
-                        metadata.get("base_archive_sha256"),
-                    )
-                )
-                build_id = build_cursor.lastrowid
+                conn.execute("INSERT INTO series (name) VALUES (?)", (series_name,))
+                series_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-            # -------------------------------------------------
-            # 4. PLATFORM NORMALIZATION
-            # -------------------------------------------------
-            raw_platforms = metadata.get("target_platform", [])
-            if isinstance(raw_platforms, str):
-                raw_platforms = [p.strip() for p in raw_platforms.split(",") if p.strip()]
-            elif not isinstance(raw_platforms, list):
-                raw_platforms = [raw_platforms]
+        # ==========================================================
+        # VISUAL_NOVELS TABLE
+        # ==========================================================
+        # Safely fetch aliases, defaulting to an empty list if None
+        aliases = metadata.get("aliases") or []
+        if isinstance(aliases, str):
+            aliases = [a.strip() for a in aliases.split(",") if a.strip()]
 
-            for platform in raw_platforms:
-                if not platform: continue
-                normalized = str(platform).strip().lower()
-                if not normalized: continue
-                conn.execute("INSERT OR IGNORE INTO target_platforms (name) VALUES (?)", (normalized,))
-                platform_row = conn.execute("SELECT id FROM target_platforms WHERE name = ?", (normalized,)).fetchone()
-                if platform_row:
-                    conn.execute("INSERT OR IGNORE INTO build_target_platforms (build_id, platform_id) VALUES (?, ?)",
-                                 (build_id, platform_row["id"]))
+        vn_exists = conn.execute(
+            "SELECT id FROM visual_novels WHERE title = ?",
+            (metadata["title"],)
+        ).fetchone()
 
-                    # -------------------------------------------------
-                    # 5️⃣ INSERT ARCHIVES
-                    # -------------------------------------------------
-                    archives_to_process = []
+        if vn_exists:
+            vn_id = vn_exists["id"]
+            conn.execute('''
+                UPDATE visual_novels SET 
+                    series_id = ?, canonical_slug = ?, aliases = ?, 
+                    developer = ?, publisher = ?, release_status = ?, 
+                    content_rating = ?
+                WHERE id = ?
+            ''', (
+                series_id,
+                slugify_component(metadata["title"], "unknown-title"),  # <--- ADDED FALLBACK
+                json.dumps(aliases),
+                metadata.get("developer"), metadata.get("publisher"),
+                metadata.get("release_status"), metadata.get("content_rating"),
+                vn_id
+            ))
+        else:
+            conn.execute('''
+                INSERT INTO visual_novels (
+                    series_id, title, canonical_slug, aliases, 
+                    developer, publisher, release_status, content_rating
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                series_id,
+                metadata["title"],
+                slugify_component(metadata["title"], "unknown-title"),  # <--- ADDED FALLBACK
+                json.dumps(aliases), metadata.get("developer"),
+                metadata.get("publisher"), metadata.get("release_status"),
+                metadata.get("content_rating")
+            ))
+            vn_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-                    # 1. Check for a single top-level archive definition
-                    top_level_sha = get_metadata_value(metadata, "sha256",
-                                                       get_metadata_value(metadata, "archive.sha256"))
-                    if top_level_sha:
-                        archives_to_process.append({
-                            "sha256": top_level_sha,
-                            "file_size_bytes": get_metadata_value(metadata, "file_size_bytes",
-                                                                  get_metadata_value(metadata,
-                                                                                     "archive.file_size") or 0)
-                        })
+        # ==========================================================
+        # TAGS
+        # ==========================================================
+        # Safely fetch tags, defaulting to an empty list if None
+        tags = metadata.get("tags") or []
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(",") if t.strip()]
 
-                    # 2. Check for multi-archive list (from the YAML template)
-                    multi_archives = metadata.get("archives", [])
-                    if isinstance(multi_archives, list):
-                        for arch in multi_archives:
-                            # Make sure the array item is actually a dictionary and has a SHA
-                            if isinstance(arch, dict) and arch.get("sha256"):
-                                archives_to_process.append({
-                                    "sha256": arch.get("sha256"),
-                                    "file_size_bytes": arch.get("file_size_bytes", 0)
-                                })
+        conn.execute("DELETE FROM vn_tags WHERE vn_id = ?", (vn_id,))
+        for t in tags:
+            tag_id = conn.execute("SELECT id FROM tags WHERE name = ?", (t,)).fetchone()
+            if not tag_id:
+                conn.execute("INSERT INTO tags (name) VALUES (?)", (t,))
+                tag_id = {"id": conn.execute("SELECT last_insert_rowid()").fetchone()[0]}
 
-                    # 3. Insert all gathered archives safely
-                    for arch_data in archives_to_process:
-                        sha256 = arch_data["sha256"]
-                        file_size = arch_data["file_size_bytes"]
+            conn.execute("INSERT INTO vn_tags (vn_id, tag_id) VALUES (?, ?)", (vn_id, tag_id["id"]))
 
-                        archive_exists = conn.execute(
-                            "SELECT id FROM archives WHERE build_id = ? AND sha256 = ?",
-                            (build_id, sha256)
-                        ).fetchone()
+        # ==========================================================
+        # BUILDS TABLE
+        # ==========================================================
+        build_exists = conn.execute(
+            "SELECT id FROM builds WHERE vn_id = ? AND version = ?",
+            (vn_id, metadata.get("version", "1.0"))
+        ).fetchone()
 
-                        if not archive_exists:
-                            conn.execute(
-                                """
-                                INSERT INTO archives
-                                (build_id, sha256, file_size_bytes, metadata_json, metadata_version)
-                                VALUES (?, ?, ?, ?, ?)
-                                """,
-                                (
-                                    build_id,
-                                    sha256,
-                                    file_size,
-                                    json.dumps(metadata, ensure_ascii=False),
-                                    metadata.get("metadata_version", 1),
-                                )
-                            )
+        if build_exists:
+            build_id = build_exists["id"]
+            conn.execute('''
+                UPDATE builds SET 
+                    build_type = ?, distribution_model = ?, distribution_platform = ?,
+                    language = ?, edition = ?, release_date = ?, engine = ?, engine_version = ?,
+                    base_archive_sha256 = ?
+                WHERE id = ?
+            ''', (
+                metadata.get("build_type"), metadata.get("distribution_model"),
+                metadata.get("distribution_platform"), metadata.get("language"),
+                metadata.get("edition"), metadata.get("release_date"),
+                metadata.get("engine"), metadata.get("engine_version"),
+                metadata.get("base_archive_sha256"),
+                build_id
+            ))
+        else:
+            conn.execute('''
+                INSERT INTO builds (
+                    vn_id, version, build_type, distribution_model,
+                    distribution_platform, language, edition, release_date,
+                    engine, engine_version, base_archive_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                vn_id, metadata.get("version", "1.0"),
+                metadata.get("build_type"), metadata.get("distribution_model"),
+                metadata.get("distribution_platform"), metadata.get("language"),
+                metadata.get("edition"), metadata.get("release_date"),
+                metadata.get("engine"), metadata.get("engine_version"),
+                metadata.get("base_archive_sha256")
+            ))
+            build_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-            # -------------------------------------------------
-            # 6️⃣ TAG NORMALIZATION
-            # -------------------------------------------------
-            tags = metadata.get("tags") or []
-            if isinstance(tags, str):
-                tags = [t.strip() for t in tags.split(",") if t.strip()]
-            elif not isinstance(tags, list):
-                tags = [tags]
+        # ==========================================================
+        # TARGET PLATFORMS
+        # ==========================================================
+        # Safely fetch target platforms, defaulting to an empty list if None
+        target_platforms = metadata.get("target_platform") or []
+        if isinstance(target_platforms, str):
+            target_platforms = [p.strip() for p in target_platforms.split(",") if p.strip()]
 
-            for tag in tags:
-                if not tag: continue
-                conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
-                tag_row = conn.execute("SELECT id FROM tags WHERE name = ?", (tag,)).fetchone()
-                if tag_row:
-                    conn.execute("INSERT OR IGNORE INTO vn_tags (vn_id, tag_id) VALUES (?, ?)", (vn_id, tag_row["id"]))
+        conn.execute("DELETE FROM build_target_platforms WHERE build_id = ?", (build_id,))
+        for p in target_platforms:
+            plat_id = conn.execute("SELECT id FROM target_platforms WHERE name = ?", (p,)).fetchone()
+            if not plat_id:
+                conn.execute("INSERT INTO target_platforms (name) VALUES (?)", (p,))
+                plat_id = {"id": conn.execute("SELECT last_insert_rowid()").fetchone()[0]}
 
-            # -------------------------------------------------
-            # 7️⃣ CANON RELATIONSHIPS
-            # -------------------------------------------------
-            if is_new_work:
-                parent_title = metadata.get("parent_vn_title")
-                relationship_type = metadata.get("relationship_type")
-                if parent_title and relationship_type:
-                    parent_row = conn.execute("SELECT id FROM visual_novels WHERE title = ?",
-                                              (parent_title,)).fetchone()
-                    if parent_row:
-                        conn.execute(
-                            "INSERT OR IGNORE INTO canon_relationships (parent_vn_id, child_vn_id, relationship_type) VALUES (?, ?, ?)",
-                            (parent_row["id"], vn_id, relationship_type))
+            conn.execute("INSERT INTO build_target_platforms (build_id, platform_id) VALUES (?, ?)",
+                         (build_id, plat_id["id"]))
 
-            # -------------------------------------------------
-            # 8️⃣ METADATA VERSIONING (NEW)
-            # -------------------------------------------------
-            # Generate a consistent string to hash
-            canonical_json = json.dumps(metadata, sort_keys=True, ensure_ascii=False)
-            metadata_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
-            schema_version = metadata.get("metadata_version", 1)
+        # ==========================================================
+        # ARCHIVES TABLE
+        # ==========================================================
+        archives_to_process = []
 
-            # Insert immutable blob into metadata_objects
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO metadata_objects (hash, schema_version, metadata_json)
-                VALUES (?, ?, ?)
-                """,
-                (metadata_hash, schema_version, canonical_json)
-            )
+        # 1. Gather Top-Level Archive
+        top_level_sha = metadata.get("sha256")
+        if not top_level_sha and "archive" in metadata and isinstance(metadata["archive"], dict):
+            top_level_sha = metadata["archive"].get("sha256")
 
-            # Check if this exact metadata hash is already the current version
-            current_ver = conn.execute(
-                "SELECT metadata_hash FROM metadata_versions WHERE vn_id = ? AND is_current = 1",
-                (vn_id,)
+        if top_level_sha:
+            archives_to_process.append({
+                "sha256": top_level_sha,
+                "file_size": metadata.get("file_size_bytes", 0)
+            })
+
+        # 2. Gather Sub-Archives
+        if "archives" in metadata and isinstance(metadata["archives"], list):
+            for arch in metadata["archives"]:
+                if isinstance(arch, dict) and arch.get("sha256"):
+                    archives_to_process.append({
+                        "sha256": arch.get("sha256"),
+                        "file_size": arch.get("file_size_bytes", 0)
+                    })
+
+        print(Fore.CYAN + f"\n[DEBUG] Found {len(archives_to_process)} archive(s) to process for DB.")
+
+        for arch_data in archives_to_process:
+            sha256 = arch_data.get("sha256")
+            file_size = arch_data.get("file_size", 0)
+
+            if not sha256:
+                print(Fore.RED + "[DEBUG] Skipping archive insertion - missing SHA256.")
+                continue
+
+            archive_exists = conn.execute(
+                "SELECT id FROM archives WHERE build_id = ? AND sha256 = ?",
+                (build_id, sha256)
             ).fetchone()
 
-            if not current_ver or current_ver["metadata_hash"] != metadata_hash:
-                # Turn off the old active version
-                conn.execute("UPDATE metadata_versions SET is_current = 0 WHERE vn_id = ?", (vn_id,))
+            if not archive_exists:
+                print(Fore.YELLOW + f"[DEBUG] Executing SQL INSERT INTO archives for {sha256[:8]}...")
+                try:
+                    conn.execute('''
+                        INSERT INTO archives (
+                            build_id, sha256, file_size_bytes, 
+                            metadata_json, metadata_version
+                        ) VALUES (?, ?, ?, ?, ?)
+                    ''', (
+                        build_id,
+                        sha256,
+                        file_size,
+                        json.dumps(metadata),
+                        metadata.get("metadata_version", 1)
+                    ))
+                    print(Fore.GREEN + f"[DEBUG] Successfully queued archive {sha256[:8]} for commit.")
+                except Exception as ex:
+                    print(Fore.RED + f"[CRITICAL] SQL Archive Insert Failed: {ex}")
+            else:
+                print(Fore.MAGENTA + f"[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.")
 
-                # Fetch the next sequential version number
-                cursor = conn.execute("SELECT MAX(version_number) FROM metadata_versions WHERE vn_id = ?", (vn_id,))
-                current_max = cursor.fetchone()[0]
-                next_version = (current_max or 0) + 1
+                # ==========================================================
+                # UPDATE METADATA OBJECTS DB & FORCE COMMIT
+                # ==========================================================
+                # Safely parse the metadata version as an integer
+                try:
+                    db_version_number = int(metadata.get("metadata_version") or 1)
+                except (ValueError, TypeError):
+                    db_version_number = 1
 
-                # Insert the new version history
-                conn.execute(
-                    """
-                    INSERT INTO metadata_versions (vn_id, metadata_hash, version_number, is_current)
-                    VALUES (?, ?, ?, 1)
-                    """,
-                    (vn_id, metadata_hash, next_version)
-                )
+                # Safely parse file size as an integer (prevents empty string from crashing SQLite)
+                try:
+                    file_size_val = int(metadata.get("file_size_bytes") or 0)
+                except (ValueError, TypeError):
+                    file_size_val = 0
 
-        return vn_id
-    finally:
-        conn.close()
+                if top_level_sha:
+                    try:
+                        # Safely dump JSON using the globally defined helper
+                        safe_metadata_json = json.dumps(metadata, default=safe_json_serialize)
+
+                        conn.execute('''
+                            INSERT OR IGNORE INTO metadata_objects (hash, storage_path, file_size, raw_json)
+                            VALUES (?, ?, ?, ?)
+                        ''', (top_level_sha, "local_only", file_size_val, safe_metadata_json))
+
+                        conn.execute('''
+                            INSERT OR IGNORE INTO metadata_versions (vn_id, metadata_hash, version_number)
+                            VALUES (?, ?, ?)
+                        ''', (vn_id, top_level_sha, db_version_number))
+
+                        conn.execute('''
+                            UPDATE metadata_versions 
+                            SET metadata_hash = ?
+                            WHERE vn_id = ? AND version_number = ?
+                        ''', (top_level_sha, vn_id, db_version_number))
+
+                        print(Fore.GREEN + f"[DEBUG] Successfully finalized metadata_objects for {top_level_sha[:8]}.")
+
+                    except Exception as e:
+                        print(Fore.RED + f"[CRITICAL] Final DB commit failed: {e}")
+                        raise e
+                else:
+                    print(Fore.YELLOW + "[DEBUG] No top_level_sha present; skipping metadata_objects update.")
+
+                # Attempt the final commit with explicit error catching
+                try:
+                    conn.commit()
+                    print(Fore.GREEN + "[DEBUG] Database transaction committed successfully!")
+                except Exception as e:
+                    print(Fore.RED + f"[CRITICAL] SQLite Commit Failed: {e}")
+                    raise e
+
+                # ==========================================================
+                # RETURN VALUE (Crucial for the TUI to know it succeeded!)
+                # ==========================================================
+                return vn_id
+
 
 # ==============================
 # BACKBLAZE
 # ==============================
-
 def get_b2_api():
     key_id, application_key, _, _ = load_b2_config()
 
@@ -664,8 +755,8 @@ def upload_to_b2(filepath, remote_folder=None):
             sys.stdout.write(
                 f"\rUploading: [{bar}] "
                 f"{percent:6.2f}% "
-                f"{byte_count/1024/1024:8.2f}MB / {self.total_bytes/1024/1024:8.2f}MB "
-                f"{speed/1024/1024:6.2f} MB/s"
+                f"{byte_count / 1024 / 1024:8.2f}MB / {self.total_bytes / 1024 / 1024:8.2f}MB "
+                f"{speed / 1024 / 1024:6.2f} MB/s"
             )
             sys.stdout.flush()
 
@@ -688,8 +779,6 @@ def upload_to_b2(filepath, remote_folder=None):
 
 
 def move_uploaded_archive(file_path):
-
-
     if not os.path.exists(UPLOADED_DIR):
         os.makedirs(UPLOADED_DIR)
 
@@ -711,14 +800,12 @@ def move_uploaded_archive(file_path):
     except Exception as e:
         print(Fore.RED + f"Failed to move {file_name}: {e}")
 
+
 # ==============================
 # ARCHIVE CREATION ONLY
 # ==============================
 
 def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VERSION):
-    from colorama import Fore, Style
-    import shutil
-
     if archive_paths is None:
         archive_paths = []
     elif isinstance(archive_paths, str):
@@ -785,17 +872,40 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         if field in ("tags", "target_platform", "aliases"):
             suggestions = FIELD_SUGGESTIONS.get(field) or []
             if suggestions:
-                print(Fore.CYAN + f"Suggested {field}:")
-                print(", ".join(suggestions))
-            value = input(Fore.YELLOW + f"{field} (comma separated): " + Style.RESET_ALL).strip()
-            metadata[field] = normalize_list(value)
+                print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
+            raw_val = input(Fore.YELLOW + f"{field} (comma separated): ").strip()
+            metadata[field] = normalize_list(raw_val)
+
+        # ==========================================
+        # ADD THIS NEW ELIF BLOCK FOR THE SHA256
+        # ==========================================
+        elif field == "base_archive_sha256":
+            print(
+                Fore.CYAN + "\n[Dependency] This links dependent archives (e.g., patches, fan-discs, mods, engine-ports) to their base game.")
+
+            # 1. Ask the user if a dependency exists
+            has_dep = input(Fore.YELLOW + "Does this archive depend on a base game/archive? [y/N]: ").strip().lower()
+
+            if has_dep in ('y', 'yes'):
+                # 2. If yes, proceed to the database lookup function
+                current_series = metadata.get("series")
+                current_title = metadata.get("title")
+
+                selected_sha = select_base_archive_from_db(current_series, current_title)
+                if selected_sha:
+                    metadata[field] = selected_sha
+            else:
+                # 3. If no, skip and proceed with insertion
+                print(Fore.MAGENTA + "Skipping dependency linking. Treating as a standalone archive.")
+        # ==========================================
+
         else:
-            suggestions = FIELD_SUGGESTIONS.get(field)
+            suggestions = FIELD_SUGGESTIONS.get(field) or []
             if suggestions:
-                print(Fore.CYAN + f"Suggested {field}:")
-                print(", ".join(suggestions))
-            value = input(Fore.YELLOW + f"{field}: " + Style.RESET_ALL).strip()
-            metadata[field] = value if value else None
+                print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
+            raw_val = input(Fore.YELLOW + f"{field}: ").strip()
+            if raw_val:
+                metadata[field] = raw_val
 
     # -------------------------------------------------------------------
     # 3. Inject the multi-archive data
@@ -875,6 +985,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         print(Fore.GREEN + f"\nMetadata saved to: {meta_path}")
         print(Fore.GREEN + "Metadata creation complete!")
 
+
 def move_original_to_uploaded_local(original_filepath, metadata):
     """Move original zip to uploaded/<title>/Latest Version/ using local naming only."""
     if not os.path.exists(original_filepath):
@@ -930,11 +1041,11 @@ def move_file_to_uploaded_dir(source_filepath, target_dir, destination_name=None
     shutil.move(source_filepath, destination)
     return str(destination)
 
+
 # ==============================
 # STRUCTURED ARCHIVE UPLOAD
 # ==============================
 def get_b2_bucket():
-
     # 1. Check if the config file exists
     if not os.path.exists(B2_CONFIG_FILE):
         print(Fore.RED + f"Config file '{B2_CONFIG_FILE}' not found.")
@@ -980,8 +1091,6 @@ def get_b2_bucket():
 
 
 def upload_archive(file_path):
-
-
     if not os.path.exists(file_path):
         print(Fore.RED + f"File not found: {file_path}")
         return False
@@ -1135,6 +1244,7 @@ def upload_archive(file_path):
             print(Fore.RED + f"Notice: Non-fatal database update error: {e}")
 
     return True
+
 
 def slugify_component(value, fallback):
     """
