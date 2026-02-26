@@ -11,7 +11,7 @@ import yaml
 import zipfile
 from tqdm import tqdm
 from colorama import Fore
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from db_manager import get_connection
@@ -432,7 +432,12 @@ def upsert_visual_novel_record(conn, metadata, series_id):
     title = metadata['title']
 
     vn_exists = conn.execute(
-        'SELECT id, description, source FROM visual_novels WHERE title = ?',
+        '''
+        SELECT id, developer, publisher, description,
+               release_status, content_rating, source
+        FROM visual_novels
+        WHERE title = ?
+        ''',
         (title,)
     ).fetchone()
 
