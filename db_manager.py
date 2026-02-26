@@ -7,7 +7,7 @@ SCHEMA_PATH = "db_schema.sql"
 
 # Define the current required version of your database schema
 # Increment this number by 1 every time you make a change to db_schema.sql!
-TARGET_SCHEMA_VERSION = 2
+TARGET_SCHEMA_VERSION = 1
 
 
 def get_connection():
