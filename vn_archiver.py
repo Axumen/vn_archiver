@@ -208,10 +208,94 @@ def load_b2_config(config_path=B2_CONFIG_FILE):
     return key_id, application_key, bucket_name, bool(dry_run)
 
 
+def select_base_archive_from_db(current_series=None, current_title=None):
+    from db_manager import get_connection
+    from colorama import Fore
+
+    with get_connection() as conn:
+        # Base query to fetch standard standalone games
+        base_query = '''
+            SELECT a.sha256, v.title, b.version, b.build_type, s.name as series_name
+            FROM archives a
+            JOIN builds b ON a.build_id = b.id
+            JOIN visual_novels v ON b.vn_id = v.id
+            LEFT JOIN series s ON v.series_id = s.id
+            WHERE b.build_type IN ('full', 'release-candidate')
+        '''
+
+        rows = []
+        use_filter = False
+
+        # 1. Ask the user if they want to filter using the context they just provided
+        if current_series or current_title:
+            filter_desc = []
+            if current_series: filter_desc.append(f"Series: '{current_series}'")
+            if current_title: filter_desc.append(f"Title: '{current_title}'")
+
+            print(Fore.CYAN + f"\nDetected contextual info: {' and '.join(filter_desc)}")
+            ans = input(Fore.YELLOW + "Filter available base archives using this info? [Y/n]: ").strip().lower()
+
+            if ans in ('', 'y', 'yes'):
+                use_filter = True
+                conditions = []
+                params = []
+                if current_series:
+                    conditions.append("s.name LIKE ?")
+                    params.append(f"%{current_series}%")
+                if current_title:
+                    conditions.append("v.title LIKE ?")
+                    params.append(f"%{current_title}%")
+
+                query = base_query + " AND (" + " OR ".join(conditions) + ") ORDER BY v.title, b.version"
+                rows = conn.execute(query, params).fetchall()
+
+                if not rows:
+                    print(
+                        Fore.RED + "No matching base archives found with that filter. Falling back to the entire database...")
+                    use_filter = False
+
+        # 2. If user said 'No' or the filter returned 0 results, show the whole database
+        if not use_filter:
+            query = base_query + " ORDER BY v.title, b.version"
+            rows = conn.execute(query).fetchall()
+
+    # 3. Handle edge case where the database is completely empty
+    if not rows:
+        print(Fore.RED + "No base archives found in the database.")
+        return input(Fore.YELLOW + "Enter base_archive_sha256 manually (or press Enter to skip): ").strip()
+
+    # 4. Display the formatted menu
+    print(Fore.MAGENTA + "\nAvailable Base Archives:")
+    for i, row in enumerate(rows, 1):
+        series_str = f"[{row['series_name']}] " if row['series_name'] else ""
+        print(
+            Fore.GREEN + f"{i}) {series_str}{row['title']} (v{row['version']}) [{row['build_type']}] -> {row['sha256'][:8]}...")
+
+    # 5. Process user choice
+    choice = input(Fore.YELLOW + "\nSelect the base archive number (or press Enter to paste manually): ").strip()
+    try:
+        if choice:
+            idx = int(choice) - 1
+            if 0 <= idx < len(rows):
+                return rows[idx]['sha256']
+    except ValueError:
+        pass
+
+    # Fallback if they just press Enter to paste a hash manually
+    return input(Fore.YELLOW + "base_archive_sha256: ").strip()
+
 def prompt_field(field_name, current_value):
+    # Existing content_type suggestion logic...
     if field_name == "content_type":
         print("\nSuggested content_type:")
         print(", ".join(SUGGESTED_CONTENT_TYPE))
+
+    # Add specific handling for base_archive_sha256
+    if field_name == "base_archive_sha256":
+        selected_sha = select_base_archive_from_db()
+        if selected_sha:
+            print(f"Selected SHA: {selected_sha}")
+            return selected_sha
 
     value = input(f"{field_name} [{current_value}]: ").strip()
     return value if value else current_value
@@ -225,6 +309,37 @@ def prompt_tags():
         return []
     return [t.strip() for t in user_input.split(",")]
 
+
+def select_base_archive_from_db():
+    from db_manager import get_connection
+    with get_connection() as conn:
+        # Fetch existing archives that are likely "base" games (e.g., full builds)
+        rows = conn.execute('''
+            SELECT a.sha256, v.title, b.version, b.build_type
+            FROM archives a
+            JOIN builds b ON a.build_id = b.id
+            JOIN visual_novels v ON b.vn_id = v.id
+            WHERE b.build_type IN ('full', 'release-candidate')
+            ORDER BY v.title, b.version
+        ''').fetchall()
+
+    if not rows:
+        return None
+
+    print("\nAvailable Base Archives in Database:")
+    for i, row in enumerate(rows, 1):
+        print(f"{i}) {row['title']} (v{row['version']}) [{row['build_type']}] - {row['sha256'][:8]}...")
+
+    choice = input("\nSelect the base archive number (or press Enter to skip/paste manually): ").strip()
+    try:
+        if choice:
+            idx = int(choice) - 1
+            if 0 <= idx < len(rows):
+                return rows[idx]['sha256']
+    except ValueError:
+        pass
+
+    return None
 
 def create_metadata(zip_path):
     template = load_metadata_template()
@@ -785,17 +900,33 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         if field in ("tags", "target_platform", "aliases"):
             suggestions = FIELD_SUGGESTIONS.get(field) or []
             if suggestions:
-                print(Fore.CYAN + f"Suggested {field}:")
-                print(", ".join(suggestions))
-            value = input(Fore.YELLOW + f"{field} (comma separated): " + Style.RESET_ALL).strip()
-            metadata[field] = normalize_list(value)
+                print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
+            raw_val = input(Fore.YELLOW + f"{field} (comma separated): ").strip()
+            metadata[field] = normalize_list(raw_val)
+
+        # ==========================================
+        # ADD THIS NEW ELIF BLOCK FOR THE SHA256
+        # ==========================================
+        elif field == "base_archive_sha256":
+            print(
+                Fore.CYAN + "\n[Dependency] Use this for ANY dependent archive (e.g., patch, fan-disc, append-disc, mod, engine-port).")
+
+            # Fetch the context the user just typed earlier in the loop
+            current_series = metadata.get("series")
+            current_title = metadata.get("title")
+
+            selected_sha = select_base_archive_from_db(current_series, current_title)
+            if selected_sha:
+                metadata[field] = selected_sha
+        # ==========================================
+
         else:
-            suggestions = FIELD_SUGGESTIONS.get(field)
+            suggestions = FIELD_SUGGESTIONS.get(field) or []
             if suggestions:
-                print(Fore.CYAN + f"Suggested {field}:")
-                print(", ".join(suggestions))
-            value = input(Fore.YELLOW + f"{field}: " + Style.RESET_ALL).strip()
-            metadata[field] = value if value else None
+                print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
+            raw_val = input(Fore.YELLOW + f"{field}: ").strip()
+            if raw_val:
+                metadata[field] = raw_val
 
     # -------------------------------------------------------------------
     # 3. Inject the multi-archive data

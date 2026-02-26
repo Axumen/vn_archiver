@@ -42,7 +42,6 @@ optional:
   - engine
   - engine_version
   - target_platform
-  - base_archive_sha256 # Added: Useful for patches/append discs to link to the base game
 
   # -------------------------------------
   # CANON RELATIONSHIPS
@@ -55,6 +54,8 @@ optional:
   # -------------------------------------
   - source
   - notes
+  - base_archive_sha256 # Added: Useful for patches/append discs to link to the base game
+
 
 # Multi-archive support (optional)
 archives:
