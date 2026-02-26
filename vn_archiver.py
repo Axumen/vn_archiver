@@ -1109,6 +1109,10 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         print(Fore.RED + "Failed to insert visual novel into database.")
         return
 
+    metadata_version_number = get_current_metadata_version_number(vn_id)
+    print(Fore.CYAN + f"\nMetadata (v{metadata_version_number}) preview:")
+    print(Fore.WHITE + yaml.dump(metadata, sort_keys=False, allow_unicode=True))
+
     # -------------------------------------------------------------------
     # 5 & 6. Create Sidecar Directory Structure
     # -------------------------------------------------------------------
@@ -1141,8 +1145,9 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
 
         print(Fore.CYAN + f"\nMoving files to upload queue directory: {uploaded_dest_dir}...")
 
-        # Write metadata.yaml loosely in the folder
-        meta_path = os.path.join(uploaded_dest_dir, "metadata.yaml")
+        bundle_sha = metadata.get("sha256") or (archives_data[0].get("sha256") if archives_data else "")
+        meta_filename = build_recommended_metadata_name(metadata, bundle_sha, metadata_version_number)
+        meta_path = os.path.join(uploaded_dest_dir, meta_filename)
         with open(meta_path, "w", encoding="utf-8") as f:
             yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
 
@@ -1152,10 +1157,18 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         ensure_clean_directory(vn_archive_version_dir)
 
         for arch in archives_data:
-            dest_file = os.path.join(uploaded_dest_dir, arch["filename"])
+            original_ext = os.path.splitext(arch["filename"])[1].lower() or ".zip"
+            recommended_name = build_recommended_archive_name(
+                metadata,
+                arch.get("sha256"),
+                metadata_version_number,
+                ext=original_ext
+            )
+
+            dest_file = os.path.join(uploaded_dest_dir, recommended_name)
             shutil.move(arch["original_path"], dest_file)
 
-            vn_archive_copy = vn_archive_version_dir / arch["filename"]
+            vn_archive_copy = vn_archive_version_dir / recommended_name
             shutil.copy2(dest_file, vn_archive_copy)
 
             try:
@@ -1171,7 +1184,8 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
 
     else:
         # Option 1 Fallback (No physical files selected)
-        meta_filename = "metadata.yaml"
+        bundle_sha = metadata.get("sha256") or get_nested_value(metadata, "archive.sha256")
+        meta_filename = build_recommended_metadata_name(metadata, bundle_sha, metadata_version_number)
         meta_path = os.path.join(PROCESSED_DIR, meta_filename)
 
         with open(meta_path, "w", encoding="utf-8") as f:
@@ -1189,9 +1203,17 @@ def move_original_to_uploaded_local(original_filepath, metadata):
     target_dir = get_uploading_latest_dir(metadata)
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    title = format_uploaded_component(metadata.get("title"), "Unknown Title")
-    build_version = format_uploaded_component(metadata.get("version"), "unknown")
-    cleaned_name = f"{title} {build_version}.zip"
+    original_sha = sha256_file(original_filepath)
+    ext = os.path.splitext(original_filepath)[1].lower() or '.zip'
+
+    vn_id = None
+    with get_connection() as conn:
+        vn_row = conn.execute('SELECT id FROM visual_novels WHERE title = ?', (metadata.get('title'),)).fetchone()
+        if vn_row:
+            vn_id = vn_row['id']
+
+    metadata_version_number = get_current_metadata_version_number(vn_id) if vn_id else 1
+    cleaned_name = build_recommended_archive_name(metadata, original_sha, metadata_version_number, ext=ext)
 
     uploading_path = move_file_to_uploaded_dir(original_filepath, target_dir, cleaned_name)
 
@@ -1210,14 +1232,53 @@ def move_processed_metadata_to_uploaded(metadata_filepath, metadata):
     if not os.path.exists(metadata_filepath):
         raise Exception("Metadata file not found for post-upload move.")
 
+    vn_id = None
+    with get_connection() as conn:
+        vn_row = conn.execute('SELECT id FROM visual_novels WHERE title = ?', (metadata.get('title'),)).fetchone()
+        if vn_row:
+            vn_id = vn_row['id']
+
+    metadata_version_number = get_current_metadata_version_number(vn_id) if vn_id else 1
+    meta_sha = metadata.get('sha256') or get_nested_value(metadata, 'archive.sha256')
+    cleaned_name = build_recommended_metadata_name(metadata, meta_sha, metadata_version_number)
+
     target_dir = get_uploading_latest_dir(metadata)
-    return move_file_to_uploaded_dir(metadata_filepath, target_dir)
+    return move_file_to_uploaded_dir(metadata_filepath, target_dir, cleaned_name)
 
 
 def format_uploaded_component(value, fallback):
     text = str(value or "").replace("_", " ").strip()
     text = " ".join(text.split())
     return text or fallback
+
+
+def get_current_metadata_version_number(vn_id):
+    """Return the active metadata_versions.version_number for a VN."""
+    if not vn_id:
+        return 1
+
+    with get_connection() as conn:
+        row = conn.execute(
+            'SELECT version_number FROM metadata_versions WHERE vn_id = ? AND is_current = 1',
+            (vn_id,)
+        ).fetchone()
+
+    return int(row['version_number']) if row and row['version_number'] is not None else 1
+
+
+def build_recommended_archive_name(metadata, sha256, metadata_version_number, ext='.zip'):
+    title_slug = slugify_component(metadata.get('title'), 'unknown')
+    version_slug = slugify_component(metadata.get('version'), 'unknown')
+    short_hash = (sha256 or 'nohash')[:8]
+    safe_ext = ext if ext.startswith('.') else f'.{ext}'
+    return f"{title_slug}_{version_slug}_{short_hash}_v{metadata_version_number}{safe_ext}"
+
+
+def build_recommended_metadata_name(metadata, sha256, metadata_version_number):
+    title_slug = slugify_component(metadata.get('title'), 'unknown')
+    version_slug = slugify_component(metadata.get('version'), 'unknown')
+    short_hash = (sha256 or 'nohash')[:8]
+    return f"{title_slug}_{version_slug}_{short_hash}_v{metadata_version_number}_meta.yaml"
 
 
 def normalize_version_for_sort(version_text):
@@ -1430,11 +1491,23 @@ def upload_archive(file_path):
 
     ext = os.path.splitext(file_path)[1].lower()
 
-    # Standardized 5-digit padding for VN ID sorting
-    file_name = f"{title_slug}_{version_slug}_{short_hash}{ext}"
+    metadata_version_number = get_current_metadata_version_number(vn_id)
+
+    # Standardized naming (includes metadata version counter)
+    file_name = build_recommended_archive_name(metadata, bundle_sha256, metadata_version_number, ext=ext)
     cloud_path = f"archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{file_name}"
 
     print(Fore.GREEN + f"Database verification passed (VN ID: {vn_id})")
+
+    # Ensure queued local file uses the same recommended naming scheme
+    current_name = os.path.basename(file_path)
+    if current_name != file_name:
+        renamed_local_path = os.path.join(os.path.dirname(file_path), file_name)
+        if os.path.exists(renamed_local_path):
+            os.remove(renamed_local_path)
+        os.rename(file_path, renamed_local_path)
+        file_path = renamed_local_path
+        print(Fore.CYAN + f"Renamed queued archive to: {file_name}")
 
     file_size = os.path.getsize(file_path)
 

@@ -6,8 +6,8 @@ DB_PATH = "archive.db"
 SCHEMA_PATH = "db_schema.sql"
 
 # Define the current required version of your database schema
-# Increment this number by 1 every time you make a change to db_schema.sql!
-TARGET_SCHEMA_VERSION = 1
+## Increment this number only when a schema migration is required for existing DBs.
+TARGET_SCHEMA_VERSION = 2
 
 
 def get_connection():
