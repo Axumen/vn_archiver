@@ -20,7 +20,9 @@ from vn_archiver import (
     resolve_prompt_fields,
     get_available_metadata_template_versions,
     detect_latest_metadata_template_version,
-    insert_visual_novel
+    insert_visual_novel,
+    get_current_metadata_version_number,
+    stage_metadata_yaml_for_upload
 )
 
 init(autoreset=True)
@@ -417,8 +419,16 @@ def edit_metadata_only():
             return
 
         # Pass the updated metadata back to the insert function
-        insert_visual_novel(updated_metadata)
+        vn_id = insert_visual_novel(updated_metadata)
         print(Fore.GREEN + "\nMetadata successfully updated!")
+
+        metadata_version_number = get_current_metadata_version_number(vn_id)
+        print(Fore.CYAN + f"\nUpdated Metadata Copy (v{metadata_version_number}):")
+        print(Fore.WHITE + yaml.dump(updated_metadata, sort_keys=False, allow_unicode=True))
+
+        staged_path = stage_metadata_yaml_for_upload(updated_metadata, metadata_version_number)
+
+        print(Fore.GREEN + f"Staged metadata copy for upload: {staged_path}")
 
     except Exception as e:
         print(Fore.RED + f"\nFailed to save metadata: {e}")
