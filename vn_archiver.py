@@ -537,7 +537,7 @@ def upsert_build_record(conn, vn_id, metadata):
     build_exists = conn.execute(
         '''
         SELECT id, build_type, distribution_model, distribution_platform,
-               language, translator, edition, release_date, engine,
+               language, translator, edition, original_release_date, release_date, engine,
                engine_version, source, base_archive_sha256
         FROM builds
         WHERE vn_id = ? AND version = ?
@@ -559,6 +559,7 @@ def upsert_build_record(conn, vn_id, metadata):
         effective('language'),
         effective('translator'),
         effective('edition'),
+        effective('original_release_date'),
         effective('release_date'),
         effective('engine'),
         effective('engine_version'),
@@ -571,7 +572,7 @@ def upsert_build_record(conn, vn_id, metadata):
         conn.execute('''
             UPDATE builds SET
                 build_type = ?, distribution_model = ?, distribution_platform = ?,
-                language = ?, translator = ?, edition = ?, release_date = ?,
+                language = ?, translator = ?, edition = ?, original_release_date = ?, release_date = ?,
                 engine = ?, engine_version = ?, source = ?, base_archive_sha256 = ?
             WHERE id = ?
         ''', values + (build_id,))
@@ -581,8 +582,8 @@ def upsert_build_record(conn, vn_id, metadata):
         INSERT INTO builds (
             vn_id, version, build_type, distribution_model,
             distribution_platform, language, translator, edition,
-            release_date, engine, engine_version, source, base_archive_sha256
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            original_release_date, release_date, engine, engine_version, source, base_archive_sha256
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         vn_id,
         build_version,

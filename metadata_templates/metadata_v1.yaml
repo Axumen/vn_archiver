@@ -40,6 +40,7 @@ optional:
   - language
   - translator          # Added: Fan-translation group or official translator
   - edition
+  - original_release_date
   - release_date
   - engine
   - engine_version
