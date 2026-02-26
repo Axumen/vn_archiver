@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS builds (
     language TEXT,
     translator TEXT,
     edition TEXT,
+    original_release_date TEXT,
     release_date TEXT,
     
     engine TEXT,
