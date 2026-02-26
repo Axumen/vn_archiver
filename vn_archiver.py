@@ -1454,7 +1454,7 @@ def upload_archive(file_path):
         print(Fore.YELLOW + "Skipping Backblaze upload. Linking database records...")
 
         with get_connection() as conn:
-            conn.execute("UPDATE builds SET status = ? WHERE id = ?", ("uploaded", build_id))
+            conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", bundle_sha256, build_id))
             conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
         return True
 
@@ -1508,7 +1508,7 @@ def upload_archive(file_path):
     # -------------------------------------------------------------------
     with get_connection() as conn:
         try:
-            conn.execute("UPDATE builds SET status = ? WHERE id = ?", ("uploaded", build_id))
+            conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", bundle_sha256, build_id))
             conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
 
             conn.execute('''
