@@ -432,7 +432,12 @@ def upsert_visual_novel_record(conn, metadata, series_id):
     title = metadata['title']
 
     vn_exists = conn.execute(
-        'SELECT id, description, source FROM visual_novels WHERE title = ?',
+        '''
+        SELECT id, developer, publisher, description,
+               release_status, content_rating, source
+        FROM visual_novels
+        WHERE title = ?
+        ''',
         (title,)
     ).fetchone()
 
