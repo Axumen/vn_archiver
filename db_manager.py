@@ -7,7 +7,7 @@ SCHEMA_PATH = "db_schema.sql"
 
 # Define the current required version of your database schema
 # Increment this number by 1 every time you make a change to db_schema.sql!
-TARGET_SCHEMA_VERSION = 1
+TARGET_SCHEMA_VERSION = 2
 
 
 def get_connection():
@@ -62,14 +62,14 @@ def run_migrations(conn, current_version):
     Applies incremental updates to the database schema.
     """
     with exclusive_transaction(conn):
-        # Example of how you will use this in the future:
-        # if current_version < 2:
-        #     conn.execute("ALTER TABLE builds ADD COLUMN new_feature TEXT;")
-        #     current_version = 2
-        # 
-        # if current_version < 3:
-        #     conn.execute("ALTER TABLE visual_novels ADD COLUMN rating INTEGER;")
-        #     current_version = 3
+        if current_version < 2:
+            conn.execute("ALTER TABLE visual_novels ADD COLUMN description TEXT;")
+            conn.execute("ALTER TABLE visual_novels ADD COLUMN source TEXT;")
+            conn.execute("ALTER TABLE builds ADD COLUMN source TEXT;")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_archives_sha256 ON archives(sha256);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_canon_parent ON canon_relationships(parent_vn_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_canon_child ON canon_relationships(child_vn_id);")
+            current_version = 2
         
         # Finally, stamp the DB with the newest version
         conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")

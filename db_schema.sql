@@ -26,8 +26,10 @@ CREATE TABLE IF NOT EXISTS visual_novels (
     
     developer TEXT,
     publisher TEXT,
+    description TEXT,
     release_status TEXT,
     content_rating TEXT,
+    source TEXT,
     
     status TEXT DEFAULT 'local', -- Added to track cloud upload status
     
@@ -52,6 +54,12 @@ CREATE TABLE IF NOT EXISTS canon_relationships (
     FOREIGN KEY (child_vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_canon_parent
+ON canon_relationships(parent_vn_id);
+
+CREATE INDEX IF NOT EXISTS idx_canon_child
+ON canon_relationships(child_vn_id);
+
 -- =====================================================
 -- 4. BUILDS (Version Layer)
 -- =====================================================
@@ -72,6 +80,7 @@ CREATE TABLE IF NOT EXISTS builds (
     
     engine TEXT,
     engine_version TEXT,
+    source TEXT,
     
     base_archive_sha256 TEXT, -- References the base game for patches/append discs
 
@@ -131,6 +140,9 @@ CREATE TABLE IF NOT EXISTS archives (
 
 CREATE INDEX IF NOT EXISTS idx_archives_build_id
 ON archives(build_id);
+
+CREATE INDEX IF NOT EXISTS idx_archives_sha256
+ON archives(sha256);
 
 -- =====================================================
 -- 7. TAGS (Work-Level)

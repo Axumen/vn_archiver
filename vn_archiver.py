@@ -22,7 +22,10 @@ from db_manager import get_connection
 
 INCOMING_DIR = "incoming"
 PROCESSED_DIR = "processed"
-UPLOADED_DIR = "uploaded"
+UPLOADING_DIR = "uploading"
+VN_ARCHIVE_DIR = "vn-archive"
+# Backward-compatible alias
+UPLOADED_DIR = UPLOADING_DIR
 METADATA_TEMPLATE_DIR = Path("metadata_templates")
 DEFAULT_METADATA_VERSION = 1
 B2_CONFIG_FILE = "backblaze_config.yaml"
@@ -61,7 +64,8 @@ AUTO_METADATA_FIELDS = {
 def ensure_directories():
     Path(INCOMING_DIR).mkdir(exist_ok=True)
     Path(PROCESSED_DIR).mkdir(exist_ok=True)
-    Path(UPLOADED_DIR).mkdir(exist_ok=True)
+    Path(UPLOADING_DIR).mkdir(exist_ok=True)
+    Path(VN_ARCHIVE_DIR).mkdir(exist_ok=True)
 
 
 def sha256_file(filepath):
@@ -402,15 +406,24 @@ def upsert_series(conn, metadata):
         return None
 
     series_name = metadata['series'].strip()
+    series_description = get_metadata_value(metadata, 'series_description')
     series_row = conn.execute(
-        'SELECT id FROM series WHERE name = ?',
+        'SELECT id, description FROM series WHERE name = ?',
         (series_name,)
     ).fetchone()
 
     if series_row:
+        if series_description is not None and series_description != series_row['description']:
+            conn.execute(
+                'UPDATE series SET description = ? WHERE id = ?',
+                (series_description, series_row['id'])
+            )
         return series_row['id']
 
-    conn.execute('INSERT INTO series (name) VALUES (?)', (series_name,))
+    conn.execute(
+        'INSERT INTO series (name, description) VALUES (?, ?)',
+        (series_name, series_description)
+    )
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
 
 
@@ -419,28 +432,35 @@ def upsert_visual_novel_record(conn, metadata, series_id):
     title = metadata['title']
 
     vn_exists = conn.execute(
-        'SELECT id FROM visual_novels WHERE title = ?',
+        'SELECT id, description, source FROM visual_novels WHERE title = ?',
         (title,)
     ).fetchone()
 
     slug = slugify_component(title, 'unknown-title')
+
+    def effective_vn(field_name):
+        if field_name in metadata:
+            return metadata.get(field_name)
+        return vn_exists[field_name] if vn_exists else None
 
     if vn_exists:
         vn_id = vn_exists['id']
         conn.execute('''
             UPDATE visual_novels SET
                 series_id = ?, canonical_slug = ?, aliases = ?,
-                developer = ?, publisher = ?, release_status = ?,
-                content_rating = ?
+                developer = ?, publisher = ?, description = ?, release_status = ?,
+                content_rating = ?, source = ?
             WHERE id = ?
         ''', (
             series_id,
             slug,
             json.dumps(aliases),
-            metadata.get('developer'),
-            metadata.get('publisher'),
-            metadata.get('release_status'),
-            metadata.get('content_rating'),
+            effective_vn('developer'),
+            effective_vn('publisher'),
+            effective_vn('description'),
+            effective_vn('release_status'),
+            effective_vn('content_rating'),
+            effective_vn('source'),
             vn_id
         ))
         return vn_id
@@ -448,8 +468,8 @@ def upsert_visual_novel_record(conn, metadata, series_id):
     conn.execute('''
         INSERT INTO visual_novels (
             series_id, title, canonical_slug, aliases,
-            developer, publisher, release_status, content_rating
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            developer, publisher, description, release_status, content_rating, source
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         series_id,
         title,
@@ -457,8 +477,10 @@ def upsert_visual_novel_record(conn, metadata, series_id):
         json.dumps(aliases),
         metadata.get('developer'),
         metadata.get('publisher'),
+        metadata.get('description'),
         metadata.get('release_status'),
-        metadata.get('content_rating')
+        metadata.get('content_rating'),
+        metadata.get('source')
     ))
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
 
@@ -477,21 +499,37 @@ def sync_vn_tags(conn, vn_id, metadata):
 
 
 def upsert_build_record(conn, vn_id, metadata):
+    build_version = metadata.get('version', '1.0')
     build_exists = conn.execute(
-        'SELECT id FROM builds WHERE vn_id = ? AND version = ?',
-        (vn_id, metadata.get('version', '1.0'))
+        '''
+        SELECT id, build_type, distribution_model, distribution_platform,
+               language, translator, edition, release_date, engine,
+               engine_version, source, base_archive_sha256
+        FROM builds
+        WHERE vn_id = ? AND version = ?
+        ''',
+        (vn_id, build_version)
     ).fetchone()
 
+    existing = build_exists if build_exists else {}
+
+    def effective(field_name):
+        if field_name in metadata:
+            return metadata.get(field_name)
+        return existing[field_name] if build_exists else None
+
     values = (
-        metadata.get('build_type'),
-        metadata.get('distribution_model'),
-        metadata.get('distribution_platform'),
-        metadata.get('language'),
-        metadata.get('edition'),
-        metadata.get('release_date'),
-        metadata.get('engine'),
-        metadata.get('engine_version'),
-        metadata.get('base_archive_sha256')
+        effective('build_type'),
+        effective('distribution_model'),
+        effective('distribution_platform'),
+        effective('language'),
+        effective('translator'),
+        effective('edition'),
+        effective('release_date'),
+        effective('engine'),
+        effective('engine_version'),
+        effective('source'),
+        effective('base_archive_sha256')
     )
 
     if build_exists:
@@ -499,8 +537,8 @@ def upsert_build_record(conn, vn_id, metadata):
         conn.execute('''
             UPDATE builds SET
                 build_type = ?, distribution_model = ?, distribution_platform = ?,
-                language = ?, edition = ?, release_date = ?, engine = ?, engine_version = ?,
-                base_archive_sha256 = ?
+                language = ?, translator = ?, edition = ?, release_date = ?,
+                engine = ?, engine_version = ?, source = ?, base_archive_sha256 = ?
             WHERE id = ?
         ''', values + (build_id,))
         return build_id
@@ -508,15 +546,43 @@ def upsert_build_record(conn, vn_id, metadata):
     conn.execute('''
         INSERT INTO builds (
             vn_id, version, build_type, distribution_model,
-            distribution_platform, language, edition, release_date,
-            engine, engine_version, base_archive_sha256
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            distribution_platform, language, translator, edition,
+            release_date, engine, engine_version, source, base_archive_sha256
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         vn_id,
-        metadata.get('version', '1.0'),
+        build_version,
         *values
     ))
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+
+def sync_canon_relationship(conn, vn_id, metadata):
+    parent_title = (metadata.get('parent_vn_title') or '').strip()
+    relationship_type = (metadata.get('relationship_type') or '').strip()
+
+    # Keep behavior explicit: only write relationship rows when both values are provided.
+    conn.execute('DELETE FROM canon_relationships WHERE child_vn_id = ?', (vn_id,))
+
+    if not parent_title or not relationship_type:
+        return
+
+    parent_row = conn.execute(
+        'SELECT id FROM visual_novels WHERE title = ?',
+        (parent_title,)
+    ).fetchone()
+
+    if not parent_row:
+        print(Fore.YELLOW + f"[DEBUG] Parent VN '{parent_title}' not found; skipping canon_relationship insert.")
+        return
+
+    conn.execute(
+        '''
+        INSERT INTO canon_relationships (parent_vn_id, child_vn_id, relationship_type)
+        VALUES (?, ?, ?)
+        ''',
+        (parent_row['id'], vn_id, relationship_type)
+    )
 
 
 def sync_build_target_platforms(conn, build_id, metadata):
@@ -556,45 +622,68 @@ def collect_archives_for_db(metadata):
                     'file_size': archive.get('file_size_bytes', 0)
                 })
 
+    if not top_level_sha and archives_to_process:
+        top_level_sha = archives_to_process[0].get('sha256')
+
     return archives_to_process, top_level_sha
 
 
-def finalize_metadata_objects(conn, metadata, top_level_sha, vn_id):
+def finalize_metadata_objects(conn, metadata, vn_id):
     try:
-        db_version_number = int(metadata.get('metadata_version') or 1)
+        schema_version = int(metadata.get('metadata_version') or 1)
     except (ValueError, TypeError):
-        db_version_number = 1
+        schema_version = 1
 
-    try:
-        file_size_val = int(metadata.get('file_size_bytes') or 0)
-    except (ValueError, TypeError):
-        file_size_val = 0
+    safe_metadata_json = json.dumps(
+        metadata,
+        default=safe_json_serialize,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":")
+    )
+    metadata_hash = hashlib.sha256(safe_metadata_json.encode("utf-8")).hexdigest()
 
-    if top_level_sha:
-        safe_metadata_json = json.dumps(metadata, default=safe_json_serialize)
+    conn.execute('''
+        INSERT OR IGNORE INTO metadata_objects (hash, schema_version, metadata_json)
+        VALUES (?, ?, ?)
+    ''', (metadata_hash, schema_version, safe_metadata_json))
 
-        conn.execute('''
-            INSERT OR IGNORE INTO metadata_objects (hash, storage_path, file_size, raw_json)
-            VALUES (?, ?, ?, ?)
-        ''', (top_level_sha, 'local_only', file_size_val, safe_metadata_json))
+    current_row = conn.execute(
+        'SELECT id, metadata_hash FROM metadata_versions WHERE vn_id = ? AND is_current = 1',
+        (vn_id,)
+    ).fetchone()
 
-        conn.execute('''
-            INSERT OR IGNORE INTO metadata_versions (vn_id, metadata_hash, version_number)
-            VALUES (?, ?, ?)
-        ''', (vn_id, top_level_sha, db_version_number))
+    if current_row and current_row['metadata_hash'] == metadata_hash:
+        print(Fore.MAGENTA + f'[DEBUG] Metadata version unchanged for VN {vn_id}; current pointer retained.')
+        return
 
-        conn.execute('''
-            UPDATE metadata_versions
-            SET metadata_hash = ?
-            WHERE vn_id = ? AND version_number = ?
-        ''', (top_level_sha, vn_id, db_version_number))
+    parent_version_id = current_row['id'] if current_row else None
+    next_version_number = conn.execute(
+        'SELECT COALESCE(MAX(version_number), 0) + 1 FROM metadata_versions WHERE vn_id = ?',
+        (vn_id,)
+    ).fetchone()[0]
 
-        print(Fore.GREEN + f'[DEBUG] Successfully finalized metadata_objects for {top_level_sha[:8]}.')
-    else:
-        print(Fore.YELLOW + '[DEBUG] No top_level_sha present; skipping metadata_objects update.')
+    conn.execute(
+        'UPDATE metadata_versions SET is_current = 0 WHERE vn_id = ? AND is_current = 1',
+        (vn_id,)
+    )
+
+    conn.execute('''
+        INSERT INTO metadata_versions (
+            vn_id, metadata_hash, parent_version_id, version_number, change_note, is_current
+        ) VALUES (?, ?, ?, ?, ?, 1)
+    ''', (
+        vn_id,
+        metadata_hash,
+        parent_version_id,
+        next_version_number,
+        metadata.get('change_note') or metadata.get('notes')
+    ))
+
+    print(Fore.GREEN + f'[DEBUG] Metadata version v{next_version_number} recorded for VN {vn_id}.')
 
 
-def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_process, top_level_sha):
+def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_process):
     print(Fore.CYAN + f'\n[DEBUG] Found {len(archives_to_process)} archive(s) to process for DB.')
 
     for arch_data in archives_to_process:
@@ -632,20 +721,20 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
 
         print(Fore.MAGENTA + f'[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.')
 
-        try:
-            finalize_metadata_objects(conn, metadata, top_level_sha, vn_id)
-        except Exception as e:
-            print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
-            raise e
+    try:
+        finalize_metadata_objects(conn, metadata, vn_id)
+    except Exception as e:
+        print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
+        raise e
 
-        try:
-            conn.commit()
-            print(Fore.GREEN + '[DEBUG] Database transaction committed successfully!')
-        except Exception as e:
-            print(Fore.RED + f'[CRITICAL] SQLite Commit Failed: {e}')
-            raise e
+    try:
+        conn.commit()
+        print(Fore.GREEN + '[DEBUG] Database transaction committed successfully!')
+    except Exception as e:
+        print(Fore.RED + f'[CRITICAL] SQLite Commit Failed: {e}')
+        raise e
 
-        return vn_id
+    return vn_id
 
     return None
 
@@ -666,16 +755,16 @@ def insert_visual_novel(metadata):
 
         build_id = upsert_build_record(conn, vn_id, metadata)
         sync_build_target_platforms(conn, build_id, metadata)
+        sync_canon_relationship(conn, vn_id, metadata)
 
-        archives_to_process, top_level_sha = collect_archives_for_db(metadata)
+        archives_to_process, _ = collect_archives_for_db(metadata)
 
         early_return_vn_id = process_archives_for_build(
             conn,
             build_id,
             metadata,
             vn_id,
-            archives_to_process,
-            top_level_sha
+            archives_to_process
         )
         if early_return_vn_id:
             return early_return_vn_id
@@ -810,13 +899,13 @@ def upload_to_b2(filepath, remote_folder=None):
 
 
 def move_uploaded_archive(file_path):
-    if not os.path.exists(UPLOADED_DIR):
-        os.makedirs(UPLOADED_DIR)
+    if not os.path.exists(UPLOADING_DIR):
+        os.makedirs(UPLOADING_DIR)
 
     file_name = os.path.basename(file_path)
 
     # Explicitly define the full destination path including the file name
-    destination_path = os.path.join(UPLOADED_DIR, file_name)
+    destination_path = os.path.join(UPLOADING_DIR, file_name)
 
     print(Fore.CYAN + f"Moving local file to: {destination_path}")
 
@@ -827,7 +916,7 @@ def move_uploaded_archive(file_path):
             os.remove(destination_path)
 
         shutil.move(file_path, destination_path)
-        print(Fore.GREEN + f"Successfully moved {file_name} to the uploaded directory.")
+        print(Fore.GREEN + f"Successfully moved {file_name} to the uploading directory.")
     except Exception as e:
         print(Fore.RED + f"Failed to move {file_name}: {e}")
 
@@ -972,11 +1061,11 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
     if archives_data:
         # Bulletproof Parent Folder Renaming Logic
         new_parent_name = f"{safe_title} {safe_version}"
-        new_parent_path = os.path.join(UPLOADED_DIR, new_parent_name)
+        new_parent_path = os.path.join(UPLOADING_DIR, new_parent_name)
 
-        if os.path.exists(UPLOADED_DIR):
-            for existing_folder in os.listdir(UPLOADED_DIR):
-                old_parent_path = os.path.join(UPLOADED_DIR, existing_folder)
+        if os.path.exists(UPLOADING_DIR):
+            for existing_folder in os.listdir(UPLOADING_DIR):
+                old_parent_path = os.path.join(UPLOADING_DIR, existing_folder)
                 if os.path.isdir(old_parent_path) and existing_folder.startswith(safe_title + " "):
                     possible_old_version = existing_folder[len(safe_title) + 1:].strip()
                     if os.path.isdir(os.path.join(old_parent_path, possible_old_version)):
@@ -989,20 +1078,34 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         uploaded_dest_dir = os.path.join(new_parent_path, safe_version)
         os.makedirs(uploaded_dest_dir, exist_ok=True)
 
-        print(Fore.CYAN + f"\nMoving files to sidecar directory: {uploaded_dest_dir}...")
+        print(Fore.CYAN + f"\nMoving files to upload queue directory: {uploaded_dest_dir}...")
 
         # Write metadata.yaml loosely in the folder
         meta_path = os.path.join(uploaded_dest_dir, "metadata.yaml")
         with open(meta_path, "w", encoding="utf-8") as f:
             yaml.dump(metadata, f, sort_keys=False, allow_unicode=True)
 
-        # Move the original archives into the folder
+        # Move archives into uploading queue, then copy+unzip into
+        # vn-archive/<title> <latest-version>/<version>/
+        vn_archive_version_dir = get_vn_archive_version_dir(metadata)
+        ensure_clean_directory(vn_archive_version_dir)
+
         for arch in archives_data:
             dest_file = os.path.join(uploaded_dest_dir, arch["filename"])
             shutil.move(arch["original_path"], dest_file)
-            print(Fore.GREEN + f"Moved: {arch['filename']}")
+
+            vn_archive_copy = vn_archive_version_dir / arch["filename"]
+            shutil.copy2(dest_file, vn_archive_copy)
+
+            try:
+                with zipfile.ZipFile(vn_archive_copy, "r") as zf:
+                    zf.extractall(vn_archive_version_dir)
+                print(Fore.GREEN + f"Moved to uploading + copied/unzipped: {arch['filename']}")
+            except zipfile.BadZipFile:
+                print(Fore.YELLOW + f"Copied to VN archive but skipped unzip (not a valid zip): {arch['filename']}")
 
         print(Fore.GREEN + f"\nSidecar bundle successfully created at: {uploaded_dest_dir}")
+        print(Fore.GREEN + f"VN archive version updated at: {vn_archive_version_dir}")
         print(Fore.GREEN + "Archive processing complete!")
 
     else:
@@ -1018,26 +1121,35 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
 
 
 def move_original_to_uploaded_local(original_filepath, metadata):
-    """Move original zip to uploaded/<title>/Latest Version/ using local naming only."""
+    """Move original zip to uploading/ and mirror it to vn archive latest version."""
     if not os.path.exists(original_filepath):
         raise Exception("Original file not found for local move.")
 
-    target_dir = get_uploaded_latest_dir(metadata)
-    ensure_clean_directory(target_dir)
+    target_dir = get_uploading_latest_dir(metadata)
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     title = format_uploaded_component(metadata.get("title"), "Unknown Title")
     build_version = format_uploaded_component(metadata.get("version"), "unknown")
     cleaned_name = f"{title} {build_version}.zip"
 
-    return move_file_to_uploaded_dir(original_filepath, target_dir, cleaned_name)
+    uploading_path = move_file_to_uploaded_dir(original_filepath, target_dir, cleaned_name)
+
+    archive_version_dir = get_vn_archive_version_dir(metadata)
+    ensure_clean_directory(archive_version_dir)
+    archive_zip = archive_version_dir / cleaned_name
+    shutil.copy2(uploading_path, archive_zip)
+    with zipfile.ZipFile(archive_zip, "r") as zf:
+        zf.extractall(archive_version_dir)
+
+    return uploading_path
 
 
 def move_processed_metadata_to_uploaded(metadata_filepath, metadata):
-    """Move processed metadata YAML to uploaded/<title>/Latest Version/."""
+    """Move processed metadata YAML to uploading/<title>/Latest Version/."""
     if not os.path.exists(metadata_filepath):
         raise Exception("Metadata file not found for post-upload move.")
 
-    target_dir = get_uploaded_latest_dir(metadata)
+    target_dir = get_uploading_latest_dir(metadata)
     return move_file_to_uploaded_dir(metadata_filepath, target_dir)
 
 
@@ -1047,9 +1159,80 @@ def format_uploaded_component(value, fallback):
     return text or fallback
 
 
-def get_uploaded_latest_dir(metadata):
+def normalize_version_for_sort(version_text):
+    """Convert versions like '1.10.2' into sortable tuples with text fallback."""
+    text = str(version_text or "").strip()
+    if not text:
+        return (0,)
+
+    cleaned = re.sub(r"[^0-9A-Za-z\.\-_]", "", text)
+    tokens = re.split(r"[\.\-_]+", cleaned)
+    sortable = []
+    for tok in tokens:
+        if tok.isdigit():
+            sortable.append((0, int(tok)))
+        else:
+            sortable.append((1, tok.lower()))
+    return tuple(sortable)
+
+
+def determine_latest_version(versions):
+    valid_versions = [str(v).strip() for v in versions if str(v).strip()]
+    if not valid_versions:
+        return "unknown"
+    return max(valid_versions, key=normalize_version_for_sort)
+
+
+def get_uploading_latest_dir(metadata):
     title = format_uploaded_component(metadata.get("title"), "Unknown Title")
-    return Path(UPLOADED_DIR) / title / "Latest Version"
+    return Path(UPLOADING_DIR) / title / "Latest Version"
+
+
+def get_vn_archive_version_dir(metadata):
+    title = format_uploaded_component(metadata.get("title"), "Unknown Title")
+    current_version = format_uploaded_component(metadata.get("version"), "unknown")
+
+    title_root = Path(VN_ARCHIVE_DIR)
+    title_root.mkdir(parents=True, exist_ok=True)
+
+    sibling_versions = [current_version]
+    existing_title_parent = None
+    for entry in title_root.iterdir():
+        if not entry.is_dir():
+            continue
+        prefix = f"{title} "
+        if not entry.name.startswith(prefix):
+            continue
+        existing_title_parent = entry
+        parent_version = entry.name[len(prefix):].strip()
+        if parent_version:
+            sibling_versions.append(parent_version)
+        for child in entry.iterdir():
+            if child.is_dir() and child.name:
+                sibling_versions.append(child.name)
+        break
+
+    latest_version = determine_latest_version(sibling_versions)
+    target_parent = title_root / f"{title} {latest_version}"
+
+    if existing_title_parent and existing_title_parent != target_parent:
+        if target_parent.exists():
+            for child in existing_title_parent.iterdir():
+                destination = target_parent / child.name
+                if destination.exists():
+                    if destination.is_dir():
+                        shutil.rmtree(destination)
+                    else:
+                        destination.unlink(missing_ok=True)
+                shutil.move(str(child), str(destination))
+            existing_title_parent.rmdir()
+        else:
+            existing_title_parent.rename(target_parent)
+
+    target_parent.mkdir(parents=True, exist_ok=True)
+    target_version_dir = target_parent / current_version
+    target_version_dir.mkdir(parents=True, exist_ok=True)
+    return target_version_dir
 
 
 def ensure_clean_directory(target_dir):
@@ -1161,7 +1344,7 @@ def upload_archive(file_path):
         vn_row = conn.execute("SELECT id FROM visual_novels WHERE title = ?", (title,)).fetchone()
         if not vn_row:
             print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' does not exist in the database.")
-            print(Fore.YELLOW + "Please run '(3) Process Archive' to register it before uploading.")
+            print(Fore.YELLOW + "Please run '(1) Create Metadata' to register it before uploading.")
             return False
 
         vn_id = vn_row[0]
@@ -1169,7 +1352,7 @@ def upload_archive(file_path):
         build_row = conn.execute("SELECT id FROM builds WHERE vn_id = ? AND version = ?", (vn_id, version)).fetchone()
         if not build_row:
             print(Fore.RED + f"Upload Blocked: Version '{version}' for '{title}' does not exist in the database.")
-            print(Fore.YELLOW + "Please run '(3) Process Archive' to register this build before uploading.")
+            print(Fore.YELLOW + "Please run '(1) Create Metadata' to register this build before uploading.")
             return False
 
         build_id = build_row[0]
