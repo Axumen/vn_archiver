@@ -11,7 +11,7 @@ import yaml
 import zipfile
 from tqdm import tqdm
 from colorama import Fore
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from db_manager import get_connection
