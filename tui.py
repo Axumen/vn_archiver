@@ -267,63 +267,45 @@ def configure_metadata_template_version():
 # =============================
 
 def create_metadata_only():
-    zips = list_zips()
-    filename = choose_from_list(zips, "Select VN to create metadata for")
-    if not filename:
+    print(Fore.CYAN + "\n--- Create Metadata ---")
+    if not os.path.exists(INCOMING_DIR):
+        os.makedirs(INCOMING_DIR)
+
+    files = [f for f in os.listdir(INCOMING_DIR) if os.path.isfile(os.path.join(INCOMING_DIR, f))]
+    if not files:
+        print(Fore.RED + f"No files found in '{INCOMING_DIR}' directory.")
         return
 
-    show_file_info(filename)
+    for i, filename in enumerate(files, 1):
+        print(f"[{i}] {filename}")
 
-    metadata = {}
-    metadata_version = get_active_metadata_template_version()
-    template = load_metadata_template(metadata_version)
-    metadata["metadata_version"] = metadata_version
+    choice = input(
+        Fore.YELLOW + "\nSelect file numbers to process together (comma-separated), or 0 to cancel: ").strip()
+    if choice == "0" or not choice:
+        return
 
-    print(Fore.MAGENTA + "Fill Metadata (Press ENTER to skip fields)\n")
+    try:
+        indices = [int(idx.strip()) - 1 for idx in choice.split(",") if idx.strip().isdigit()]
+        selected_paths = []
 
-    field_suggestions = {
-        "release_status": SUGGESTED_RELEASE_STATUS,
-        "distribution_model": SUGGESTED_DISTRIBUTION_MODEL,
-        "build_type": SUGGESTED_BUILD_TYPE,
-        "language": SUGGESTED_LANGUAGE,
-        "distribution_platform": SUGGESTED_DISTRIBUTION_PLATFORM,
-        "content_rating": SUGGESTED_CONTENT_RATING,
-        "content_type": SUGGESTED_CONTENT_TYPE,
-        "target_platform": SUGGESTED_TARGET_PLATFORM,
-        "tags": [
-            "romance", "drama", "comedy", "slice-of-life", "mystery", "horror",
-            "sci-fi", "fantasy", "psychological", "thriller", "action", "historical",
-            "supernatural", "nakige", "utsuge", "nukige", "moege", "dark", "wholesome",
-            "tragic", "bittersweet", "school", "modern", "adult"
-        ],
-    }
+        for idx in indices:
+            if 0 <= idx < len(files):
+                selected_filename = files[idx]
+                show_file_info(selected_filename)
+                selected_paths.append(os.path.join(INCOMING_DIR, selected_filename))
+            else:
+                print(Fore.RED + f"Invalid selection: {idx + 1}")
+                return
 
-    prompt_fields = resolve_prompt_fields(template)
+        if not selected_paths:
+            print(Fore.RED + "No valid files selected.")
+            return
 
-    for field in prompt_fields:
-        if field in ("tags", "target_platform"):
-            suggestions = field_suggestions.get(field) or []
-            if suggestions:
-                print(Fore.CYAN + f"Suggested {field}:")
-                print(", ".join(suggestions))
-            value = input(Fore.YELLOW + f"{field} (comma separated): ").strip()
-            metadata[field] = normalize_list(value)
-            continue
+        active_version = get_active_metadata_template_version()
+        create_archive_only(selected_paths, metadata_version=active_version)
 
-        suggestions = field_suggestions.get(field)
-        if suggestions:
-            print(Fore.CYAN + f"Suggested {field}:")
-            print(", ".join(suggestions))
-
-        value = input(Fore.YELLOW + f"{field}: ").strip()
-        metadata[field] = normalize_value(value)
-
-    metadata_path = Path(INCOMING_DIR) / (Path(filename).stem + ".yaml")
-
-    with open(metadata_path, "w", encoding="utf-8") as f:
-        yaml.dump(metadata, f, sort_keys=False)
-
-    print(Fore.GREEN + f"\nMetadata created: {metadata_path.name}\n")
+    except ValueError:
+        print(Fore.RED + "Invalid input.")
 
 
 # =============================
@@ -447,53 +429,6 @@ def edit_metadata_only():
 
 
 # =============================
-# PROCESS ARCHIVE
-# =============================
-
-def process_archive():
-    print(Fore.CYAN + "\n--- Process Archive ---")
-    if not os.path.exists(INCOMING_DIR):
-        os.makedirs(INCOMING_DIR)
-
-    files = [f for f in os.listdir(INCOMING_DIR) if os.path.isfile(os.path.join(INCOMING_DIR, f))]
-    if not files:
-        print(Fore.RED + f"No files found in '{INCOMING_DIR}' directory.")
-        return
-
-    for i, f in enumerate(files, 1):
-        print(f"[{i}] {f}")
-
-    choice = input(
-        Fore.YELLOW + "\nSelect file numbers to process together (comma-separated), or 0 to cancel: ").strip()
-    if choice == "0" or not choice:
-        return
-
-    try:
-        indices = [int(idx.strip()) - 1 for idx in choice.split(",") if idx.strip().isdigit()]
-        selected_paths = []
-
-        # Gathering files in a loop
-        for idx in indices:
-            if 0 <= idx < len(files):
-                selected_paths.append(os.path.join(INCOMING_DIR, files[idx]))
-            else:
-                print(Fore.RED + f"Invalid selection: {idx + 1}")
-                return
-
-        if not selected_paths:
-            print(Fore.RED + "No valid files selected.")
-            return
-
-        active_version = detect_latest_metadata_template_version()
-
-        # Passing the gathered list ONCE to the backend
-        create_archive_only(selected_paths, metadata_version=active_version)
-
-    except ValueError:
-        print(Fore.RED + "Invalid input.")
-
-
-# =============================
 # UPLOAD
 # =============================
 
@@ -544,10 +479,9 @@ def main():
 
         print(Fore.MAGENTA + "1) Create Metadata")
         print(Fore.MAGENTA + "2) Edit Metadata")
-        print(Fore.MAGENTA + "3) Process Archive")
-        print(Fore.MAGENTA + "4) Upload Archive")
-        print(Fore.MAGENTA + "5) Config")
-        print(Fore.MAGENTA + "6) Quit\n")
+        print(Fore.MAGENTA + "3) Upload Archive")
+        print(Fore.MAGENTA + "4) Config")
+        print(Fore.MAGENTA + "5) Quit\n")
 
         active_version = get_active_metadata_template_version()
         print(Fore.CYAN + f"Active metadata template: v{active_version}\n")
@@ -559,12 +493,10 @@ def main():
         elif choice == "2":
             edit_metadata_only()
         elif choice == "3":
-            process_archive()
-        elif choice == "4":
             upload_archives()
-        elif choice == "5":
+        elif choice == "4":
             configure_metadata_template_version()
-        elif choice == "6":
+        elif choice == "5":
             print(Fore.CYAN + "\nGoodbye.\n")
             break
         else:
