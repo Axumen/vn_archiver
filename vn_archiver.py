@@ -16,8 +16,6 @@ from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from db_manager import get_connection, exclusive_transaction
 
-
-
 # ==============================
 # CONFIGURATION
 # ==============================
@@ -55,6 +53,7 @@ AUTO_METADATA_FIELDS = {
     "archive.file_size": lambda zip_path: os.path.getsize(zip_path),
 }
 
+
 # ==============================
 # UTILITY
 # ==============================
@@ -91,6 +90,13 @@ def get_available_metadata_template_versions():
             continue
 
     return sorted(set(versions))
+
+
+def safe_json_serialize(obj):
+    """Helper to serialize datetime objects to strings for JSON dumping."""
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} not serializable")
 
 
 def detect_latest_metadata_template_version():
@@ -285,6 +291,7 @@ def select_base_archive_from_db(current_series=None, current_title=None):
     # Fallback if they just press Enter to paste a hash manually
     return input(Fore.YELLOW + "base_archive_sha256: ").strip()
 
+
 def prompt_field(field_name, current_value):
     # Existing content_type suggestion logic...
     if field_name == "content_type":
@@ -301,6 +308,7 @@ def prompt_field(field_name, current_value):
     value = input(f"{field_name} [{current_value}]: ").strip()
     return value if value else current_value
 
+
 def prompt_tags():
     print("\nSuggested Tags:")
     print(", ".join(SUGGESTED_TAGS))
@@ -308,6 +316,7 @@ def prompt_tags():
     if not user_input:
         return []
     return [t.strip() for t in user_input.split(",")]
+
 
 def create_metadata(zip_path):
     template = load_metadata_template()
@@ -339,7 +348,6 @@ def create_metadata(zip_path):
 
 
 def create_archive(original_zip, metadata_dict, output_path):
-
     # Ensure metadata_version exists
     metadata_dict.setdefault(
         "metadata_version",
@@ -356,6 +364,7 @@ def create_archive(original_zip, metadata_dict, output_path):
         archive.write(temp_metadata_path, arcname="metadata.yaml")
 
     os.remove(temp_metadata_path)
+
 
 # ==============================
 # DATABASE
@@ -386,9 +395,6 @@ def insert_visual_novel(metadata):
     """
     Inserts or updates the normalized metadata into the SQLite database.
     """
-    from db_manager import get_connection
-    from colorama import Fore
-    import json
 
     with get_connection() as conn:
         # ==========================================================
@@ -596,29 +602,63 @@ def insert_visual_novel(metadata):
             else:
                 print(Fore.MAGENTA + f"[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.")
 
-        # ==========================================================
-        # UPDATE METADATA OBJECTS DB & FORCE COMMIT
-        # ==========================================================
-        db_version_number = metadata.get("version", 1)
+                # ==========================================================
+                # UPDATE METADATA OBJECTS DB & FORCE COMMIT
+                # ==========================================================
+                # Safely parse the metadata version as an integer
+                try:
+                    db_version_number = int(metadata.get("metadata_version") or 1)
+                except (ValueError, TypeError):
+                    db_version_number = 1
 
-        if top_level_sha:
-            conn.execute('''
-                INSERT OR IGNORE INTO metadata_objects (hash, storage_path, file_size, raw_json)
-                VALUES (?, ?, ?, ?)
-            ''', (top_level_sha, "local_only", metadata.get("file_size_bytes", 0), json.dumps(metadata)))
+                # Safely parse file size as an integer (prevents empty string from crashing SQLite)
+                try:
+                    file_size_val = int(metadata.get("file_size_bytes") or 0)
+                except (ValueError, TypeError):
+                    file_size_val = 0
 
-            conn.execute('''
-                INSERT OR IGNORE INTO metadata_versions (vn_id, metadata_hash, version_number)
-                VALUES (?, ?, ?)
-            ''', (vn_id, top_level_sha, db_version_number))
+                if top_level_sha:
+                    try:
+                        # Safely dump JSON using the globally defined helper
+                        safe_metadata_json = json.dumps(metadata, default=safe_json_serialize)
 
-            conn.execute('''
-                UPDATE metadata_versions 
-                SET metadata_hash = ?
-                WHERE vn_id = ? AND version_number = ?
-            ''', (top_level_sha, vn_id, db_version_number))
+                        conn.execute('''
+                            INSERT OR IGNORE INTO metadata_objects (hash, storage_path, file_size, raw_json)
+                            VALUES (?, ?, ?, ?)
+                        ''', (top_level_sha, "local_only", file_size_val, safe_metadata_json))
 
-        conn.commit()
+                        conn.execute('''
+                            INSERT OR IGNORE INTO metadata_versions (vn_id, metadata_hash, version_number)
+                            VALUES (?, ?, ?)
+                        ''', (vn_id, top_level_sha, db_version_number))
+
+                        conn.execute('''
+                            UPDATE metadata_versions 
+                            SET metadata_hash = ?
+                            WHERE vn_id = ? AND version_number = ?
+                        ''', (top_level_sha, vn_id, db_version_number))
+
+                        print(Fore.GREEN + f"[DEBUG] Successfully finalized metadata_objects for {top_level_sha[:8]}.")
+
+                    except Exception as e:
+                        print(Fore.RED + f"[CRITICAL] Final DB commit failed: {e}")
+                        raise e
+                else:
+                    print(Fore.YELLOW + "[DEBUG] No top_level_sha present; skipping metadata_objects update.")
+
+                # Attempt the final commit with explicit error catching
+                try:
+                    conn.commit()
+                    print(Fore.GREEN + "[DEBUG] Database transaction committed successfully!")
+                except Exception as e:
+                    print(Fore.RED + f"[CRITICAL] SQLite Commit Failed: {e}")
+                    raise e
+
+                # ==========================================================
+                # RETURN VALUE (Crucial for the TUI to know it succeeded!)
+                # ==========================================================
+                return vn_id
+
 
 # ==============================
 # BACKBLAZE
@@ -717,8 +757,8 @@ def upload_to_b2(filepath, remote_folder=None):
             sys.stdout.write(
                 f"\rUploading: [{bar}] "
                 f"{percent:6.2f}% "
-                f"{byte_count/1024/1024:8.2f}MB / {self.total_bytes/1024/1024:8.2f}MB "
-                f"{speed/1024/1024:6.2f} MB/s"
+                f"{byte_count / 1024 / 1024:8.2f}MB / {self.total_bytes / 1024 / 1024:8.2f}MB "
+                f"{speed / 1024 / 1024:6.2f} MB/s"
             )
             sys.stdout.flush()
 
@@ -741,8 +781,6 @@ def upload_to_b2(filepath, remote_folder=None):
 
 
 def move_uploaded_archive(file_path):
-
-
     if not os.path.exists(UPLOADED_DIR):
         os.makedirs(UPLOADED_DIR)
 
@@ -764,12 +802,12 @@ def move_uploaded_archive(file_path):
     except Exception as e:
         print(Fore.RED + f"Failed to move {file_name}: {e}")
 
+
 # ==============================
 # ARCHIVE CREATION ONLY
 # ==============================
 
 def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VERSION):
-
     if archive_paths is None:
         archive_paths = []
     elif isinstance(archive_paths, str):
@@ -942,6 +980,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         print(Fore.GREEN + f"\nMetadata saved to: {meta_path}")
         print(Fore.GREEN + "Metadata creation complete!")
 
+
 def move_original_to_uploaded_local(original_filepath, metadata):
     """Move original zip to uploaded/<title>/Latest Version/ using local naming only."""
     if not os.path.exists(original_filepath):
@@ -997,11 +1036,11 @@ def move_file_to_uploaded_dir(source_filepath, target_dir, destination_name=None
     shutil.move(source_filepath, destination)
     return str(destination)
 
+
 # ==============================
 # STRUCTURED ARCHIVE UPLOAD
 # ==============================
 def get_b2_bucket():
-
     # 1. Check if the config file exists
     if not os.path.exists(B2_CONFIG_FILE):
         print(Fore.RED + f"Config file '{B2_CONFIG_FILE}' not found.")
@@ -1047,8 +1086,6 @@ def get_b2_bucket():
 
 
 def upload_archive(file_path):
-
-
     if not os.path.exists(file_path):
         print(Fore.RED + f"File not found: {file_path}")
         return False
@@ -1202,6 +1239,7 @@ def upload_archive(file_path):
             print(Fore.RED + f"Notice: Non-fatal database update error: {e}")
 
     return True
+
 
 def slugify_component(value, fallback):
     """

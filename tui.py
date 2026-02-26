@@ -12,14 +12,9 @@ from colorama import init, Fore, Style
 from vn_archiver import (
     create_archive_only,
     upload_archive,
-    move_uploaded_archive,
-    move_processed_metadata_to_uploaded,
-    move_original_to_uploaded_local,
-    upload_metadata_sidecar,
     INCOMING_DIR,
     PROCESSED_DIR,
     sha256_file,
-    slugify_component,
     load_metadata_template,
     resolve_prompt_fields,
     get_available_metadata_template_versions,
@@ -450,6 +445,7 @@ def edit_metadata_only():
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
+
 # =============================
 # PROCESS ARCHIVE
 # =============================
@@ -496,6 +492,7 @@ def process_archive():
     except ValueError:
         print(Fore.RED + "Invalid input.")
 
+
 # =============================
 # UPLOAD
 # =============================
@@ -533,6 +530,7 @@ def upload_archives():
             print(Fore.RED + "Invalid selection.")
     except ValueError:
         print(Fore.RED + "Invalid input.")
+
 
 # =============================
 # MAIN MENU
