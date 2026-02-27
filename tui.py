@@ -15,7 +15,6 @@ from vn_archiver import (
     upload_archive,
     INCOMING_DIR,
     UPLOADING_DIR,
-    PROCESSED_DIR,
     sha256_file,
     load_metadata_template,
     resolve_prompt_fields,
@@ -137,10 +136,6 @@ def list_metadata():
     return [f for f in os.listdir(INCOMING_DIR)
             if f.endswith(".yaml")]
 
-
-def list_processed_archives():
-    return [f for f in os.listdir(PROCESSED_DIR)
-            if f.endswith("archive.zip")]
 
 
 def normalize_value(value):

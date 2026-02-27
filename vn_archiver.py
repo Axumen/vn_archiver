@@ -21,11 +21,8 @@ from db_manager import get_connection
 # ==============================
 
 INCOMING_DIR = "incoming"
-PROCESSED_DIR = "processed"
 UPLOADING_DIR = "uploading"
 VN_ARCHIVE_DIR = "vn archive"
-# Backward-compatible alias
-UPLOADED_DIR = UPLOADING_DIR
 METADATA_TEMPLATE_DIR = Path("metadata_templates")
 DEFAULT_METADATA_VERSION = 1
 B2_CONFIG_FILE = "backblaze_config.yaml"
@@ -63,7 +60,6 @@ AUTO_METADATA_FIELDS = {
 
 def ensure_directories():
     Path(INCOMING_DIR).mkdir(exist_ok=True)
-    Path(PROCESSED_DIR).mkdir(exist_ok=True)
     Path(UPLOADING_DIR).mkdir(exist_ok=True)
     Path(VN_ARCHIVE_DIR).mkdir(exist_ok=True)
 
@@ -934,41 +930,12 @@ def upload_to_b2(filepath, remote_folder=None):
     return True
 
 
-def move_uploaded_archive(file_path):
-    if not os.path.exists(UPLOADING_DIR):
-        os.makedirs(UPLOADING_DIR)
-
-    file_name = os.path.basename(file_path)
-
-    # Explicitly define the full destination path including the file name
-    destination_path = os.path.join(UPLOADING_DIR, file_name)
-
-    print(Fore.CYAN + f"Moving local file to: {destination_path}")
-
-    try:
-        # If a file with the same name already exists in the uploaded folder,
-        # remove it first to prevent Windows permission errors
-        if os.path.exists(destination_path):
-            os.remove(destination_path)
-
-        shutil.move(file_path, destination_path)
-        print(Fore.GREEN + f"Successfully moved {file_name} to the uploading directory.")
-    except Exception as e:
-        print(Fore.RED + f"Failed to move {file_name}: {e}")
-
-
-# ==============================
-# ARCHIVE CREATION ONLY
-# ==============================
-
 def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VERSION):
     if archive_paths is None:
         archive_paths = []
     elif isinstance(archive_paths, str):
         archive_paths = [archive_paths]
 
-    if not os.path.exists(PROCESSED_DIR):
-        os.makedirs(PROCESSED_DIR)
 
     if archive_paths:
         print(f"\nProcessing {len(archive_paths)} file(s)...")
@@ -1207,60 +1174,6 @@ def create_archive_from_metadata_file(archive_paths, metadata):
     finalize_archive_creation(prepared, archives_data)
 
 
-def move_original_to_uploaded_local(original_filepath, metadata):
-    """Move original zip to uploading/ and mirror original filename to vn archive/<title latest>/<version>/."""
-    if not os.path.exists(original_filepath):
-        raise Exception("Original file not found for local move.")
-
-    target_dir = get_uploading_latest_dir(metadata)
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    original_sha = sha256_file(original_filepath)
-    ext = os.path.splitext(original_filepath)[1].lower() or '.zip'
-
-    vn_id = None
-    with get_connection() as conn:
-        vn_row = conn.execute('SELECT id FROM visual_novels WHERE title = ?', (metadata.get('title'),)).fetchone()
-        if vn_row:
-            vn_id = vn_row['id']
-
-    cleaned_name = build_recommended_archive_name(metadata, original_sha, ext=ext)
-
-    uploading_path = move_file_to_uploaded_dir(original_filepath, target_dir, cleaned_name)
-
-    archive_dir = get_vn_archive_version_dir(metadata)
-    archive_zip = archive_dir / Path(original_filepath).name
-    shutil.copy2(uploading_path, archive_zip)
-
-    return uploading_path
-
-
-def move_processed_metadata_to_uploaded(metadata_filepath, metadata):
-    """Move processed metadata YAML to uploading/."""
-    if not os.path.exists(metadata_filepath):
-        raise Exception("Metadata file not found for post-upload move.")
-
-    vn_id = None
-    build_id = None
-    with get_connection() as conn:
-        vn_row = conn.execute('SELECT id FROM visual_novels WHERE title = ?', (metadata.get('title'),)).fetchone()
-        if vn_row:
-            vn_id = vn_row['id']
-            build_row = conn.execute(
-                'SELECT id FROM builds WHERE vn_id = ? AND version = ?',
-                (vn_id, metadata.get('version'))
-            ).fetchone()
-            if build_row:
-                build_id = build_row['id']
-
-    metadata_version_number = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
-    meta_sha = metadata.get('sha256') or get_nested_value(metadata, 'archive.sha256')
-    cleaned_name = build_recommended_metadata_name(metadata, meta_sha, metadata_version_number)
-
-    target_dir = get_uploading_latest_dir(metadata)
-    return move_file_to_uploaded_dir(metadata_filepath, target_dir, cleaned_name)
-
-
 def format_uploaded_component(value, fallback):
     text = str(value or "").replace("_", " ").strip()
     text = " ".join(text.split())
@@ -1404,21 +1317,6 @@ def get_vn_archive_version_dir(metadata):
     return target_version_dir
 
 
-def move_file_to_uploaded_dir(source_filepath, target_dir, destination_name=None):
-    target_dir.mkdir(parents=True, exist_ok=True)
-    resolved_name = destination_name or Path(source_filepath).name
-    destination = target_dir / resolved_name
-
-    if destination.exists():
-        destination.unlink()
-
-    shutil.move(source_filepath, destination)
-    return str(destination)
-
-
-# ==============================
-# STRUCTURED ARCHIVE UPLOAD
-# ==============================
 def get_b2_bucket():
     # 1. Check if the config file exists
     if not os.path.exists(B2_CONFIG_FILE):
