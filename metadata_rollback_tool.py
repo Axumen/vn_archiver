@@ -164,10 +164,66 @@ def rollback(args):
             print(f"Exported rolled-back metadata JSON: {json_path}")
 
 
+def delete_version(args):
+    with get_connection() as conn:
+        build_row = resolve_build(conn, args.title, args.version, args.build_id)
+        rows = get_version_rows(conn, build_row["id"])
+
+        if not rows:
+            raise ValueError("No metadata versions found for that build")
+
+        target_row = next((r for r in rows if r["version_number"] == args.target_version), None)
+        if not target_row:
+            raise ValueError(f"Version v{args.target_version} not found for this build")
+
+        current_row = next((r for r in rows if r["is_current"]), None)
+
+        if target_row["is_current"] and len(rows) == 1:
+            raise ValueError("Cannot delete the only metadata version for this build")
+
+        backup_path = None
+        if args.backup:
+            backup_path = backup_database(args.backup_dir)
+
+        with exclusive_transaction(conn):
+            if target_row["is_current"]:
+                replacement = next((r for r in rows if r["id"] != target_row["id"]), None)
+                if not replacement:
+                    raise ValueError("Could not find replacement current version")
+                conn.execute(
+                    "UPDATE metadata_versions SET is_current = 0 WHERE build_id = ?",
+                    (build_row["id"],),
+                )
+                conn.execute(
+                    "UPDATE metadata_versions SET is_current = 1 WHERE id = ?",
+                    (replacement["id"],),
+                )
+
+            conn.execute("DELETE FROM metadata_versions WHERE id = ?", (target_row["id"],))
+
+            conn.execute(
+                """
+                DELETE FROM metadata_objects
+                WHERE hash = ?
+                  AND hash NOT IN (SELECT metadata_hash FROM metadata_versions)
+                """,
+                (target_row["metadata_hash"],),
+            )
+
+        print(
+            f"Deleted metadata version v{target_row['version_number']} for "
+            f"build {build_row['id']} ({build_row['title']} v{build_row['version']})."
+        )
+        if target_row["is_current"] and current_row:
+            print("Current pointer was reassigned to the next available version.")
+        if backup_path:
+            print(f"Database backup created: {backup_path}")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "List and rollback metadata_versions entries in archive.db without deleting history."
+            "List, rollback, and optionally delete metadata_versions entries in archive.db."
         )
     )
     parser.add_argument("--title", help="Visual novel title (used with --version)")
@@ -201,6 +257,28 @@ def build_parser():
         help="Export selected metadata version JSON to this directory",
     )
     rollback_cmd.set_defaults(func=rollback)
+
+    delete_cmd = sub.add_parser(
+        "delete-version",
+        help="Delete one metadata version row for a build (history-destructive)",
+    )
+    delete_cmd.add_argument(
+        "--target-version",
+        type=int,
+        required=True,
+        help="Metadata version_number to delete",
+    )
+    delete_cmd.add_argument(
+        "--backup",
+        action="store_true",
+        help="Create a timestamped archive.db backup before deletion",
+    )
+    delete_cmd.add_argument(
+        "--backup-dir",
+        default="db_backups",
+        help="Directory for backup files (default: db_backups)",
+    )
+    delete_cmd.set_defaults(func=delete_version)
 
     return parser
 
