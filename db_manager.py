@@ -6,7 +6,7 @@ DB_PATH = "archive.db"
 SCHEMA_PATH = "db_schema.sql"
 
 # Database is treated as fresh-initialized from db_schema.sql.
-TARGET_SCHEMA_VERSION = 1
+TARGET_SCHEMA_VERSION = 2
 
 
 def get_connection():
@@ -46,8 +46,12 @@ def initialize_database():
             conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
         print("Database initialized successfully.")
     else:
-        # Existing DBs are expected to already match the checked-in schema.
+        # Apply CREATE ... IF NOT EXISTS statements/triggers for existing DBs too.
+        with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+            schema_sql = f.read()
+
         with get_connection() as conn:
+            conn.executescript(schema_sql)
             conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
 
 

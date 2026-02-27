@@ -49,5 +49,10 @@ python metadata_rollback_tool.py --build-id 7 delete-version --latest --backup
 python metadata_rollback_tool.py --title "My VN" --version "1.2" list
 ```
 
+
+Schema behavior note:
+- Deleting the last `archives` row for a build now automatically deletes that `builds` row (which then cascades to build-linked tables via existing foreign keys).
+- Deleting `metadata_versions` rows now automatically prunes orphaned `metadata_objects` rows via trigger.
+
 Safety files created when `--backup` is used:
 - `db_backups/archive_backup_<timestamp>.db`
