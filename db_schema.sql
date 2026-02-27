@@ -251,3 +251,33 @@ ON metadata_versions(build_id);
 
 CREATE INDEX IF NOT EXISTS idx_metadata_versions_hash
 ON metadata_versions(metadata_hash);
+
+-- =====================================================
+-- 13. TRIGGERS FOR ARCHIVE-ID DRIVEN CASCADE CLEANUP
+-- =====================================================
+
+-- If the last archive row for a build is deleted, remove the build.
+-- This enables archive-id deletion to cascade through build-linked tables.
+CREATE TRIGGER IF NOT EXISTS trg_archives_delete_last_archive_prune_build
+AFTER DELETE ON archives
+FOR EACH ROW
+WHEN NOT EXISTS (
+    SELECT 1 FROM archives a WHERE a.build_id = OLD.build_id
+)
+BEGIN
+    DELETE FROM builds WHERE id = OLD.build_id;
+END;
+
+-- Remove orphan metadata_objects after metadata_versions are deleted.
+CREATE TRIGGER IF NOT EXISTS trg_metadata_versions_delete_prune_objects
+AFTER DELETE ON metadata_versions
+FOR EACH ROW
+BEGIN
+    DELETE FROM metadata_objects
+    WHERE hash = OLD.metadata_hash
+      AND NOT EXISTS (
+          SELECT 1
+          FROM metadata_versions mv
+          WHERE mv.metadata_hash = OLD.metadata_hash
+      );
+END;
