@@ -7,37 +7,44 @@ Metadata Entry
 <img width="1482" height="987" alt="image" src="https://github.com/user-attachments/assets/864a261c-1d1e-482d-9846-672a124c697d" />
 
 
-## Rolling back or deleting a metadata entry
+## Undoing a mistaken metadata/create entry
 
-Use `metadata_rollback_tool.py` to manage `metadata_versions` for a specific build.
+Use `metadata_rollback_tool.py` to manage `metadata_versions` and, if needed, remove the full created build entry.
 
-### Does rollback apply to newly created metadata?
-Yes. If you just created new metadata, that new row becomes `is_current = 1`. Running `rollback` will move `is_current` back to the previous (or specified) version.
-
-### Is actual deletion possible?
-Yes. Use `delete-version` to remove a specific `metadata_versions` row by `version_number`.
-
-### Does deletion affect other tables?
-- Deleting from `metadata_versions` does **not** delete VN/build/archive records.
-- If the deleted metadata hash is no longer referenced by any version row, the tool also removes that orphaned row from `metadata_objects`.
-- If you delete the current version, the tool automatically assigns another version as current (unless it is the only version, which is blocked).
-
-Examples:
+### If you only want to undo the latest metadata edit
+Use rollback (non-destructive history pointer move):
 
 ```bash
-# List versions for a VN build
-python metadata_rollback_tool.py --title "My VN" --version "1.2" list
-
-# Roll back to the previous metadata version, create DB backup, and export metadata JSON
-python metadata_rollback_tool.py --title "My VN" --version "1.2" rollback --backup
-
-# Roll back to an explicit metadata version using build_id
-python metadata_rollback_tool.py --build-id 7 rollback --to-version 3 --backup --export-dir metadata_exports
-
-# Permanently delete metadata version v4 for this build
-python metadata_rollback_tool.py --build-id 7 delete-version --target-version 4 --backup
+python metadata_rollback_tool.py --build-id 7 rollback --backup
 ```
 
-This tool can create separate files for safety and auditability:
-- `db_backups/archive_backup_<timestamp>.db` before rollback/deletion (when `--backup` is used)
-- `metadata_exports/*.json` for exported rollback metadata
+### If you want it to look like the create never happened
+Use hard undo (build-level removal):
+
+```bash
+# Removes the build row and cascaded build-linked rows
+python metadata_rollback_tool.py --build-id 7 undo-build-create --backup
+
+# Keep VN row even if that was its only build
+python metadata_rollback_tool.py --build-id 7 undo-build-create --backup --keep-empty-vn
+
+# Preview affected rows without changing archive.db
+python metadata_rollback_tool.py --build-id 7 undo-build-create --dry-run
+```
+
+`undo-build-create` performs:
+- delete from `builds` for that build id (which cascades to `archives`, `build_target_platforms`, and `metadata_versions`)
+- optional deletion of the now-empty `visual_novels` row (default behavior)
+- cleanup of orphaned `metadata_objects`, `tags`, and `series`
+
+### Targeting entries
+```bash
+# By build id
+python metadata_rollback_tool.py --build-id 7 list
+
+# By title/version
+python metadata_rollback_tool.py --title "My VN" --version "1.2" list
+```
+
+Safety files created when `--backup` is used:
+- `db_backups/archive_backup_<timestamp>.db`

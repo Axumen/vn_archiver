@@ -13,7 +13,7 @@ def resolve_build(conn, title=None, version=None, build_id=None):
     if build_id is not None:
         row = conn.execute(
             """
-            SELECT b.id, v.title, b.version
+            SELECT b.id, b.vn_id, v.series_id, v.title, b.version
             FROM builds b
             JOIN visual_novels v ON v.id = b.vn_id
             WHERE b.id = ?
@@ -29,7 +29,7 @@ def resolve_build(conn, title=None, version=None, build_id=None):
 
     row = conn.execute(
         """
-        SELECT b.id, v.title, b.version
+        SELECT b.id, b.vn_id, v.series_id, v.title, b.version
         FROM builds b
         JOIN visual_novels v ON v.id = b.vn_id
         WHERE v.title = ? AND b.version = ?
@@ -67,6 +67,79 @@ def backup_database(backup_dir):
     backup_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(DB_PATH, backup_path)
     return backup_path
+
+
+def prune_orphaned_rows(conn):
+    metadata_deleted = conn.execute(
+        """
+        DELETE FROM metadata_objects
+        WHERE hash NOT IN (SELECT metadata_hash FROM metadata_versions)
+        """
+    ).rowcount
+
+    tags_deleted = conn.execute(
+        """
+        DELETE FROM tags
+        WHERE id NOT IN (SELECT tag_id FROM vn_tags)
+        """
+    ).rowcount
+
+    series_deleted = conn.execute(
+        """
+        DELETE FROM series
+        WHERE id NOT IN (
+            SELECT DISTINCT series_id FROM visual_novels WHERE series_id IS NOT NULL
+        )
+        """
+    ).rowcount
+
+    return {
+        "metadata_objects": metadata_deleted,
+        "tags": tags_deleted,
+        "series": series_deleted,
+    }
+
+
+def preview_undo_build_create(conn, build_row, delete_empty_vn):
+    build_id = build_row["id"]
+    vn_id = build_row["vn_id"]
+
+    preview = {
+        "build_id": build_id,
+        "vn_id": vn_id,
+        "would_delete": {
+            "builds": 1,
+            "archives": conn.execute(
+                "SELECT COUNT(*) FROM archives WHERE build_id = ?",
+                (build_id,),
+            ).fetchone()[0],
+            "build_target_platforms": conn.execute(
+                "SELECT COUNT(*) FROM build_target_platforms WHERE build_id = ?",
+                (build_id,),
+            ).fetchone()[0],
+            "metadata_versions": conn.execute(
+                "SELECT COUNT(*) FROM metadata_versions WHERE build_id = ?",
+                (build_id,),
+            ).fetchone()[0],
+        },
+        "would_delete_vn": False,
+        "note": "",
+    }
+
+    remaining_builds_after = conn.execute(
+        "SELECT COUNT(*) FROM builds WHERE vn_id = ? AND id != ?",
+        (vn_id, build_id),
+    ).fetchone()[0]
+
+    if delete_empty_vn and remaining_builds_after == 0:
+        preview["would_delete_vn"] = True
+        preview["note"] = "VN row would be deleted because no builds would remain."
+    elif remaining_builds_after > 0:
+        preview["note"] = "VN row would be kept because other builds exist."
+    else:
+        preview["note"] = "VN row would be kept because --keep-empty-vn was used."
+
+    return preview
 
 
 def export_metadata_json(conn, build_row, version_row, out_dir):
@@ -137,28 +210,18 @@ def rollback(args):
         if target_row["id"] == current_row["id"]:
             raise ValueError("Target version is already current")
 
-        backup_path = None
-        if args.backup:
-            backup_path = backup_database(args.backup_dir)
+        backup_path = backup_database(args.backup_dir) if args.backup else None
 
         with exclusive_transaction(conn):
-            conn.execute(
-                "UPDATE metadata_versions SET is_current = 0 WHERE build_id = ?",
-                (build_row["id"],),
-            )
-            conn.execute(
-                "UPDATE metadata_versions SET is_current = 1 WHERE id = ?",
-                (target_row["id"],),
-            )
+            conn.execute("UPDATE metadata_versions SET is_current = 0 WHERE build_id = ?", (build_row["id"],))
+            conn.execute("UPDATE metadata_versions SET is_current = 1 WHERE id = ?", (target_row["id"],))
 
         print(
             f"Rolled back build {build_row['id']} ({build_row['title']} v{build_row['version']}) "
             f"from metadata v{current_row['version_number']} to v{target_row['version_number']}."
         )
-
         if backup_path:
             print(f"Database backup created: {backup_path}")
-
         if args.export_dir:
             json_path = export_metadata_json(conn, build_row, target_row, args.export_dir)
             print(f"Exported rolled-back metadata JSON: {json_path}")
@@ -176,46 +239,76 @@ def delete_version(args):
         if not target_row:
             raise ValueError(f"Version v{args.target_version} not found for this build")
 
-        current_row = next((r for r in rows if r["is_current"]), None)
-
         if target_row["is_current"] and len(rows) == 1:
             raise ValueError("Cannot delete the only metadata version for this build")
 
-        backup_path = None
-        if args.backup:
-            backup_path = backup_database(args.backup_dir)
+        backup_path = backup_database(args.backup_dir) if args.backup else None
 
         with exclusive_transaction(conn):
             if target_row["is_current"]:
                 replacement = next((r for r in rows if r["id"] != target_row["id"]), None)
                 if not replacement:
                     raise ValueError("Could not find replacement current version")
-                conn.execute(
-                    "UPDATE metadata_versions SET is_current = 0 WHERE build_id = ?",
-                    (build_row["id"],),
-                )
-                conn.execute(
-                    "UPDATE metadata_versions SET is_current = 1 WHERE id = ?",
-                    (replacement["id"],),
-                )
+                conn.execute("UPDATE metadata_versions SET is_current = 0 WHERE build_id = ?", (build_row["id"],))
+                conn.execute("UPDATE metadata_versions SET is_current = 1 WHERE id = ?", (replacement["id"],))
 
             conn.execute("DELETE FROM metadata_versions WHERE id = ?", (target_row["id"],))
-
-            conn.execute(
-                """
-                DELETE FROM metadata_objects
-                WHERE hash = ?
-                  AND hash NOT IN (SELECT metadata_hash FROM metadata_versions)
-                """,
-                (target_row["metadata_hash"],),
-            )
+            prune_stats = prune_orphaned_rows(conn)
 
         print(
             f"Deleted metadata version v{target_row['version_number']} for "
             f"build {build_row['id']} ({build_row['title']} v{build_row['version']})."
         )
-        if target_row["is_current"] and current_row:
-            print("Current pointer was reassigned to the next available version.")
+        print(f"Cleanup: {prune_stats}")
+        if backup_path:
+            print(f"Database backup created: {backup_path}")
+
+
+def undo_build_create(args):
+    """
+    Hard undo for a newly-created entry.
+    Removes the target build and cascaded dependent rows.
+    Optionally removes the VN row if that VN has no builds left.
+    """
+    with get_connection() as conn:
+        build_row = resolve_build(conn, args.title, args.version, args.build_id)
+
+        if args.dry_run:
+            preview = preview_undo_build_create(conn, build_row, args.delete_empty_vn)
+            print("DRY RUN: no database changes were made.")
+            print(
+                f"Target build: {build_row['id']} ({build_row['title']} v{build_row['version']})"
+            )
+            print(f"Would delete rows: {preview['would_delete']}")
+            print(f"Would delete VN row: {preview['would_delete_vn']}")
+            print(preview["note"])
+            return
+
+        backup_path = backup_database(args.backup_dir) if args.backup else None
+
+        with exclusive_transaction(conn):
+            conn.execute("DELETE FROM builds WHERE id = ?", (build_row["id"],))
+
+            vn_deleted = False
+            remaining_builds = conn.execute(
+                "SELECT COUNT(*) FROM builds WHERE vn_id = ?",
+                (build_row["vn_id"],),
+            ).fetchone()[0]
+            if args.delete_empty_vn and remaining_builds == 0:
+                conn.execute("DELETE FROM visual_novels WHERE id = ?", (build_row["vn_id"],))
+                vn_deleted = True
+
+            prune_stats = prune_orphaned_rows(conn)
+
+        print(
+            f"Removed build {build_row['id']} ({build_row['title']} v{build_row['version']}) "
+            "and cascaded build-linked metadata/archive rows."
+        )
+        if vn_deleted:
+            print("Removed now-empty visual_novels row for this title.")
+        else:
+            print("Visual novel row was retained (other builds still exist, or --keep-empty-vn was used).")
+        print(f"Cleanup: {prune_stats}")
         if backup_path:
             print(f"Database backup created: {backup_path}")
 
@@ -223,7 +316,7 @@ def delete_version(args):
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "List, rollback, and optionally delete metadata_versions entries in archive.db."
+            "Manage metadata/build history in archive.db: list, rollback, delete version, or fully undo a build create."
         )
     )
     parser.add_argument("--title", help="Visual novel title (used with --version)")
@@ -236,49 +329,35 @@ def build_parser():
     list_cmd.set_defaults(func=list_versions)
 
     rollback_cmd = sub.add_parser("rollback", help="Rollback current pointer to an older metadata version")
-    rollback_cmd.add_argument(
-        "--to-version",
-        type=int,
-        help="Explicit metadata version number to mark as current (default: previous)",
-    )
-    rollback_cmd.add_argument(
-        "--backup",
-        action="store_true",
-        help="Create a timestamped archive.db backup before rollback",
-    )
-    rollback_cmd.add_argument(
-        "--backup-dir",
-        default="db_backups",
-        help="Directory for backup files (default: db_backups)",
-    )
-    rollback_cmd.add_argument(
-        "--export-dir",
-        default="metadata_exports",
-        help="Export selected metadata version JSON to this directory",
-    )
+    rollback_cmd.add_argument("--to-version", type=int, help="Explicit metadata version to mark current")
+    rollback_cmd.add_argument("--backup", action="store_true", help="Create backup before rollback")
+    rollback_cmd.add_argument("--backup-dir", default="db_backups", help="Backup directory")
+    rollback_cmd.add_argument("--export-dir", default="metadata_exports", help="Export target JSON directory")
     rollback_cmd.set_defaults(func=rollback)
 
-    delete_cmd = sub.add_parser(
-        "delete-version",
-        help="Delete one metadata version row for a build (history-destructive)",
-    )
-    delete_cmd.add_argument(
-        "--target-version",
-        type=int,
-        required=True,
-        help="Metadata version_number to delete",
-    )
-    delete_cmd.add_argument(
-        "--backup",
-        action="store_true",
-        help="Create a timestamped archive.db backup before deletion",
-    )
-    delete_cmd.add_argument(
-        "--backup-dir",
-        default="db_backups",
-        help="Directory for backup files (default: db_backups)",
-    )
+    delete_cmd = sub.add_parser("delete-version", help="Delete one metadata version row for a build")
+    delete_cmd.add_argument("--target-version", type=int, required=True, help="metadata_versions.version_number")
+    delete_cmd.add_argument("--backup", action="store_true", help="Create backup before deletion")
+    delete_cmd.add_argument("--backup-dir", default="db_backups", help="Backup directory")
     delete_cmd.set_defaults(func=delete_version)
+
+    undo_cmd = sub.add_parser(
+        "undo-build-create",
+        help="Hard undo a created build entry (closest to 'as if that create never happened')",
+    )
+    undo_cmd.add_argument("--backup", action="store_true", help="Create backup before undo")
+    undo_cmd.add_argument("--backup-dir", default="db_backups", help="Backup directory")
+    undo_cmd.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview rows that would be affected without applying changes",
+    )
+    undo_cmd.add_argument(
+        "--keep-empty-vn",
+        action="store_true",
+        help="Keep visual_novels row even if no builds remain",
+    )
+    undo_cmd.set_defaults(func=undo_build_create, delete_empty_vn=True)
 
     return parser
 
@@ -286,6 +365,8 @@ def build_parser():
 def main():
     parser = build_parser()
     args = parser.parse_args()
+    if getattr(args, "keep_empty_vn", False):
+        args.delete_empty_vn = False
     args.func(args)
 
 
