@@ -154,7 +154,7 @@ def export_metadata_json(conn, build_row, version_row, out_dir):
     parsed = json.loads(blob["metadata_json"])
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     base_name = f"{build_row['title']}_v{build_row['version']}_meta_v{version_row['version_number']}_{ts}.json"
-    safe_name = "".join(ch if ch.isalnum() or ch in "-_\." else "_" for ch in base_name)
+    safe_name = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in base_name)
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -235,9 +235,12 @@ def delete_version(args):
         if not rows:
             raise ValueError("No metadata versions found for that build")
 
-        target_row = next((r for r in rows if r["version_number"] == args.target_version), None)
-        if not target_row:
-            raise ValueError(f"Version v{args.target_version} not found for this build")
+        if args.latest:
+            target_row = rows[0]
+        else:
+            target_row = next((r for r in rows if r["version_number"] == args.target_version), None)
+            if not target_row:
+                raise ValueError(f"Version v{args.target_version} not found for this build")
 
         if target_row["is_current"] and len(rows) == 1:
             raise ValueError("Cannot delete the only metadata version for this build")
@@ -265,11 +268,6 @@ def delete_version(args):
 
 
 def undo_build_create(args):
-    """
-    Hard undo for a newly-created entry.
-    Removes the target build and cascaded dependent rows.
-    Optionally removes the VN row if that VN has no builds left.
-    """
     with get_connection() as conn:
         build_row = resolve_build(conn, args.title, args.version, args.build_id)
 
@@ -335,8 +333,10 @@ def build_parser():
     rollback_cmd.add_argument("--export-dir", default="metadata_exports", help="Export target JSON directory")
     rollback_cmd.set_defaults(func=rollback)
 
-    delete_cmd = sub.add_parser("delete-version", help="Delete one metadata version row for a build")
-    delete_cmd.add_argument("--target-version", type=int, required=True, help="metadata_versions.version_number")
+    delete_cmd = sub.add_parser("delete-version", help="Delete metadata version(s) for a build")
+    delete_target = delete_cmd.add_mutually_exclusive_group(required=True)
+    delete_target.add_argument("--target-version", type=int, help="metadata_versions.version_number")
+    delete_target.add_argument("--latest", action="store_true", help="Delete newest metadata version for this build")
     delete_cmd.add_argument("--backup", action="store_true", help="Create backup before deletion")
     delete_cmd.add_argument("--backup-dir", default="db_backups", help="Backup directory")
     delete_cmd.set_defaults(func=delete_version)

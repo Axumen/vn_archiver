@@ -42,6 +42,9 @@ python metadata_rollback_tool.py --build-id 7 undo-build-create --dry-run
 # By build id
 python metadata_rollback_tool.py --build-id 7 list
 
+# Delete only the newest metadata version for this build
+python metadata_rollback_tool.py --build-id 7 delete-version --latest --backup
+
 # By title/version
 python metadata_rollback_tool.py --title "My VN" --version "1.2" list
 ```
