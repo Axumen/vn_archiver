@@ -45,6 +45,9 @@ python metadata_rollback_tool.py --build-id 7 list
 # Delete only the newest metadata version for this build
 python metadata_rollback_tool.py --build-id 7 delete-version --latest --backup
 
+# Undo latest update entry on an existing build (removes newest metadata version + newest archive row)
+python metadata_rollback_tool.py --build-id 7 undo-latest-entry --backup
+
 # By title/version
 python metadata_rollback_tool.py --title "My VN" --version "1.2" list
 ```
@@ -53,6 +56,35 @@ python metadata_rollback_tool.py --title "My VN" --version "1.2" list
 Schema behavior note:
 - Deleting the last `archives` row for a build now automatically deletes that `builds` row (which then cascades to build-linked tables via existing foreign keys).
 - Deleting `metadata_versions` rows now automatically prunes orphaned `metadata_objects` rows via trigger.
+- `undo-latest-entry` is intended for existing builds with at least 2 archives and 2 metadata versions; it avoids deleting the only archive row to prevent accidental build removal.
+- `delete-version` and `undo-latest-entry` now re-align `sqlite_sequence` for affected AUTOINCREMENT tables so tail-id deletions do not leave sequence counters ahead of current max IDs.
 
 Safety files created when `--backup` is used:
 - `db_backups/archive_backup_<timestamp>.db`
+
+## Can `archive.db` be regenerated from `metadata_objects.metadata_json`?
+
+Partially. The JSON blobs in `metadata_objects.metadata_json` are sufficient to reconstruct
+most normalized metadata tables by re-feeding each blob through `insert_visual_novel()` in
+`vn_archiver.py`, because that path upserts series/VN/build/tag/platform/canon rows and
+re-materializes metadata history entries.
+
+However, this is **not** a full-fidelity rebuild of every table:
+- Auto-generated IDs and timestamps will differ.
+- `archive_objects` cannot be fully reconstructed from metadata JSON alone because that table
+  stores storage-layer fields (`storage_path`, object `file_size`) that are not guaranteed to
+  exist in metadata blobs.
+- Any operational state not represented in metadata JSON (for example upload bookkeeping) must
+  be restored separately.
+### Rebuild directly from YAML files
+
+Use `rebuild_archive_db_from_yaml.py` to recreate `archive.db` by scanning a folder tree for metadata YAML files and re-processing each document through the normal insert pipeline.
+
+```bash
+# Rebuild archive.db from YAML files under current folder (creates backup if DB exists)
+python rebuild_archive_db_from_yaml.py --source-dir .
+
+# Rebuild a specific DB path without creating a backup
+python rebuild_archive_db_from_yaml.py --source-dir ./metadata_dump --db-path ./archive.db --no-backup
+```
+
