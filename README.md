@@ -56,3 +56,30 @@ Schema behavior note:
 
 Safety files created when `--backup` is used:
 - `db_backups/archive_backup_<timestamp>.db`
+
+## Can `archive.db` be regenerated from `metadata_objects.metadata_json`?
+
+Partially. The JSON blobs in `metadata_objects.metadata_json` are sufficient to reconstruct
+most normalized metadata tables by re-feeding each blob through `insert_visual_novel()` in
+`vn_archiver.py`, because that path upserts series/VN/build/tag/platform/canon rows and
+re-materializes metadata history entries.
+
+However, this is **not** a full-fidelity rebuild of every table:
+- Auto-generated IDs and timestamps will differ.
+- `archive_objects` cannot be fully reconstructed from metadata JSON alone because that table
+  stores storage-layer fields (`storage_path`, object `file_size`) that are not guaranteed to
+  exist in metadata blobs.
+- Any operational state not represented in metadata JSON (for example upload bookkeeping) must
+  be restored separately.
+### Rebuild directly from YAML files
+
+Use `rebuild_archive_db_from_yaml.py` to recreate `archive.db` by scanning a folder tree for metadata YAML files and re-processing each document through the normal insert pipeline.
+
+```bash
+# Rebuild archive.db from YAML files under current folder (creates backup if DB exists)
+python rebuild_archive_db_from_yaml.py --source-dir .
+
+# Rebuild a specific DB path without creating a backup
+python rebuild_archive_db_from_yaml.py --source-dir ./metadata_dump --db-path ./archive.db --no-backup
+```
+
