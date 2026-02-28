@@ -61,6 +61,22 @@ def get_version_rows(conn, build_id):
     ).fetchall()
 
 
+def get_archive_rows(conn, build_id):
+    return conn.execute(
+        """
+        SELECT
+            a.id,
+            a.sha256,
+            a.archived_at,
+            a.created_at
+        FROM archives a
+        WHERE a.build_id = ?
+        ORDER BY a.created_at DESC, a.id DESC
+        """,
+        (build_id,),
+    ).fetchall()
+
+
 def backup_database(backup_dir):
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     backup_path = Path(backup_dir) / f"archive_backup_{ts}.db"
@@ -267,6 +283,65 @@ def delete_version(args):
             print(f"Database backup created: {backup_path}")
 
 
+def undo_latest_entry(args):
+    """Undo the newest metadata+archive entry on an existing build.
+
+    Intended for cases where an update to an existing build (same build_id) created
+    a new metadata version and archive row, and you want to remove that latest pair
+    without deleting the build itself.
+    """
+    with get_connection() as conn:
+        build_row = resolve_build(conn, args.title, args.version, args.build_id)
+        version_rows = get_version_rows(conn, build_row["id"])
+        archive_rows = get_archive_rows(conn, build_row["id"])
+
+        if len(version_rows) < 2:
+            raise ValueError(
+                "Cannot undo latest entry: this build has fewer than 2 metadata versions. "
+                "Use rollback/delete-version as appropriate."
+            )
+
+        if len(archive_rows) < 2:
+            raise ValueError(
+                "Cannot undo latest entry: deleting the only archive row would trigger build deletion. "
+                "Use undo-build-create if you intend to remove the full build."
+            )
+
+        target_version = version_rows[0]
+        replacement_version = next((r for r in version_rows if r["id"] != target_version["id"]), None)
+        if not replacement_version:
+            raise ValueError("Could not find replacement metadata version for current pointer")
+
+        target_archive = archive_rows[0]
+
+        backup_path = backup_database(args.backup_dir) if args.backup else None
+
+        with exclusive_transaction(conn):
+            if target_version["is_current"]:
+                conn.execute(
+                    "UPDATE metadata_versions SET is_current = 0 WHERE build_id = ?",
+                    (build_row["id"],),
+                )
+                conn.execute(
+                    "UPDATE metadata_versions SET is_current = 1 WHERE id = ?",
+                    (replacement_version["id"],),
+                )
+
+            conn.execute("DELETE FROM metadata_versions WHERE id = ?", (target_version["id"],))
+            conn.execute("DELETE FROM archives WHERE id = ?", (target_archive["id"],))
+            prune_stats = prune_orphaned_rows(conn)
+
+        print(
+            f"Undid latest entry for build {build_row['id']} ({build_row['title']} v{build_row['version']}): "
+            f"removed metadata v{target_version['version_number']} and archive id={target_archive['id']} "
+            f"({target_archive['sha256'][:12]}...)."
+        )
+        print(f"Current metadata version is now v{replacement_version['version_number']}.")
+        print(f"Cleanup: {prune_stats}")
+        if backup_path:
+            print(f"Database backup created: {backup_path}")
+
+
 def undo_build_create(args):
     with get_connection() as conn:
         build_row = resolve_build(conn, args.title, args.version, args.build_id)
@@ -314,7 +389,7 @@ def undo_build_create(args):
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Manage metadata/build history in archive.db: list, rollback, delete version, or fully undo a build create."
+            "Manage metadata/build history in archive.db: list, rollback, delete version(s), undo latest update entry, or fully undo a build create."
         )
     )
     parser.add_argument("--title", help="Visual novel title (used with --version)")
@@ -340,6 +415,14 @@ def build_parser():
     delete_cmd.add_argument("--backup", action="store_true", help="Create backup before deletion")
     delete_cmd.add_argument("--backup-dir", default="db_backups", help="Backup directory")
     delete_cmd.set_defaults(func=delete_version)
+
+    undo_latest_cmd = sub.add_parser(
+        "undo-latest-entry",
+        help="Undo newest metadata+archive entry for an existing build without deleting the build",
+    )
+    undo_latest_cmd.add_argument("--backup", action="store_true", help="Create backup before undo")
+    undo_latest_cmd.add_argument("--backup-dir", default="db_backups", help="Backup directory")
+    undo_latest_cmd.set_defaults(func=undo_latest_entry)
 
     undo_cmd = sub.add_parser(
         "undo-build-create",
