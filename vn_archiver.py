@@ -530,6 +530,8 @@ def sync_vn_tags(conn, vn_id, metadata):
 
 def upsert_build_record(conn, vn_id, metadata):
     build_version = metadata.get('version', '1.0')
+    build_language = metadata.get('language')
+    build_edition = metadata.get('edition')
     build_exists = conn.execute(
         '''
         SELECT id, build_type, distribution_model, distribution_platform,
@@ -537,8 +539,10 @@ def upsert_build_record(conn, vn_id, metadata):
                engine_version, source, base_archive_sha256
         FROM builds
         WHERE vn_id = ? AND version = ?
+          AND COALESCE(language, '') = COALESCE(?, '')
+          AND COALESCE(edition, '') = COALESCE(?, '')
         ''',
-        (vn_id, build_version)
+        (vn_id, build_version, build_language, build_edition)
     ).fetchone()
 
     existing = build_exists if build_exists else {}
@@ -1081,10 +1085,17 @@ def finalize_archive_creation(metadata, archives_data):
         return
 
     build_id = None
+    build_language = metadata.get('language')
+    build_edition = metadata.get('edition')
     with get_connection() as conn:
         build_row = conn.execute(
-            'SELECT id FROM builds WHERE vn_id = ? AND version = ?',
-            (vn_id, metadata.get('version'))
+            '''
+            SELECT id FROM builds
+            WHERE vn_id = ? AND version = ?
+              AND COALESCE(language, '') = COALESCE(?, '')
+              AND COALESCE(edition, '') = COALESCE(?, '')
+            ''',
+            (vn_id, metadata.get('version'), build_language, build_edition)
         ).fetchone()
         if build_row:
             build_id = build_row['id']
@@ -1388,6 +1399,8 @@ def upload_archive(file_path):
 
     title = str(metadata.get("title", "")).strip()
     version = str(metadata.get("version", "")).strip()
+    language = str(metadata.get("language", "")).strip()
+    edition = str(metadata.get("edition", "")).strip()
 
     if not title:
         print(Fore.RED + "Upload Blocked: 'metadata.yaml' is missing 'title'.")
@@ -1409,11 +1422,18 @@ def upload_archive(file_path):
 
         if version:
             build_row = conn.execute(
-                "SELECT id, version FROM builds WHERE vn_id = ? AND version = ?",
-                (vn_id, version)
+                """
+                SELECT id, version FROM builds
+                WHERE vn_id = ? AND version = ?
+                  AND COALESCE(language, '') = COALESCE(?, '')
+                  AND COALESCE(edition, '') = COALESCE(?, '')
+                """,
+                (vn_id, version, language, edition)
             ).fetchone()
             if not build_row:
-                print(Fore.RED + f"Upload Blocked: Version '{version}' for '{title}' does not exist in the database.")
+                lang_label = language if language else "default"
+                edition_label = edition if edition else "default"
+                print(Fore.RED + f"Upload Blocked: Version '{version}' (language={lang_label}, edition={edition_label}) for '{title}' does not exist in the database.")
                 print(Fore.YELLOW + "Please run '(1) Create Metadata' to register this build before uploading.")
                 return False
         else:

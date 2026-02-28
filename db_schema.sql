@@ -90,11 +90,12 @@ CREATE TABLE IF NOT EXISTS builds (
 
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    UNIQUE(vn_id, version),
-
     FOREIGN KEY (vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE,
     FOREIGN KEY (archive_object_sha256) REFERENCES archive_objects(sha256) ON DELETE SET NULL
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_build_release
+ON builds(vn_id, version, COALESCE(language, ''), COALESCE(edition, ''));
 
 -- =====================================================
 -- 5. TARGET PLATFORMS (Normalized)
