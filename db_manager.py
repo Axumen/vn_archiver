@@ -6,7 +6,7 @@ DB_PATH = "archive.db"
 SCHEMA_PATH = "db_schema.sql"
 
 # Database is treated as fresh-initialized from db_schema.sql.
-TARGET_SCHEMA_VERSION = 2
+TARGET_SCHEMA_VERSION = 4
 
 
 def get_connection():

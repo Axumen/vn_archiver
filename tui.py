@@ -395,13 +395,14 @@ def edit_metadata_only():
         # 2. List available builds for the selected VN
         print()
         panel("Select Build to Edit")
-        builds = conn.execute("SELECT id, version, build_type FROM builds WHERE vn_id = ?", (vn_id,)).fetchall()
+        builds = conn.execute("SELECT id, version, build_type, language FROM builds WHERE vn_id = ?", (vn_id,)).fetchall()
         if not builds:
             notify("No builds found for this visual novel.", "warn")
             return
 
         for build in builds:
-            print(f"[{build['id']}] Version: {build['version']} - Type: {build['build_type']}")
+            lang = build['language'] or 'default'
+            print(f"[{build['id']}] Version: {build['version']} - Language: {lang} - Type: {build['build_type']}")
 
         build_id_str = prompt("Enter Build ID to edit (or press Enter to cancel): ")
         if not build_id_str.isdigit():
@@ -450,13 +451,14 @@ def edit_metadata_only():
         # Ensure build-specific fields reflect the selected build so the user
         # confirms/edits against the exact build context they chose.
         build_info = conn.execute(
-            "SELECT version, build_type FROM builds WHERE id = ?",
+            "SELECT version, build_type, language FROM builds WHERE id = ?",
             (build_id,)
         ).fetchone()
 
         if build_info:
             current_metadata["version"] = build_info["version"]
             current_metadata["build_type"] = build_info["build_type"]
+            current_metadata["language"] = build_info["language"]
 
     finally:
         conn.close()
@@ -498,8 +500,18 @@ def edit_metadata_only():
         build_row = None
         with get_connection() as conn:
             build_row = conn.execute(
-                "SELECT id FROM builds WHERE vn_id = ? AND version = ?",
-                (vn_id, updated_metadata.get("version"))
+                """
+                SELECT id FROM builds
+                WHERE vn_id = ? AND version = ?
+                  AND COALESCE(language, '') = COALESCE(?, '')
+                  AND COALESCE(edition, '') = COALESCE(?, '')
+                """,
+                (
+                    vn_id,
+                    updated_metadata.get("version"),
+                    updated_metadata.get("language"),
+                    updated_metadata.get("edition")
+                )
             ).fetchone()
 
         build_id = build_row["id"] if build_row else None
