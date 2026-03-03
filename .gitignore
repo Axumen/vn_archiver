@@ -4,6 +4,7 @@ trash/
 extracted/
 archives/
 uploaded/
+"vn archive/"
 *.zip
 *.7z
 *.rar
