@@ -42,6 +42,9 @@ python metadata_rollback_tool.py --build-id 7 undo-build-create --dry-run
 # By build id
 python metadata_rollback_tool.py --build-id 7 list
 
+# Delete one log-book event, resequence seq_no, and rebuild normalized tables from the remaining log
+python metadata_rollback_tool.py delete-log-entry --log-entry-id 42 --backup
+
 # Delete only the newest metadata version for this build
 python metadata_rollback_tool.py --build-id 7 delete-version --latest --backup
 
@@ -87,3 +90,13 @@ python rebuild_archive_db_from_yaml.py --source-dir .
 python rebuild_archive_db_from_yaml.py --source-dir ./metadata_dump --db-path ./archive.db --no-backup
 ```
 
+
+## Log-book-first metadata design
+
+A proposed event-sourced log-book model (ordered metadata spine + cascade-friendly derived tables) is documented in `docs/log_book_system.md`.
+
+You can rebuild normalized tables from `metadata_log_book` payloads with:
+
+```bash
+python rebuild_archive_db_from_log_book.py
+```

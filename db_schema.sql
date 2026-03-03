@@ -1,6 +1,24 @@
 PRAGMA foreign_keys = ON;
 
 -- =====================================================
+-- 0. METADATA LOG BOOK (Source of Truth)
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS metadata_log_book (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seq_no INTEGER NOT NULL UNIQUE,
+    event_type TEXT NOT NULL,
+    aggregate_kind TEXT NOT NULL,
+    aggregate_key TEXT NOT NULL,
+    payload_schema_version INTEGER NOT NULL DEFAULT 1,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_metadata_log_book_agg
+ON metadata_log_book(aggregate_kind, aggregate_key, seq_no);
+
+-- =====================================================
 -- 1. SERIES
 -- =====================================================
 
