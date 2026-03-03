@@ -410,7 +410,7 @@ def delete_log_entry(args):
                 f"created_at={row['created_at']}"
             )
             if not args.skip_rebuild:
-                print("Would then rebuild normalized projection tables from remaining log entries.")
+                print("Would then resequence remaining seq_no values and rebuild normalized projection tables from remaining log entries.")
             return
 
         backup_path = backup_database(args.backup_dir) if args.backup else None
@@ -418,9 +418,18 @@ def delete_log_entry(args):
         with exclusive_transaction(conn):
             conn.execute("DELETE FROM metadata_log_book WHERE id = ?", (args.log_entry_id,))
 
+            remaining_rows = conn.execute(
+                "SELECT id FROM metadata_log_book ORDER BY seq_no, id"
+            ).fetchall()
+            for idx, remaining in enumerate(remaining_rows, start=1):
+                conn.execute(
+                    "UPDATE metadata_log_book SET seq_no = ? WHERE id = ?",
+                    (idx, remaining["id"]),
+                )
+
         print(
             f"Deleted metadata_log_book entry id={row['id']} seq_no={row['seq_no']} "
-            f"({row['event_type']} {row['aggregate_kind']}:{row['aggregate_key']})."
+            f"({row['event_type']} {row['aggregate_kind']}:{row['aggregate_key']}) and resequenced remaining entries."
         )
         if backup_path:
             print(f"Database backup created: {backup_path}")
@@ -491,7 +500,7 @@ def build_parser():
 
     log_delete_cmd = sub.add_parser(
         "delete-log-entry",
-        help="Delete one metadata_log_book row and rebuild normalized projections",
+        help="Delete one metadata_log_book row, resequence seq_no, and rebuild normalized projections",
     )
     log_delete_cmd.add_argument("--log-entry-id", type=int, required=True, help="metadata_log_book.id")
     log_delete_cmd.add_argument("--backup", action="store_true", help="Create backup before deletion")
