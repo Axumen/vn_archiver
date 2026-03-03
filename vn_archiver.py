@@ -1227,7 +1227,7 @@ def build_recommended_metadata_name(metadata, sha256, metadata_version_number):
 
 
 def order_metadata_for_yaml(metadata):
-    """Return metadata ordered by template keys first, then remaining keys."""
+    """Return metadata ordered exactly by metadata template field order."""
     if not isinstance(metadata, dict):
         return metadata
 
@@ -1241,7 +1241,25 @@ def order_metadata_for_yaml(metadata):
         return dict(metadata)
 
     ordered = {}
-    for key in template.keys():
+
+    template_field_order = ['metadata_version']
+
+    required_fields = template.get('required')
+    if isinstance(required_fields, list):
+        template_field_order.extend(
+            field for field in required_fields if isinstance(field, str)
+        )
+
+    optional_fields = template.get('optional')
+    if isinstance(optional_fields, list):
+        template_field_order.extend(
+            field for field in optional_fields if isinstance(field, str)
+        )
+
+    if 'archives' in template and 'archives' not in template_field_order:
+        template_field_order.append('archives')
+
+    for key in template_field_order:
         if key in metadata:
             ordered[key] = metadata[key]
 
