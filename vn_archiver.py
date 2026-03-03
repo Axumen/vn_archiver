@@ -1642,15 +1642,17 @@ def upload_archive(file_path):
     # -------------------------------------------------------------------
     with get_connection() as conn:
         try:
-            conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", bundle_sha256, build_id))
-            conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
-
+            # Insert the physical object first so builds.archive_object_sha256 FK can reference it.
             conn.execute('''
                 INSERT OR IGNORE INTO archive_objects (sha256, file_size, storage_path)
                 VALUES (?, ?, ?)
             ''', (bundle_sha256, file_size, cloud_path))
+
+            conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", bundle_sha256, build_id))
+            conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
         except Exception as e:
-            print(Fore.RED + f"Notice: Non-fatal database update error: {e}")
+            print(Fore.RED + f"Database update failed after upload verification: {e}")
+            return False
 
     return True
 
