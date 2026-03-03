@@ -1591,7 +1591,26 @@ def upload_archive(file_path):
     print(Fore.GREEN + "\nUpload Complete!")
 
     # -------------------------------------------------------------------
-    # 7. Update Database with new physical CAS object
+    # 7. Verify uploaded object exists remotely before DB write-through
+    # -------------------------------------------------------------------
+    try:
+        uploaded_info = bucket.get_file_info_by_name(cloud_path)
+    except Exception as e:
+        print(Fore.RED + f"Post-upload verification failed for {cloud_path}: {e}")
+        return False
+
+    remote_size = getattr(uploaded_info, "size", None)
+    if remote_size is not None and int(remote_size) != int(file_size):
+        print(
+            Fore.RED
+            + f"Post-upload verification failed: remote size {remote_size} does not match local size {file_size}."
+        )
+        return False
+
+    print(Fore.GREEN + f"Verified remote object: {cloud_path}")
+
+    # -------------------------------------------------------------------
+    # 8. Update Database with new physical CAS object
     # -------------------------------------------------------------------
     with get_connection() as conn:
         try:
