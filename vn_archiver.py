@@ -775,44 +775,121 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
     return None
 
 
+def append_metadata_log_entry(conn, metadata):
+    """Append a canonical metadata event into metadata_log_book."""
+    payload_json = json.dumps(
+        metadata,
+        default=safe_json_serialize,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":")
+    )
+
+    try:
+        payload_schema_version = int(metadata.get('metadata_version') or 1)
+    except (ValueError, TypeError):
+        payload_schema_version = 1
+
+    seq_no = conn.execute(
+        'SELECT COALESCE(MAX(seq_no), 0) + 1 FROM metadata_log_book'
+    ).fetchone()[0]
+
+    aggregate_key = "::".join([
+        str(metadata.get('canonical_slug') or metadata.get('title') or 'unknown'),
+        str(metadata.get('version') or '1.0'),
+        str(metadata.get('language') or ''),
+        str(metadata.get('edition') or '')
+    ])
+
+    conn.execute(
+        '''
+        INSERT INTO metadata_log_book (
+            seq_no, event_type, aggregate_kind, aggregate_key,
+            payload_schema_version, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ''',
+        (
+            seq_no,
+            'upsert_metadata',
+            'build',
+            aggregate_key,
+            payload_schema_version,
+            payload_json,
+        )
+    )
+    conn.commit()
+
+
+def _apply_projection_for_metadata(conn, metadata):
+    if not metadata.get('title'):
+        raise ValueError('Title is required.')
+
+    series_id = upsert_series(conn, metadata)
+    vn_id = upsert_visual_novel_record(conn, metadata, series_id)
+
+    sync_vn_tags(conn, vn_id, metadata)
+
+    build_id = upsert_build_record(conn, vn_id, metadata)
+    sync_build_target_platforms(conn, build_id, metadata)
+    sync_canon_relationship(conn, vn_id, metadata)
+
+    archives_to_process, _ = collect_archives_for_db(metadata)
+    process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_process)
+    return vn_id
+
+
+def rebuild_projections_from_metadata_log_book(conn):
+    """
+    Rebuild normalized projection tables from metadata_log_book payload_json.
+    Existing rows are cleared and replayed in seq_no order.
+    """
+    conn.execute('DELETE FROM canon_relationships')
+    conn.execute('DELETE FROM vn_tags')
+    conn.execute('DELETE FROM build_target_platforms')
+    conn.execute('DELETE FROM archives')
+    conn.execute('DELETE FROM metadata_versions')
+    conn.execute('DELETE FROM builds')
+    conn.execute('DELETE FROM visual_novels')
+    conn.execute('DELETE FROM series')
+    conn.execute('DELETE FROM tags')
+    conn.execute('DELETE FROM target_platforms')
+    conn.execute('DELETE FROM metadata_objects')
+    conn.commit()
+
+    log_rows = conn.execute(
+        'SELECT id, payload_json FROM metadata_log_book ORDER BY seq_no, id'
+    ).fetchall()
+
+    for row in log_rows:
+        payload = json.loads(row['payload_json'])
+        _apply_projection_for_metadata(conn, payload)
+
+
 def insert_visual_novel(metadata):
     '''
     Inserts or updates the normalized metadata into the SQLite database.
     '''
 
     with get_connection() as conn:
-        if not metadata.get('title'):
-            raise ValueError('Title is required.')
+        append_metadata_log_entry(conn, metadata)
+        rebuild_projections_from_metadata_log_book(conn)
 
-        series_id = upsert_series(conn, metadata)
-        vn_id = upsert_visual_novel_record(conn, metadata, series_id)
+        lookup_slug = metadata.get('canonical_slug')
+        if lookup_slug:
+            vn_row = conn.execute(
+                'SELECT id FROM visual_novels WHERE canonical_slug = ?',
+                (lookup_slug,)
+            ).fetchone()
+            if vn_row:
+                return vn_row['id']
 
-        sync_vn_tags(conn, vn_id, metadata)
-
-        build_id = upsert_build_record(conn, vn_id, metadata)
-        sync_build_target_platforms(conn, build_id, metadata)
-        sync_canon_relationship(conn, vn_id, metadata)
-
-        archives_to_process, _ = collect_archives_for_db(metadata)
-
-        early_return_vn_id = process_archives_for_build(
-            conn,
-            build_id,
-            metadata,
-            vn_id,
-            archives_to_process
-        )
-        if early_return_vn_id:
-            return early_return_vn_id
-
-        return vn_id
-
-        # ==========================================================
-        # RETURN VALUE (For new inserts and metadata-only operations)
-        # ==========================================================
-        # If we reached this point, the VN/build metadata was inserted or
-        # updated successfully even when no archive row existed yet.
-        return vn_id
+        vn_row = conn.execute(
+            'SELECT id FROM visual_novels WHERE title = ? ORDER BY id DESC LIMIT 1',
+            (metadata.get('title'),)
+        ).fetchone()
+        if not vn_row:
+            raise RuntimeError('Projection rebuild succeeded but VN row could not be located.')
+        return vn_row['id']
 
 
 # ==============================

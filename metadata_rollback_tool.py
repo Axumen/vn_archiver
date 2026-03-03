@@ -3,6 +3,8 @@
 import argparse
 import json
 import shutil
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -386,6 +388,51 @@ def undo_build_create(args):
             print(f"Database backup created: {backup_path}")
 
 
+def delete_log_entry(args):
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, seq_no, event_type, aggregate_kind, aggregate_key, created_at
+            FROM metadata_log_book
+            WHERE id = ?
+            """,
+            (args.log_entry_id,),
+        ).fetchone()
+
+        if not row:
+            raise ValueError(f"No metadata_log_book row found for id={args.log_entry_id}")
+
+        if args.dry_run:
+            print("DRY RUN: no database changes were made.")
+            print(
+                f"Would delete log entry id={row['id']} seq_no={row['seq_no']} "
+                f"event={row['event_type']} aggregate={row['aggregate_kind']}:{row['aggregate_key']} "
+                f"created_at={row['created_at']}"
+            )
+            if not args.skip_rebuild:
+                print("Would then rebuild normalized projection tables from remaining log entries.")
+            return
+
+        backup_path = backup_database(args.backup_dir) if args.backup else None
+
+        with exclusive_transaction(conn):
+            conn.execute("DELETE FROM metadata_log_book WHERE id = ?", (args.log_entry_id,))
+
+        print(
+            f"Deleted metadata_log_book entry id={row['id']} seq_no={row['seq_no']} "
+            f"({row['event_type']} {row['aggregate_kind']}:{row['aggregate_key']})."
+        )
+        if backup_path:
+            print(f"Database backup created: {backup_path}")
+
+    if args.skip_rebuild:
+        print("Skipped projection rebuild (--skip-rebuild).")
+        return
+
+    subprocess.run([sys.executable, "rebuild_archive_db_from_log_book.py"], check=True)
+    print("Rebuilt normalized projection tables from remaining metadata_log_book entries.")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
@@ -441,6 +488,25 @@ def build_parser():
         help="Keep visual_novels row even if no builds remain",
     )
     undo_cmd.set_defaults(func=undo_build_create, delete_empty_vn=True)
+
+    log_delete_cmd = sub.add_parser(
+        "delete-log-entry",
+        help="Delete one metadata_log_book row and rebuild normalized projections",
+    )
+    log_delete_cmd.add_argument("--log-entry-id", type=int, required=True, help="metadata_log_book.id")
+    log_delete_cmd.add_argument("--backup", action="store_true", help="Create backup before deletion")
+    log_delete_cmd.add_argument("--backup-dir", default="db_backups", help="Backup directory")
+    log_delete_cmd.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview target log entry without applying changes",
+    )
+    log_delete_cmd.add_argument(
+        "--skip-rebuild",
+        action="store_true",
+        help="Delete log entry without replaying normalized tables (not recommended)",
+    )
+    log_delete_cmd.set_defaults(func=delete_log_entry)
 
     return parser
 
