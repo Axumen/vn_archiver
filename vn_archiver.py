@@ -1226,6 +1226,32 @@ def build_recommended_metadata_name(metadata, sha256, metadata_version_number):
     return f"{title_slug}_{version_slug}_{short_hash}_v{metadata_version_number}_meta.yaml"
 
 
+def order_metadata_for_yaml(metadata):
+    """Return metadata ordered by template keys first, then remaining keys."""
+    if not isinstance(metadata, dict):
+        return metadata
+
+    try:
+        template_version = int(metadata.get('metadata_version') or DEFAULT_METADATA_VERSION)
+    except (ValueError, TypeError):
+        template_version = DEFAULT_METADATA_VERSION
+
+    template = load_metadata_template(template_version)
+    if not isinstance(template, dict):
+        return dict(metadata)
+
+    ordered = {}
+    for key in template.keys():
+        if key in metadata:
+            ordered[key] = metadata[key]
+
+    for key, value in metadata.items():
+        if key not in ordered:
+            ordered[key] = value
+
+    return ordered
+
+
 def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None):
     """Create a metadata.yaml copy and stage it in uploading/ with recommended naming."""
     meta_sha = metadata.get('sha256') or get_nested_value(metadata, 'archive.sha256')
@@ -1242,8 +1268,9 @@ def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir
     target_dir.mkdir(parents=True, exist_ok=True)
 
     temp_meta_path = target_dir / 'metadata.yaml'
+    ordered_metadata = order_metadata_for_yaml(metadata)
     with open(temp_meta_path, 'w', encoding='utf-8') as handle:
-        yaml.dump(metadata, handle, sort_keys=False, allow_unicode=True)
+        yaml.dump(ordered_metadata, handle, sort_keys=False, allow_unicode=True)
 
     final_path = target_dir / final_name
     if final_path.exists():
@@ -1628,7 +1655,7 @@ def upload_metadata_sidecar(metadata, vn_id, build_slug, db_version_number):
 
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", encoding="utf-8", delete=False) as handle:
         temp_path = handle.name
-        yaml.dump(metadata, handle, sort_keys=False, allow_unicode=True)
+        yaml.dump(order_metadata_for_yaml(metadata), handle, sort_keys=False, allow_unicode=True)
 
     final_temp_path = Path(temp_path)
 
