@@ -42,7 +42,7 @@ python metadata_rollback_tool.py --build-id 7 undo-build-create --dry-run
 # By build id
 python metadata_rollback_tool.py --build-id 7 list
 
-# Delete one log-book event and rebuild normalized tables from the remaining log
+# Delete one log-book event, resequence seq_no, and rebuild normalized tables from the remaining log
 python metadata_rollback_tool.py delete-log-entry --log-entry-id 42 --backup
 
 # Delete only the newest metadata version for this build
