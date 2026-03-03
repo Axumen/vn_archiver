@@ -22,7 +22,8 @@ from vn_archiver import (
     detect_latest_metadata_template_version,
     insert_visual_novel,
     get_current_metadata_version_number,
-    stage_metadata_yaml_for_upload
+    stage_metadata_yaml_for_upload,
+    order_metadata_for_yaml
 )
 
 init(autoreset=True)
@@ -386,7 +387,11 @@ def quick_process_with_metadata_yaml():
         else:
             notify("No sha256 found in metadata YAML; skipping sha256 confirmation.", "warn")
 
-        create_archive_from_metadata_file(selected_paths, metadata)
+        ordered_metadata = order_metadata_for_yaml(metadata)
+        if list(ordered_metadata.keys()) != list(metadata.keys()):
+            notify("Corrected metadata YAML field order based on template before processing.", "info")
+
+        create_archive_from_metadata_file(selected_paths, ordered_metadata)
 
         if os.path.exists(metadata_path):
             os.remove(metadata_path)
