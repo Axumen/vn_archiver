@@ -1426,21 +1426,49 @@ def upload_archive(file_path):
     print(Fore.CYAN + f"\nAnalyzing {os.path.basename(file_path)}...")
 
     # -------------------------------------------------------------------
-    # 1. Read metadata.yaml from inside the master bundle
+    # 1. Read metadata from bundle (preferred) or queued sidecar file
     # -------------------------------------------------------------------
+    metadata = None
+    metadata_source = None
+
     try:
         with zipfile.ZipFile(file_path, 'r') as z:
-            if 'metadata.yaml' not in z.namelist():
-                print(Fore.RED + "Upload Blocked: No 'metadata.yaml' found inside the zip.")
-                print(Fore.YELLOW + "This does not appear to be a valid processed bundle.")
-                return False
-
-            with z.open('metadata.yaml') as f:
-                yaml_content = f.read().decode('utf-8')
-                metadata = yaml.safe_load(yaml_content)
+            if 'metadata.yaml' in z.namelist():
+                with z.open('metadata.yaml') as f:
+                    yaml_content = f.read().decode('utf-8')
+                    metadata = yaml.safe_load(yaml_content)
+                    metadata_source = "zip"
     except zipfile.BadZipFile:
         print(Fore.RED + "Upload Blocked: File is not a valid zip archive.")
         return False
+
+    if metadata is None:
+        bundle_stem = Path(file_path).stem
+        sidecar_dir = Path(file_path).parent
+        sidecar_candidates = sorted(
+            sidecar_dir.glob(f"{bundle_stem}_v*_meta.yaml"),
+            key=lambda p: p.name
+        )
+
+        if sidecar_candidates:
+            selected_sidecar = sidecar_candidates[-1]
+            try:
+                with open(selected_sidecar, 'r', encoding='utf-8') as handle:
+                    metadata = yaml.safe_load(handle)
+                    metadata_source = str(selected_sidecar)
+            except Exception as e:
+                print(Fore.RED + f"Upload Blocked: Failed to read sidecar metadata file '{selected_sidecar.name}': {e}")
+                return False
+
+    if not isinstance(metadata, dict):
+        print(Fore.RED + "Upload Blocked: Could not find valid metadata in zip or sidecar file.")
+        print(Fore.YELLOW + "Expected either metadata.yaml in the zip or '<name>_<version>_<hash>_vN_meta.yaml' next to it.")
+        return False
+
+    if metadata_source == "zip":
+        print(Fore.CYAN + "Metadata source: embedded metadata.yaml")
+    else:
+        print(Fore.CYAN + f"Metadata source: sidecar file ({metadata_source})")
 
     title = str(metadata.get("title", "")).strip()
     version = str(metadata.get("version", "")).strip()
@@ -1591,7 +1619,26 @@ def upload_archive(file_path):
     print(Fore.GREEN + "\nUpload Complete!")
 
     # -------------------------------------------------------------------
-    # 7. Update Database with new physical CAS object
+    # 7. Verify uploaded object exists remotely before DB write-through
+    # -------------------------------------------------------------------
+    try:
+        uploaded_info = bucket.get_file_info_by_name(cloud_path)
+    except Exception as e:
+        print(Fore.RED + f"Post-upload verification failed for {cloud_path}: {e}")
+        return False
+
+    remote_size = getattr(uploaded_info, "size", None)
+    if remote_size is not None and int(remote_size) != int(file_size):
+        print(
+            Fore.RED
+            + f"Post-upload verification failed: remote size {remote_size} does not match local size {file_size}."
+        )
+        return False
+
+    print(Fore.GREEN + f"Verified remote object: {cloud_path}")
+
+    # -------------------------------------------------------------------
+    # 8. Update Database with new physical CAS object
     # -------------------------------------------------------------------
     with get_connection() as conn:
         try:
