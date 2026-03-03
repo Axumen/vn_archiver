@@ -363,6 +363,10 @@ def quick_process_with_metadata_yaml():
             return
 
         create_archive_from_metadata_file(selected_paths, metadata)
+
+        if os.path.exists(metadata_path):
+            os.remove(metadata_path)
+            notify(f"Removed processed metadata yaml: {os.path.basename(metadata_path)}", "info")
     except ValueError:
         notify("Invalid input.", "error")
 
