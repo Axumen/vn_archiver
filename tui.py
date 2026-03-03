@@ -362,6 +362,30 @@ def quick_process_with_metadata_yaml():
             notify("Metadata must include 'version'.", "error")
             return
 
+        selected_sha256 = [sha256_file(path) for path in selected_paths]
+        yaml_sha256 = []
+
+        if isinstance(metadata.get("archives"), list):
+            for archive in metadata["archives"]:
+                if isinstance(archive, dict) and archive.get("sha256"):
+                    yaml_sha256.append(str(archive["sha256"]).strip().lower())
+
+        top_level_sha = str(metadata.get("sha256", "")).strip().lower()
+        if top_level_sha and top_level_sha not in yaml_sha256:
+            yaml_sha256.append(top_level_sha)
+
+        if yaml_sha256:
+            selected_sha_set = set(s.lower() for s in selected_sha256)
+            yaml_sha_set = set(yaml_sha256)
+            if selected_sha_set != yaml_sha_set:
+                notify("Quick Process blocked: YAML sha256 does not match selected zip file(s).", "error")
+                notify(f"ZIP sha256: {', '.join(sorted(selected_sha_set))}", "error")
+                notify(f"YAML sha256: {', '.join(sorted(yaml_sha_set))}", "error")
+                return
+            notify("Confirmed: metadata YAML sha256 matches selected zip file(s).", "ok")
+        else:
+            notify("No sha256 found in metadata YAML; skipping sha256 confirmation.", "warn")
+
         create_archive_from_metadata_file(selected_paths, metadata)
 
         if os.path.exists(metadata_path):
