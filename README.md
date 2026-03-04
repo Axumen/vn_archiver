@@ -7,6 +7,32 @@ Metadata Entry
 <img width="1482" height="987" alt="image" src="https://github.com/user-attachments/assets/864a261c-1d1e-482d-9846-672a124c697d" />
 
 
+
+## Translator metadata for multi-language releases
+
+The `translator` field supports three formats:
+
+```yaml
+# single translator/group
+translator: "Sekai Project"
+
+# multiple translators for one release language
+translator:
+  - "Alice"
+  - "Bob"
+
+# translators grouped per language
+translator:
+  english:
+    - "Alice"
+    - "Bob"
+  spanish:
+    - "Carlos"
+  japanese: "Original team"
+```
+
+When a list/map is used, vn_archiver stores it in the `builds.translator` text column as JSON while preserving the full value in metadata history. Stored `metadata_objects.metadata_json` keeps template-style field ordering for readability/export consistency while version hashing remains canonical.
+
 ## Undoing a mistaken metadata/create entry
 
 Use `metadata_rollback_tool.py` to manage `metadata_versions` and, if needed, remove the full created build entry.
@@ -78,6 +104,7 @@ However, this is **not** a full-fidelity rebuild of every table:
 ### Rebuild directly from YAML files
 
 Use `rebuild_archive_db_from_yaml.py` to recreate `archive.db` by scanning a folder tree for metadata YAML files and re-processing each document through the normal insert pipeline.
+The rebuild now performs a second canon-relationship sync pass so parent/child VN links are restored even when child metadata is processed before parent metadata in file order.
 
 ```bash
 # Rebuild archive.db from YAML files under current folder (creates backup if DB exists)

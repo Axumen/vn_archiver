@@ -38,7 +38,7 @@ optional:
   - distribution_model
   - distribution_platform
   - language
-  - translator          # Added: Fan-translation group or official translator
+  - translator          # Fan-translation group, list of translators, or per-language map
   - edition
   - original_release_date
   - release_date
@@ -64,3 +64,17 @@ optional:
 archives:
   - filename:
     sha256:
+
+
+# Translator field examples:
+# translator: "Sekai Project"
+# translator:
+#   - "Alice"
+#   - "Bob"
+# translator:
+#   english:
+#     - "Alice"
+#     - "Bob"
+#   spanish:
+#     - "Carlos"
+#   japanese: "Original team"
