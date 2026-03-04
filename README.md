@@ -7,6 +7,32 @@ Metadata Entry
 <img width="1482" height="987" alt="image" src="https://github.com/user-attachments/assets/864a261c-1d1e-482d-9846-672a124c697d" />
 
 
+
+## Translator metadata for multi-language releases
+
+The `translator` field supports three formats:
+
+```yaml
+# single translator/group
+translator: "Sekai Project"
+
+# multiple translators for one release language
+translator:
+  - "Alice"
+  - "Bob"
+
+# translators grouped per language
+translator:
+  english:
+    - "Alice"
+    - "Bob"
+  spanish:
+    - "Carlos"
+  japanese: "Original team"
+```
+
+When a list/map is used, vn_archiver stores it in the `builds.translator` text column as JSON while preserving the full value in metadata history.
+
 ## Undoing a mistaken metadata/create entry
 
 Use `metadata_rollback_tool.py` to manage `metadata_versions` and, if needed, remove the full created build entry.

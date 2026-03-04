@@ -397,6 +397,50 @@ def normalize_metadata_list(metadata, field_name):
     return values
 
 
+def normalize_translator_value(value):
+    """Normalize translator metadata into a storable TEXT value.
+
+    Supports:
+    - plain string: "Group A"
+    - list: ["Person A", "Person B"]
+    - dict keyed by language:
+      {"english": ["Person A", "Person B"], "spanish": "Person C"}
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+
+    if isinstance(value, list):
+        flattened = [str(item).strip() for item in value if str(item).strip()]
+        return json.dumps(flattened, ensure_ascii=False) if flattened else None
+
+    if isinstance(value, dict):
+        normalized_map = {}
+        for language, translators in value.items():
+            if not language:
+                continue
+            language_key = str(language).strip()
+            if not language_key:
+                continue
+
+            if isinstance(translators, list):
+                names = [str(name).strip() for name in translators if str(name).strip()]
+            else:
+                single = str(translators).strip()
+                names = [single] if single else []
+
+            if names:
+                normalized_map[language_key] = names
+
+        return json.dumps(normalized_map, ensure_ascii=False) if normalized_map else None
+
+    fallback = str(value).strip()
+    return fallback or None
+
+
 def get_latest_metadata_for_title(title):
     """Fetch the current metadata blob for an existing VN title, if present."""
     if not title:
@@ -561,7 +605,7 @@ def upsert_build_record(conn, vn_id, metadata):
         effective('distribution_model'),
         effective('distribution_platform'),
         effective('language'),
-        effective('translator'),
+        normalize_translator_value(effective('translator')),
         effective('edition'),
         effective('original_release_date'),
         effective('release_date'),
