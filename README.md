@@ -8,6 +8,20 @@ Metadata Entry
 
 
 
+## Developer / publisher formatting
+
+Yes — comma-separated values in one line are fine for `developer` and `publisher` (for example: `developer: "Studio A, Studio B"`).
+You can also use YAML list style (`-`) and vn_archiver will normalize it into a comma-separated text value before storing it in the database.
+
+```yaml
+developer: "Studio A, Studio B"
+# or
+developer:
+  - "Studio A"
+  - "Studio B"
+publisher: "Publisher X"
+```
+
 ## Translator metadata for multi-language releases
 
 The `translator` field supports three formats:

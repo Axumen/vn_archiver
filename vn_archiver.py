@@ -397,6 +397,23 @@ def normalize_metadata_list(metadata, field_name):
     return values
 
 
+def normalize_text_list_value(value):
+    """Normalize text-or-list metadata fields into a comma-separated string."""
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+
+    if isinstance(value, list):
+        parts = [str(item).strip() for item in value if str(item).strip()]
+        return ", ".join(parts) if parts else None
+
+    fallback = str(value).strip()
+    return fallback or None
+
+
 def normalize_translator_value(value):
     """Normalize translator metadata into a storable TEXT value.
 
@@ -533,8 +550,8 @@ def upsert_visual_novel_record(conn, metadata, series_id):
             series_id,
             slug,
             json.dumps(aliases),
-            effective_vn('developer'),
-            effective_vn('publisher'),
+            normalize_text_list_value(effective_vn('developer')),
+            normalize_text_list_value(effective_vn('publisher')),
             effective_vn('description'),
             effective_vn('release_status'),
             effective_vn('content_rating'),
@@ -553,8 +570,8 @@ def upsert_visual_novel_record(conn, metadata, series_id):
         title,
         slug,
         json.dumps(aliases),
-        metadata.get('developer'),
-        metadata.get('publisher'),
+        normalize_text_list_value(metadata.get('developer')),
+        normalize_text_list_value(metadata.get('publisher')),
         metadata.get('description'),
         metadata.get('release_status'),
         metadata.get('content_rating'),

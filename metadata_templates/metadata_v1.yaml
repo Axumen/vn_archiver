@@ -23,8 +23,8 @@ optional:
   # VISUAL_NOVELS TABLE
   # -------------------------------------
   - aliases             # Added: List of alternative titles (e.g., Romaji, Japanese)
-  - developer
-  - publisher           # Added: Publisher (often different from developer in VNs)
+  - developer           # Comma-separated string or YAML list are both accepted
+  - publisher           # Publisher (comma-separated string or YAML list accepted)
   - release_status
   - content_rating
   - description         # VN-level description
@@ -78,3 +78,10 @@ archives:
 #   spanish:
 #     - "Carlos"
 #   japanese: "Original team"
+
+# Developer/Publisher examples:
+# developer: "Studio A, Studio B"
+# developer:
+#   - "Studio A"
+#   - "Studio B"
+# publisher: "Publisher X"
