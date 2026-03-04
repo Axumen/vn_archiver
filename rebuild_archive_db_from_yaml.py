@@ -31,6 +31,36 @@ def load_metadata_documents(yaml_module, path: Path):
     return out
 
 
+def resync_canon_relationships(metadata_docs, get_connection, sync_canon_relationship):
+    """Second-pass canon sync so parent/child links resolve regardless of YAML ordering."""
+    rel_docs = [
+        doc for doc in metadata_docs
+        if isinstance(doc, dict)
+        and str(doc.get("title", "")).strip()
+        and (doc.get("parent_vn_title") or doc.get("relationship_type"))
+    ]
+
+    if not rel_docs:
+        return 0
+
+    rel_count = 0
+    with get_connection() as conn:
+        for doc in rel_docs:
+            title = str(doc.get("title", "")).strip()
+            vn_row = conn.execute(
+                "SELECT id FROM visual_novels WHERE title = ?",
+                (title,)
+            ).fetchone()
+            if not vn_row:
+                print(f"[WARN] Could not find VN row during canon resync for title: {title}")
+                continue
+
+            sync_canon_relationship(conn, vn_row["id"], doc)
+            rel_count += 1
+
+    return rel_count
+
+
 def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = None):
     try:
         import yaml
@@ -41,7 +71,8 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
 
     db_manager.DB_PATH = str(db_path)
 
-    from vn_archiver import insert_visual_novel
+    from vn_archiver import insert_visual_novel, sync_canon_relationship
+    from db_manager import get_connection
 
     if db_path.exists():
         if backup_dir is not None:
@@ -62,10 +93,11 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
     yaml_files = find_yaml_files(source_dir)
     if not yaml_files:
         print(f"[WARN] No YAML files found under: {source_dir}")
-        return 0, 0
+        return 0, 0, 0
 
     file_count = 0
     metadata_count = 0
+    all_docs = []
 
     for yaml_path in yaml_files:
         docs = load_metadata_documents(yaml, yaml_path)
@@ -78,10 +110,15 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
                 print(f"[WARN] Skipping metadata without title in {yaml_path}")
                 continue
             insert_visual_novel(doc)
+            all_docs.append(doc)
             metadata_count += 1
             print(f"[OK] Processed metadata from {yaml_path}")
 
-    return file_count, metadata_count
+    relationship_count = resync_canon_relationships(all_docs, get_connection, sync_canon_relationship)
+    if relationship_count:
+        print(f"[OK] Re-synced canon relationships for {relationship_count} metadata document(s).")
+
+    return file_count, metadata_count, relationship_count
 
 
 def parse_args(argv):
@@ -123,12 +160,15 @@ def main(argv=None):
         return 2
 
     try:
-        file_count, metadata_count = rebuild_database(source_dir, db_path, backup_dir=backup_dir)
+        file_count, metadata_count, relationship_count = rebuild_database(source_dir, db_path, backup_dir=backup_dir)
     except Exception as exc:
         print(f"[ERROR] Rebuild failed: {exc}")
         return 1
 
-    print(f"[DONE] Rebuilt {db_path} from {metadata_count} metadata document(s) across {file_count} YAML file(s).")
+    print(
+        f"[DONE] Rebuilt {db_path} from {metadata_count} metadata document(s) "
+        f"across {file_count} YAML file(s); canon resync checked {relationship_count} relationship document(s)."
+    )
     return 0
 
 

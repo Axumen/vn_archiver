@@ -104,6 +104,7 @@ However, this is **not** a full-fidelity rebuild of every table:
 ### Rebuild directly from YAML files
 
 Use `rebuild_archive_db_from_yaml.py` to recreate `archive.db` by scanning a folder tree for metadata YAML files and re-processing each document through the normal insert pipeline.
+The rebuild now performs a second canon-relationship sync pass so parent/child VN links are restored even when child metadata is processed before parent metadata in file order.
 
 ```bash
 # Rebuild archive.db from YAML files under current folder (creates backup if DB exists)
