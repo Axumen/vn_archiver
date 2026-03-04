@@ -717,19 +717,28 @@ def finalize_metadata_objects(conn, metadata, vn_id, build_id):
     except (ValueError, TypeError):
         schema_version = 1
 
-    safe_metadata_json = json.dumps(
+    # Keep hash canonical for dedup/version comparisons, but preserve human-friendly
+    # metadata field order when storing metadata_json for history/export readability.
+    canonical_json = json.dumps(
         metadata,
         default=safe_json_serialize,
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":")
     )
-    metadata_hash = hashlib.sha256(safe_metadata_json.encode("utf-8")).hexdigest()
+    stored_metadata = order_metadata_for_yaml(metadata)
+    stored_metadata_json = json.dumps(
+        stored_metadata,
+        default=safe_json_serialize,
+        ensure_ascii=False,
+        separators=(",", ":")
+    )
+    metadata_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
     conn.execute('''
         INSERT OR IGNORE INTO metadata_objects (hash, schema_version, metadata_json)
         VALUES (?, ?, ?)
-    ''', (metadata_hash, schema_version, safe_metadata_json))
+    ''', (metadata_hash, schema_version, stored_metadata_json))
 
     current_row = conn.execute(
         'SELECT id, metadata_hash FROM metadata_versions WHERE build_id = ? AND is_current = 1',

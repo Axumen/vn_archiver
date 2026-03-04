@@ -31,7 +31,7 @@ translator:
   japanese: "Original team"
 ```
 
-When a list/map is used, vn_archiver stores it in the `builds.translator` text column as JSON while preserving the full value in metadata history.
+When a list/map is used, vn_archiver stores it in the `builds.translator` text column as JSON while preserving the full value in metadata history. Stored `metadata_objects.metadata_json` keeps template-style field ordering for readability/export consistency while version hashing remains canonical.
 
 ## Undoing a mistaken metadata/create entry
 
