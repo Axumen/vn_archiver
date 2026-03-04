@@ -470,7 +470,11 @@ def upsert_visual_novel_record(conn, metadata, series_id):
 
     def effective_vn(field_name):
         if field_name in metadata:
-            return metadata.get(field_name)
+            incoming_value = metadata.get(field_name)
+            if field_name == 'description' and vn_exists and vn_exists['description'] and incoming_value:
+                # Keep work-level synopsis stable across builds unless no description exists yet.
+                return vn_exists['description']
+            return incoming_value
         return vn_exists[field_name] if vn_exists else None
 
     if vn_exists:
@@ -1445,10 +1449,14 @@ def upload_archive(file_path):
     if metadata is None:
         bundle_stem = Path(file_path).stem
         sidecar_dir = Path(file_path).parent
-        sidecar_candidates = sorted(
-            sidecar_dir.glob(f"{bundle_stem}_v*_meta.yaml"),
-            key=lambda p: p.name
-        )
+        sidecar_candidates = list(sidecar_dir.glob(f"{bundle_stem}_v*_meta.yaml"))
+
+        def sidecar_sort_key(path_obj):
+            match = re.search(r"_v(\d+)_meta\.ya?ml$", path_obj.name)
+            numeric_version = int(match.group(1)) if match else -1
+            return (numeric_version, path_obj.stat().st_mtime, path_obj.name)
+
+        sidecar_candidates.sort(key=sidecar_sort_key)
 
         if sidecar_candidates:
             selected_sidecar = sidecar_candidates[-1]
