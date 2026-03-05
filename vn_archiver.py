@@ -404,7 +404,10 @@ def normalize_text_list_value(value):
 
     if isinstance(value, str):
         normalized = value.strip()
-        return normalized or None
+        if not normalized:
+            return None
+        parts = [part.strip() for part in normalized.split(',') if part.strip()]
+        return ", ".join(parts) if parts else None
 
     if isinstance(value, list):
         parts = [str(item).strip() for item in value if str(item).strip()]
@@ -1071,12 +1074,20 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
     print(Fore.CYAN + "Tip: when a [default] is shown, press ENTER to keep it, or type '-' to clear it.")
 
     for field in prompt_fields:
-        if field in ("tags", "target_platform", "aliases"):
+        if field in ("tags", "target_platform", "aliases", "developer", "publisher"):
             suggestions = FIELD_SUGGESTIONS.get(field) or []
             if suggestions:
                 print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
+
             default_val = defaults.get(field)
-            default_display = ", ".join(default_val) if isinstance(default_val, list) else ""
+            if isinstance(default_val, list):
+                default_items = [str(v).strip() for v in default_val if str(v).strip()]
+            elif field in ("developer", "publisher") and isinstance(default_val, str):
+                default_items = [v.strip() for v in default_val.split(',') if v.strip()]
+            else:
+                default_items = []
+
+            default_display = ", ".join(default_items) if default_items else ""
             prompt = f"{field} (comma separated)"
             if default_display:
                 prompt += f" [{default_display}]"
@@ -1086,8 +1097,9 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
                 metadata[field] = []
             elif raw_val:
                 metadata[field] = normalize_list(raw_val)
-            elif isinstance(default_val, list):
-                metadata[field] = default_val
+            elif default_items:
+                metadata[field] = default_items
+
 
         # ==========================================
         # ADD THIS NEW ELIF BLOCK FOR THE SHA256

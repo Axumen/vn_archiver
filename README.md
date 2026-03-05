@@ -11,7 +11,7 @@ Metadata Entry
 ## Developer / publisher formatting
 
 Yes — comma-separated values in one line are fine for `developer` and `publisher` (for example: `developer: "Studio A, Studio B"`).
-You can also use YAML list style (`-`) and vn_archiver will normalize it into a comma-separated text value before storing it in the database.
+You can also use YAML list style (`-`) and vn_archiver will normalize it into a comma-separated text value before storing it in the database. In interactive metadata entry, `developer`/`publisher` now also accept comma-separated input the same way list-style fields are parsed.
 
 ```yaml
 developer: "Studio A, Studio B"
