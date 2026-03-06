@@ -557,7 +557,7 @@ def upsert_visual_novel_record(conn, metadata, series_id):
             normalize_text_list_value(effective_vn('publisher')),
             effective_vn('description'),
             effective_vn('release_status'),
-            effective_vn('content_rating'),
+            normalize_text_list_value(effective_vn('content_rating')),
             effective_vn('source'),
             vn_id
         ))
@@ -577,7 +577,7 @@ def upsert_visual_novel_record(conn, metadata, series_id):
         normalize_text_list_value(metadata.get('publisher')),
         metadata.get('description'),
         metadata.get('release_status'),
-        metadata.get('content_rating'),
+        normalize_text_list_value(metadata.get('content_rating')),
         metadata.get('source')
     ))
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
@@ -598,7 +598,7 @@ def sync_vn_tags(conn, vn_id, metadata):
 
 def upsert_build_record(conn, vn_id, metadata):
     build_version = metadata.get('version', '1.0')
-    build_language = metadata.get('language')
+    build_language = normalize_text_list_value(metadata.get('language'))
     build_edition = metadata.get('edition')
     build_exists = conn.execute(
         '''
@@ -624,7 +624,7 @@ def upsert_build_record(conn, vn_id, metadata):
         effective('build_type'),
         effective('distribution_model'),
         effective('distribution_platform'),
-        effective('language'),
+        normalize_text_list_value(effective('language')),
         normalize_translator_value(effective('translator')),
         effective('edition'),
         effective('original_release_date'),
@@ -1171,7 +1171,7 @@ def finalize_archive_creation(metadata, archives_data):
         return
 
     build_id = None
-    build_language = metadata.get('language')
+    build_language = normalize_text_list_value(metadata.get('language'))
     build_edition = metadata.get('edition')
     with get_connection() as conn:
         build_row = conn.execute(
@@ -1562,7 +1562,7 @@ def upload_archive(file_path):
 
     title = str(metadata.get("title", "")).strip()
     version = str(metadata.get("version", "")).strip()
-    language = str(metadata.get("language", "")).strip()
+    language = normalize_text_list_value(metadata.get("language")) or ""
     edition = str(metadata.get("edition", "")).strip()
 
     if not title:
