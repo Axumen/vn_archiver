@@ -97,6 +97,7 @@ Schema behavior note:
 - Deleting the last `archives` row for a build now automatically deletes that `builds` row (which then cascades to build-linked tables via existing foreign keys).
 - Deleting `metadata_versions` rows now automatically prunes orphaned `metadata_objects` rows via trigger.
 - `undo-latest-entry` is intended for existing builds with at least 2 archives and 2 metadata versions; it avoids deleting the only archive row to prevent accidental build removal.
+- `delete-version` and `undo-latest-entry` now re-align `sqlite_sequence` for affected AUTOINCREMENT tables so tail-id deletions do not leave sequence counters ahead of current max IDs.
 
 Safety files created when `--backup` is used:
 - `db_backups/archive_backup_<timestamp>.db`
