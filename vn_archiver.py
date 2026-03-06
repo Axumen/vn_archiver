@@ -417,6 +417,78 @@ def normalize_text_list_value(value):
     return fallback or None
 
 
+CSV_TO_TEXT_FIELDS = {
+    "developer",
+    "publisher",
+    "language",
+    "content_rating",
+}
+
+CSV_TO_LIST_FIELDS = {
+    "aliases",
+    "tags",
+    "target_platform",
+}
+
+PASSTHROUGH_FIELDS = {
+    "metadata_version",
+    "title",
+    "version",
+    "series",
+    "series_description",
+    "release_status",
+    "description",
+    "source",
+    "build_type",
+    "distribution_model",
+    "distribution_platform",
+    "translator",
+    "edition",
+    "original_release_date",
+    "release_date",
+    "engine",
+    "engine_version",
+    "parent_vn_title",
+    "relationship_type",
+    "notes",
+    "change_note",
+    "base_archive_sha256",
+    "archives",
+    "archive",
+    "sha256",
+    "file_size_bytes",
+    "original_filename",
+    "archived_at",
+}
+
+
+def normalize_metadata_fields(metadata):
+    """Normalize metadata values according to explicit field categories.
+
+    - CSV_TO_TEXT_FIELDS: accepts comma-separated string or YAML list, stored as text.
+    - CSV_TO_LIST_FIELDS: accepts comma-separated string or YAML list, stored as list.
+    - PASSTHROUGH_FIELDS: preserved as-is.
+    """
+    if not isinstance(metadata, dict):
+        return metadata
+
+    normalized = dict(metadata)
+
+    for field in CSV_TO_TEXT_FIELDS:
+        if field in normalized:
+            normalized[field] = normalize_text_list_value(normalized.get(field))
+
+    for field in CSV_TO_LIST_FIELDS:
+        if field in normalized:
+            field_value = normalized.get(field)
+            if isinstance(field_value, str):
+                normalized[field] = [item.strip() for item in field_value.split(',') if item.strip()]
+            elif isinstance(field_value, list):
+                normalized[field] = [str(item).strip() for item in field_value if str(item).strip()]
+
+    return normalized
+
+
 def normalize_translator_value(value):
     """Normalize translator metadata into a storable TEXT value.
 
@@ -856,6 +928,8 @@ def insert_visual_novel(metadata):
     '''
     Inserts or updates the normalized metadata into the SQLite database.
     '''
+
+    metadata = normalize_metadata_fields(metadata)
 
     with get_connection() as conn:
         if not metadata.get('title'):
@@ -1554,6 +1628,8 @@ def upload_archive(file_path):
         print(Fore.RED + "Upload Blocked: Could not find valid metadata in zip or sidecar file.")
         print(Fore.YELLOW + "Expected either metadata.yaml in the zip or '<name>_<version>_<hash>_vN_meta.yaml' next to it.")
         return False
+
+    metadata = normalize_metadata_fields(metadata)
 
     if metadata_source == "zip":
         print(Fore.CYAN + "Metadata source: embedded metadata.yaml")
