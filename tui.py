@@ -575,29 +575,66 @@ def upload_archives():
         notify("Uploading directory does not exist.", "error")
         return
 
-    # Find all zip files queued for upload
-    upload_files = []
-    for root, _, files in os.walk(UPLOADING_DIR):
-        for file in files:
-            if file.lower().endswith(".zip"):
-                upload_files.append(os.path.join(root, file))
+    # Find queued zip files in uploading/ only (no nested folders)
+    upload_files = sorted([
+        os.path.join(UPLOADING_DIR, entry)
+        for entry in os.listdir(UPLOADING_DIR)
+        if entry.lower().endswith(".zip")
+        and os.path.isfile(os.path.join(UPLOADING_DIR, entry))
+    ])
 
     if not upload_files:
-        notify("No zip files found in the uploading directory.", "error")
+        notify("No zip files found in the uploading directory root.", "error")
         return
 
     for i, path in enumerate(upload_files, 1):
         rel_path = os.path.relpath(path, UPLOADING_DIR)
         print(TEXT + f"[{i}] {rel_path}")
 
-    choice = prompt("Select zip number to upload, or 0 to cancel: ")
+    print(TEXT + "[A] Upload all files in uploading/")
+
+    choice = prompt("Select zip number, 'A' for all, or 0 to cancel: ")
     if choice == "0" or not choice:
+        return
+
+    def is_already_uploaded(file_path):
+        file_hash = sha256_file(file_path)
+        with get_connection() as conn:
+            existing_obj = conn.execute(
+                "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                (file_hash,)
+            ).fetchone()
+        return bool(existing_obj)
+
+    if choice.lower() == "a":
+        uploaded_count = 0
+        skipped_count = 0
+        failed_count = 0
+
+        for file_path in upload_files:
+            if is_already_uploaded(file_path):
+                notify(f"Skipping already uploaded file: {os.path.basename(file_path)}", "warn")
+                skipped_count += 1
+                continue
+
+            if upload_archive(file_path):
+                uploaded_count += 1
+            else:
+                failed_count += 1
+
+        notify(
+            f"Bulk upload complete — uploaded: {uploaded_count}, skipped: {skipped_count}, failed: {failed_count}",
+            "ok" if failed_count == 0 else "warn"
+        )
         return
 
     try:
         idx = int(choice) - 1
         if 0 <= idx < len(upload_files):
             selected_file = upload_files[idx]
+            if is_already_uploaded(selected_file):
+                notify(f"Skipping already uploaded file: {os.path.basename(selected_file)}", "warn")
+                return
             upload_archive(selected_file)
         else:
             notify("Invalid selection.", "error")

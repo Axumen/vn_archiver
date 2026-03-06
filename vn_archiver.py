@@ -417,6 +417,78 @@ def normalize_text_list_value(value):
     return fallback or None
 
 
+CSV_TO_TEXT_FIELDS = {
+    "developer",
+    "publisher",
+    "language",
+    "content_rating",
+}
+
+CSV_TO_LIST_FIELDS = {
+    "aliases",
+    "tags",
+    "target_platform",
+}
+
+PASSTHROUGH_FIELDS = {
+    "metadata_version",
+    "title",
+    "version",
+    "series",
+    "series_description",
+    "release_status",
+    "description",
+    "source",
+    "build_type",
+    "distribution_model",
+    "distribution_platform",
+    "translator",
+    "edition",
+    "original_release_date",
+    "release_date",
+    "engine",
+    "engine_version",
+    "parent_vn_title",
+    "relationship_type",
+    "notes",
+    "change_note",
+    "base_archive_sha256",
+    "archives",
+    "archive",
+    "sha256",
+    "file_size_bytes",
+    "original_filename",
+    "archived_at",
+}
+
+
+def normalize_metadata_fields(metadata):
+    """Normalize metadata values according to explicit field categories.
+
+    - CSV_TO_TEXT_FIELDS: accepts comma-separated string or YAML list, stored as text.
+    - CSV_TO_LIST_FIELDS: accepts comma-separated string or YAML list, stored as list.
+    - PASSTHROUGH_FIELDS: preserved as-is.
+    """
+    if not isinstance(metadata, dict):
+        return metadata
+
+    normalized = dict(metadata)
+
+    for field in CSV_TO_TEXT_FIELDS:
+        if field in normalized:
+            normalized[field] = normalize_text_list_value(normalized.get(field))
+
+    for field in CSV_TO_LIST_FIELDS:
+        if field in normalized:
+            field_value = normalized.get(field)
+            if isinstance(field_value, str):
+                normalized[field] = [item.strip() for item in field_value.split(',') if item.strip()]
+            elif isinstance(field_value, list):
+                normalized[field] = [str(item).strip() for item in field_value if str(item).strip()]
+
+    return normalized
+
+
 def normalize_translator_value(value):
     """Normalize translator metadata into a storable TEXT value.
 
@@ -557,7 +629,7 @@ def upsert_visual_novel_record(conn, metadata, series_id):
             normalize_text_list_value(effective_vn('publisher')),
             effective_vn('description'),
             effective_vn('release_status'),
-            effective_vn('content_rating'),
+            normalize_text_list_value(effective_vn('content_rating')),
             effective_vn('source'),
             vn_id
         ))
@@ -577,7 +649,7 @@ def upsert_visual_novel_record(conn, metadata, series_id):
         normalize_text_list_value(metadata.get('publisher')),
         metadata.get('description'),
         metadata.get('release_status'),
-        metadata.get('content_rating'),
+        normalize_text_list_value(metadata.get('content_rating')),
         metadata.get('source')
     ))
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
@@ -598,7 +670,7 @@ def sync_vn_tags(conn, vn_id, metadata):
 
 def upsert_build_record(conn, vn_id, metadata):
     build_version = metadata.get('version', '1.0')
-    build_language = metadata.get('language')
+    build_language = normalize_text_list_value(metadata.get('language'))
     build_edition = metadata.get('edition')
     build_exists = conn.execute(
         '''
@@ -624,7 +696,7 @@ def upsert_build_record(conn, vn_id, metadata):
         effective('build_type'),
         effective('distribution_model'),
         effective('distribution_platform'),
-        effective('language'),
+        normalize_text_list_value(effective('language')),
         normalize_translator_value(effective('translator')),
         effective('edition'),
         effective('original_release_date'),
@@ -856,6 +928,8 @@ def insert_visual_novel(metadata):
     '''
     Inserts or updates the normalized metadata into the SQLite database.
     '''
+
+    metadata = normalize_metadata_fields(metadata)
 
     with get_connection() as conn:
         if not metadata.get('title'):
@@ -1171,7 +1245,7 @@ def finalize_archive_creation(metadata, archives_data):
         return
 
     build_id = None
-    build_language = metadata.get('language')
+    build_language = normalize_text_list_value(metadata.get('language'))
     build_edition = metadata.get('edition')
     with get_connection() as conn:
         build_row = conn.execute(
@@ -1555,6 +1629,8 @@ def upload_archive(file_path):
         print(Fore.YELLOW + "Expected either metadata.yaml in the zip or '<name>_<version>_<hash>_vN_meta.yaml' next to it.")
         return False
 
+    metadata = normalize_metadata_fields(metadata)
+
     if metadata_source == "zip":
         print(Fore.CYAN + "Metadata source: embedded metadata.yaml")
     else:
@@ -1562,7 +1638,7 @@ def upload_archive(file_path):
 
     title = str(metadata.get("title", "")).strip()
     version = str(metadata.get("version", "")).strip()
-    language = str(metadata.get("language", "")).strip()
+    language = normalize_text_list_value(metadata.get("language")) or ""
     edition = str(metadata.get("edition", "")).strip()
 
     if not title:
