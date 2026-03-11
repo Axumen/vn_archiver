@@ -1750,6 +1750,15 @@ def upload_archive(file_path):
         print(Fore.YELLOW + "Skipping Backblaze upload. Linking database records...")
 
         with get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE archives
+                SET status = 'uploaded',
+                    uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
+                WHERE build_id = ? AND sha256 = ?
+                """,
+                (build_id, bundle_sha256)
+            )
             conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", bundle_sha256, build_id))
             conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
         return True
@@ -1828,6 +1837,16 @@ def upload_archive(file_path):
                 INSERT OR IGNORE INTO archive_objects (sha256, file_size, storage_path)
                 VALUES (?, ?, ?)
             ''', (bundle_sha256, file_size, cloud_path))
+
+            conn.execute(
+                """
+                UPDATE archives
+                SET status = 'uploaded',
+                    uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
+                WHERE build_id = ? AND sha256 = ?
+                """,
+                (build_id, bundle_sha256)
+            )
 
             conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", bundle_sha256, build_id))
             conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
