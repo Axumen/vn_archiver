@@ -462,6 +462,20 @@ PASSTHROUGH_FIELDS = {
 }
 
 
+CATEGORY_ALL_FIELDS = CSV_TO_TEXT_FIELDS | CSV_TO_LIST_FIELDS | PASSTHROUGH_FIELDS
+
+
+def validate_metadata_field_categories(metadata):
+    """Warn about unknown metadata keys and validate category overlap."""
+    overlap = (CSV_TO_TEXT_FIELDS & CSV_TO_LIST_FIELDS) | (CSV_TO_TEXT_FIELDS & PASSTHROUGH_FIELDS) | (CSV_TO_LIST_FIELDS & PASSTHROUGH_FIELDS)
+    if overlap:
+        raise ValueError(f"Metadata category overlap detected: {sorted(overlap)}")
+
+    unknown_fields = sorted(set(metadata.keys()) - CATEGORY_ALL_FIELDS)
+    if unknown_fields:
+        print(Fore.YELLOW + f"[WARN] Unknown metadata fields (no explicit category): {', '.join(unknown_fields)}")
+
+
 def normalize_metadata_fields(metadata):
     """Normalize metadata values according to explicit field categories.
 
@@ -473,6 +487,7 @@ def normalize_metadata_fields(metadata):
         return metadata
 
     normalized = dict(metadata)
+    validate_metadata_field_categories(normalized)
 
     for field in CSV_TO_TEXT_FIELDS:
         if field in normalized:
@@ -1735,6 +1750,15 @@ def upload_archive(file_path):
         print(Fore.YELLOW + "Skipping Backblaze upload. Linking database records...")
 
         with get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE archives
+                SET status = 'uploaded',
+                    uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
+                WHERE build_id = ? AND sha256 = ?
+                """,
+                (build_id, bundle_sha256)
+            )
             conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", bundle_sha256, build_id))
             conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
         return True
@@ -1813,6 +1837,16 @@ def upload_archive(file_path):
                 INSERT OR IGNORE INTO archive_objects (sha256, file_size, storage_path)
                 VALUES (?, ?, ?)
             ''', (bundle_sha256, file_size, cloud_path))
+
+            conn.execute(
+                """
+                UPDATE archives
+                SET status = 'uploaded',
+                    uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
+                WHERE build_id = ? AND sha256 = ?
+                """,
+                (build_id, bundle_sha256)
+            )
 
             conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", bundle_sha256, build_id))
             conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
