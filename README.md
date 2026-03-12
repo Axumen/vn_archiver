@@ -22,6 +22,16 @@ developer:
 publisher: "Publisher X"
 ```
 
+## Content mode metadata
+
+Use `content_mode` to describe how adult content is presented without using a boolean field.
+Suggested values: `sfw`, `nsfw`, `selectable`, `patchable`, `mixed`, `unknown`.
+
+```yaml
+content_rating: "18+"
+content_mode: "selectable"
+```
+
 ## Translator metadata for multi-language releases
 
 The `translator` field supports three formats:

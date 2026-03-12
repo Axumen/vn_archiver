@@ -422,6 +422,7 @@ CSV_TO_TEXT_FIELDS = {
     "publisher",
     "language",
     "content_rating",
+    "content_mode",
 }
 
 CSV_TO_LIST_FIELDS = {
@@ -1179,6 +1180,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         "distribution_platform": ["steam", "itch.io", "dlsite", "fanza", "gumroad", "patreon", "booth",
                                   "self-distributed", "other"],
         "content_rating": ["all-ages", "teen", "mature", "18+", "unrated"],
+        "content_mode": ["sfw", "nsfw", "selectable", "patchable", "mixed", "unknown"],
         "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
         "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story",
                          "non_canon_special"],
