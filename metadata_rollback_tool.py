@@ -85,6 +85,34 @@ def backup_database(backup_dir):
     return backup_path
 
 
+def sync_autoincrement_sequence(conn, table_name, pk_column="id"):
+    """Align sqlite_sequence for AUTOINCREMENT tables with current max(id)."""
+    seq_table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'"
+    ).fetchone()
+    if not seq_table_exists:
+        return
+
+    max_row = conn.execute(
+        f"SELECT COALESCE(MAX({pk_column}), 0) AS max_id FROM {table_name}"
+    ).fetchone()
+    max_id = int(max_row["max_id"] if max_row and max_row["max_id"] is not None else 0)
+
+    if max_id <= 0:
+        conn.execute("DELETE FROM sqlite_sequence WHERE name = ?", (table_name,))
+        return
+
+    updated = conn.execute(
+        "UPDATE sqlite_sequence SET seq = ? WHERE name = ?",
+        (max_id, table_name),
+    ).rowcount
+    if updated == 0:
+        conn.execute(
+            "INSERT INTO sqlite_sequence(name, seq) VALUES(?, ?)",
+            (table_name, max_id),
+        )
+
+
 def prune_orphaned_rows(conn):
     metadata_deleted = conn.execute(
         """
@@ -272,6 +300,7 @@ def delete_version(args):
                 conn.execute("UPDATE metadata_versions SET is_current = 1 WHERE id = ?", (replacement["id"],))
 
             conn.execute("DELETE FROM metadata_versions WHERE id = ?", (target_row["id"],))
+            sync_autoincrement_sequence(conn, "metadata_versions")
             prune_stats = prune_orphaned_rows(conn)
 
         print(
@@ -329,6 +358,8 @@ def undo_latest_entry(args):
 
             conn.execute("DELETE FROM metadata_versions WHERE id = ?", (target_version["id"],))
             conn.execute("DELETE FROM archives WHERE id = ?", (target_archive["id"],))
+            sync_autoincrement_sequence(conn, "metadata_versions")
+            sync_autoincrement_sequence(conn, "archives")
             prune_stats = prune_orphaned_rows(conn)
 
         print(
