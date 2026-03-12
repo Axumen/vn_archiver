@@ -27,6 +27,7 @@ optional:
   - publisher           # Publisher (comma-separated string or YAML list accepted)
   - release_status
   - content_rating
+  - content_mode         # e.g., sfw, nsfw, selectable, patchable
   - description         # VN-level description
   - source              # VN/build source (URL/store/origin)
   - tags
