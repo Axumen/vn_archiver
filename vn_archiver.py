@@ -422,6 +422,7 @@ CSV_TO_TEXT_FIELDS = {
     "publisher",
     "language",
     "content_rating",
+    "content_mode",
 }
 
 CSV_TO_LIST_FIELDS = {
@@ -681,6 +682,41 @@ def sync_vn_tags(conn, vn_id, metadata):
             tag_id = {'id': conn.execute('SELECT last_insert_rowid()').fetchone()[0]}
 
         conn.execute('INSERT INTO vn_tags (vn_id, tag_id) VALUES (?, ?)', (vn_id, tag_id['id']))
+
+
+def sync_visual_novel_upload_status(conn, vn_id):
+    """Set visual_novels.status based on the newest main build status."""
+    main_build_row = conn.execute(
+        """
+        SELECT status
+        FROM builds
+        WHERE vn_id = ?
+          AND (
+              build_type IS NULL
+              OR TRIM(build_type) = ''
+              OR LOWER(build_type) IN ('full', 'standalone')
+          )
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (vn_id,)
+    ).fetchone()
+
+    if main_build_row is None:
+        # Fallback for libraries that only contain non-main build types.
+        main_build_row = conn.execute(
+            """
+            SELECT status
+            FROM builds
+            WHERE vn_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (vn_id,)
+        ).fetchone()
+
+    target_status = 'uploaded' if (main_build_row and main_build_row['status'] == 'uploaded') else 'local'
+    conn.execute('UPDATE visual_novels SET status = ? WHERE id = ?', (target_status, vn_id))
 
 
 def upsert_build_record(conn, vn_id, metadata):
@@ -1144,6 +1180,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         "distribution_platform": ["steam", "itch.io", "dlsite", "fanza", "gumroad", "patreon", "booth",
                                   "self-distributed", "other"],
         "content_rating": ["all-ages", "teen", "mature", "18+", "unrated"],
+        "content_mode": ["sfw", "nsfw", "selectable", "patchable", "mixed", "unknown"],
         "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
         "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story",
                          "non_canon_special"],
@@ -1750,8 +1787,17 @@ def upload_archive(file_path):
         print(Fore.YELLOW + "Skipping Backblaze upload. Linking database records...")
 
         with get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE archives
+                SET status = 'uploaded',
+                    uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
+                WHERE build_id = ? AND sha256 = ?
+                """,
+                (build_id, bundle_sha256)
+            )
             conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", bundle_sha256, build_id))
-            conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
+            sync_visual_novel_upload_status(conn, vn_id)
         return True
 
     # -------------------------------------------------------------------
@@ -1829,8 +1875,18 @@ def upload_archive(file_path):
                 VALUES (?, ?, ?)
             ''', (bundle_sha256, file_size, cloud_path))
 
+            conn.execute(
+                """
+                UPDATE archives
+                SET status = 'uploaded',
+                    uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
+                WHERE build_id = ? AND sha256 = ?
+                """,
+                (build_id, bundle_sha256)
+            )
+
             conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", bundle_sha256, build_id))
-            conn.execute("UPDATE visual_novels SET status = ? WHERE id = ?", ("uploaded", vn_id))
+            sync_visual_novel_upload_status(conn, vn_id)
         except Exception as e:
             print(Fore.RED + f"Database update failed after upload verification: {e}")
             return False

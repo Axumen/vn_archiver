@@ -4,7 +4,7 @@ metadata_version: 1
 # REQUIRED FIELDS
 # =====================================
 required:
-  # Visual Novel (Work Identity)
+  # Work identity (required for build matching)
   - title
   - version
 
@@ -12,33 +12,33 @@ required:
 # OPTIONAL FIELDS
 # =====================================
 optional:
-
   # -------------------------------------
-  # SERIES TABLE
+  # SERIES
   # -------------------------------------
   - series
   - series_description
 
   # -------------------------------------
-  # VISUAL_NOVELS TABLE
+  # VISUAL NOVEL (work-level)
   # -------------------------------------
-  - aliases             # Added: List of alternative titles (e.g., Romaji, Japanese)
-  - developer           # Comma-separated string or YAML list are both accepted
-  - publisher           # Publisher (comma-separated string or YAML list accepted)
+  - aliases              # Alternative titles (Romaji/Japanese/etc.)
+  - developer            # Comma-separated string or YAML list
+  - publisher            # Comma-separated string or YAML list
   - release_status
   - content_rating
-  - description         # VN-level description
-  - source              # VN/build source (URL/store/origin)
+  - content_mode         # Suggested: sfw, nsfw, selectable, patchable, mixed, unknown
+  - description          # Work-level synopsis/description
+  - source               # Source/store/origin URL
   - tags
 
   # -------------------------------------
-  # BUILDS TABLE
+  # BUILD (version-level)
   # -------------------------------------
   - build_type
   - distribution_model
   - distribution_platform
   - language
-  - translator          # Fan-translation group, list of translators, or per-language map
+  - translator           # String, list, or language-keyed map
   - edition
   - original_release_date
   - release_date
@@ -47,26 +47,28 @@ optional:
   - target_platform
 
   # -------------------------------------
-  # CANON RELATIONSHIPS
+  # RELATIONSHIPS
   # -------------------------------------
   - parent_vn_title
   - relationship_type
-  
+
   # -------------------------------------
   # MISC
   # -------------------------------------
   - notes
-  - change_note         # Optional metadata revision note
-  - base_archive_sha256 # Added: Useful for patches/append discs to link to the base game
+  - change_note          # Metadata revision note
+  - base_archive_sha256  # Link dependent builds (patches/add-ons) to a base archive
 
-
-# Multi-archive support (optional)
+# Multi-archive metadata block (optional)
 archives:
   - filename:
     sha256:
 
+# -------------------------------------
+# EXAMPLES
+# -------------------------------------
 
-# Translator field examples:
+# Translator examples:
 # translator: "Sekai Project"
 # translator:
 #   - "Alice"
@@ -85,3 +87,7 @@ archives:
 #   - "Studio A"
 #   - "Studio B"
 # publisher: "Publisher X"
+
+# Content mode examples:
+# content_mode: "sfw"
+# content_mode: "selectable"
