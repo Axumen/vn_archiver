@@ -23,7 +23,7 @@ from db_manager import get_connection
 INCOMING_DIR = "incoming"
 UPLOADING_DIR = "uploading"
 VN_ARCHIVE_DIR = "vn archive"
-METADATA_TEMPLATE_DIR = Path("metadata_templates")
+METADATA_TEMPLATE_DIR = Path("metadata")
 DEFAULT_METADATA_VERSION = 1
 B2_CONFIG_FILE = "backblaze_config.yaml"
 
