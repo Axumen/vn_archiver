@@ -575,13 +575,7 @@ def upload_archives():
         notify("Uploading directory does not exist.", "error")
         return
 
-    # Find queued zip files in uploading/ only (no nested folders)
-    upload_files = sorted([
-        os.path.join(UPLOADING_DIR, entry)
-        for entry in os.listdir(UPLOADING_DIR)
-        if entry.lower().endswith(".zip")
-        and os.path.isfile(os.path.join(UPLOADING_DIR, entry))
-    ])
+    upload_files = get_uploading_zip_files()
 
     if not upload_files:
         notify("No zip files found in the uploading directory root.", "error")
@@ -642,6 +636,184 @@ def upload_archives():
         notify("Invalid input.", "error")
 
 
+def get_uploading_zip_files():
+    """Return zip files from the root of uploading/ sorted by filename."""
+    return sorted([
+        os.path.join(UPLOADING_DIR, entry)
+        for entry in os.listdir(UPLOADING_DIR)
+        if entry.lower().endswith(".zip")
+        and os.path.isfile(os.path.join(UPLOADING_DIR, entry))
+    ])
+
+
+def is_archive_hash_uploaded(file_path):
+    """True when a file's sha256 exists as a stored archive object."""
+    file_hash = sha256_file(file_path)
+    with get_connection() as conn:
+        existing_obj = conn.execute(
+            "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+            (file_hash,)
+        ).fetchone()
+    return bool(existing_obj)
+
+
+def get_sidecar_metadata_files(zip_path):
+    """Return staged metadata sidecars matching a zip stem in uploading/."""
+    stem = Path(zip_path).stem
+    directory = Path(zip_path).parent
+    return sorted(directory.glob(f"{stem}_v*_meta.yaml"))
+
+
+def delete_uploading_files():
+    print()
+    panel("Delete Files From Uploading")
+
+    if not os.path.exists(UPLOADING_DIR):
+        notify("Uploading directory does not exist.", "error")
+        return
+
+    print(TEXT + "[1] Choose a file and optional metadata sidecar(s) to delete")
+    print(TEXT + "[2] Scan uploading/ and delete only archives already confirmed uploaded")
+    print(TEXT + "[0] Cancel")
+
+    mode = prompt("Select deletion mode: ")
+    if mode in ("", "0"):
+        return
+
+    upload_files = get_uploading_zip_files()
+    if not upload_files:
+        notify("No zip files found in uploading/.", "warn")
+        return
+
+    if mode == "1":
+        panel("Choose Zip File")
+        for i, path in enumerate(upload_files, 1):
+            print(TEXT + f"[{i}] {os.path.basename(path)}")
+
+        selection = prompt("Select zip number, or 0 to cancel: ")
+        if selection in ("", "0"):
+            return
+
+        try:
+            idx = int(selection) - 1
+            if idx < 0 or idx >= len(upload_files):
+                notify("Invalid selection.", "error")
+                return
+        except ValueError:
+            notify("Invalid input.", "error")
+            return
+
+        selected_zip = upload_files[idx]
+        sidecars = get_sidecar_metadata_files(selected_zip)
+
+        print()
+        notify(f"Selected archive: {os.path.basename(selected_zip)}")
+        if sidecars:
+            notify("Matching metadata sidecars:")
+            for sidecar in sidecars:
+                print(TEXT + f"  - {sidecar.name}")
+        else:
+            notify("No matching metadata sidecars found.", "warn")
+
+        print()
+        print(TEXT + "[1] Delete archive only")
+        print(TEXT + "[2] Delete metadata sidecar(s) only")
+        print(TEXT + "[3] Delete archive + metadata sidecar(s)")
+        print(TEXT + "[0] Cancel")
+        delete_mode = prompt("Select what to delete: ")
+        if delete_mode in ("", "0"):
+            return
+
+        to_delete = []
+        if delete_mode == "1":
+            to_delete = [Path(selected_zip)]
+        elif delete_mode == "2":
+            if not sidecars:
+                notify("No sidecar metadata files to delete.", "warn")
+                return
+            to_delete = sidecars
+        elif delete_mode == "3":
+            to_delete = [Path(selected_zip), *sidecars]
+        else:
+            notify("Invalid option.", "error")
+            return
+
+        print()
+        notify("The following files will be deleted:", "warn")
+        for path_obj in to_delete:
+            print(TEXT + f"  - {path_obj.name}")
+
+        confirm = prompt("Type DELETE to confirm: ")
+        if confirm != "DELETE":
+            notify("Deletion cancelled.", "warn")
+            return
+
+        deleted = 0
+        for path_obj in to_delete:
+            if path_obj.exists() and path_obj.is_file():
+                path_obj.unlink()
+                deleted += 1
+
+        notify(f"Deleted {deleted} file(s).", "ok")
+        return
+
+    if mode == "2":
+        confirmed = []
+        for file_path in upload_files:
+            try:
+                if is_archive_hash_uploaded(file_path):
+                    confirmed.append(Path(file_path))
+            except Exception as e:
+                notify(f"Could not validate {os.path.basename(file_path)}: {e}", "warn")
+
+        if not confirmed:
+            notify("No archives in uploading/ are confirmed as uploaded.", "warn")
+            return
+
+        panel("Confirmed Uploaded Archives")
+        for i, path_obj in enumerate(confirmed, 1):
+            print(TEXT + f"[{i}] {path_obj.name}")
+
+        print()
+        print(TEXT + "[A] Delete all confirmed uploaded archives listed above")
+        choice = prompt("Select number, 'A' for all, or 0 to cancel: ")
+        if choice in ("", "0"):
+            return
+
+        to_delete = []
+        if choice.lower() == "a":
+            to_delete = confirmed
+        else:
+            try:
+                idx = int(choice) - 1
+                if idx < 0 or idx >= len(confirmed):
+                    notify("Invalid selection.", "error")
+                    return
+                to_delete = [confirmed[idx]]
+            except ValueError:
+                notify("Invalid input.", "error")
+                return
+
+        print()
+        notify("The following confirmed uploaded archive(s) will be deleted:", "warn")
+        for path_obj in to_delete:
+            print(TEXT + f"  - {path_obj.name}")
+
+        confirm = prompt("Type DELETE to confirm: ")
+        if confirm != "DELETE":
+            notify("Deletion cancelled.", "warn")
+            return
+
+        for path_obj in to_delete:
+            if path_obj.exists() and path_obj.is_file():
+                path_obj.unlink()
+
+        notify(f"Deleted {len(to_delete)} confirmed uploaded archive(s).", "ok")
+        return
+
+    notify("Invalid option.", "error")
+
+
 # =============================
 # MAIN MENU
 # =============================
@@ -657,8 +829,9 @@ def main():
         print(PRIMARY + "  2) Quick Process (Zip + Metadata YAML)")
         print(PRIMARY + "  3) Edit Metadata")
         print(PRIMARY + "  4) Upload Archive")
-        print(PRIMARY + "  5) Config")
-        print(PRIMARY + "  6) Quit\n")
+        print(PRIMARY + "  5) Delete From Uploading")
+        print(PRIMARY + "  6) Config")
+        print(PRIMARY + "  7) Quit\n")
 
         active_version = get_active_metadata_template_version()
         notify(f"Active metadata template: v{active_version}")
@@ -675,8 +848,10 @@ def main():
         elif choice == "4":
             upload_archives()
         elif choice == "5":
-            configure_metadata_template_version()
+            delete_uploading_files()
         elif choice == "6":
+            configure_metadata_template_version()
+        elif choice == "7":
             print()
             panel("Goodbye", "Session closed")
             print()
