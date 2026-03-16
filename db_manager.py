@@ -8,7 +8,363 @@ SCHEMA_PATH = "db_schema.sql"
 BACKUP_DIR = "db_backups"
 
 # Database is treated as fresh-initialized from db_schema.sql.
-TARGET_SCHEMA_VERSION = 4
+TARGET_SCHEMA_VERSION = 1
+BACKUP_DEBOUNCE_SECONDS = 1.0
+
+WRITE_SQL_PREFIXES = (
+    "insert",
+    "update",
+    "delete",
+    "replace",
+    "create",
+    "alter",
+    "drop",
+)
+
+_backup_queue = queue.Queue()
+_backup_worker_started = False
+_backup_worker_lock = threading.Lock()
+
+
+def _should_backup_for_sql(sql):
+    if not sql:
+        return False
+
+    normalized = sql.strip().lower()
+    if not normalized:
+        return False
+
+    # Ignore transaction control statements and read-only PRAGMAs.
+    if normalized.startswith(("begin", "commit", "rollback", "select")):
+        return False
+
+    return normalized.startswith(WRITE_SQL_PREFIXES)
+
+
+def _ensure_backup_worker_started():
+    global _backup_worker_started
+
+    with _backup_worker_lock:
+        if _backup_worker_started:
+            return
+
+        worker = threading.Thread(target=_backup_worker, daemon=True)
+        worker.start()
+        _backup_worker_started = True
+
+
+def _backup_worker():
+    while True:
+        _backup_queue.get()
+        try:
+            # Debounce bursty write activity (e.g., insertion loops)
+            # into a single backup snapshot.
+            time.sleep(BACKUP_DEBOUNCE_SECONDS)
+            while True:
+                try:
+                    _backup_queue.get_nowait()
+                    _backup_queue.task_done()
+                except queue.Empty:
+                    break
+            create_database_backup()
+        finally:
+            _backup_queue.task_done()
+
+
+def queue_database_backup():
+    _ensure_backup_worker_started()
+    _backup_queue.put(object())
+
+
+def create_database_backup():
+    if not os.path.exists(DB_PATH):
+        return None
+
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+    backup_path = os.path.join(BACKUP_DIR, f"archive_backup_{timestamp}.db")
+
+    source_conn = sqlite3.connect(DB_PATH)
+    backup_conn = sqlite3.connect(backup_path)
+    try:
+        source_conn.backup(backup_conn)
+    finally:
+        backup_conn.close()
+        source_conn.close()
+
+    return backup_path
+
+
+class ArchiverCursor(sqlite3.Cursor):
+    def execute(self, sql, parameters=()):
+        result = super().execute(sql, parameters)
+        self.connection._trigger_backup_if_needed(sql)
+        return result
+
+    def executemany(self, sql, seq_of_parameters):
+        result = super().executemany(sql, seq_of_parameters)
+        self.connection._trigger_backup_if_needed(sql)
+        return result
+
+    def executescript(self, sql_script):
+        result = super().executescript(sql_script)
+        self.connection._trigger_backup_if_needed(sql_script)
+        return result
+
+
+class ArchiverConnection(sqlite3.Connection):
+    def cursor(self, factory=ArchiverCursor):
+        return super().cursor(factory=factory)
+
+    def _trigger_backup_if_needed(self, sql):
+        if _should_backup_for_sql(sql):
+            queue_database_backup()
+
+WRITE_SQL_PREFIXES = (
+    "insert",
+    "update",
+    "delete",
+    "replace",
+    "create",
+    "alter",
+    "drop",
+)
+
+_backup_queue = queue.Queue()
+_backup_worker_started = False
+_backup_worker_lock = threading.Lock()
+
+
+def _should_backup_for_sql(sql):
+    if not sql:
+        return False
+
+    normalized = sql.strip().lower()
+    if not normalized:
+        return False
+
+    # Ignore transaction control statements and read-only PRAGMAs.
+    if normalized.startswith(("begin", "commit", "rollback", "select")):
+        return False
+
+    return normalized.startswith(WRITE_SQL_PREFIXES)
+
+
+def _ensure_backup_worker_started():
+    global _backup_worker_started
+
+    with _backup_worker_lock:
+        if _backup_worker_started:
+            return
+
+        worker = threading.Thread(target=_backup_worker, daemon=True)
+        worker.start()
+        _backup_worker_started = True
+
+
+def _backup_worker():
+    while True:
+        _backup_queue.get()
+        try:
+            create_database_backup()
+        finally:
+            _backup_queue.task_done()
+
+
+def queue_database_backup():
+    _ensure_backup_worker_started()
+    _backup_queue.put(object())
+
+
+def create_database_backup():
+    if not os.path.exists(DB_PATH):
+        return None
+
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+    backup_path = os.path.join(BACKUP_DIR, f"archive_backup_{timestamp}.db")
+
+    source_conn = sqlite3.connect(DB_PATH)
+    backup_conn = sqlite3.connect(backup_path)
+    try:
+        source_conn.backup(backup_conn)
+    finally:
+        backup_conn.close()
+        source_conn.close()
+
+    return backup_path
+
+
+class ArchiverCursor(sqlite3.Cursor):
+    def execute(self, sql, parameters=()):
+        result = super().execute(sql, parameters)
+        self.connection._trigger_backup_if_needed(sql)
+        return result
+
+    def executemany(self, sql, seq_of_parameters):
+        result = super().executemany(sql, seq_of_parameters)
+        self.connection._trigger_backup_if_needed(sql)
+        return result
+
+    def executescript(self, sql_script):
+        result = super().executescript(sql_script)
+        self.connection._trigger_backup_if_needed(sql_script)
+        return result
+
+
+class ArchiverConnection(sqlite3.Connection):
+    def cursor(self, factory=ArchiverCursor):
+        return super().cursor(factory=factory)
+
+    def execute(self, sql, parameters=()):
+        result = super().execute(sql, parameters)
+        self._trigger_backup_if_needed(sql)
+        return result
+
+    def executemany(self, sql, seq_of_parameters):
+        result = super().executemany(sql, seq_of_parameters)
+        self._trigger_backup_if_needed(sql)
+        return result
+
+    def executescript(self, sql_script):
+        result = super().executescript(sql_script)
+        self._trigger_backup_if_needed(sql_script)
+        return result
+
+    def _trigger_backup_if_needed(self, sql):
+        if _should_backup_for_sql(sql):
+            queue_database_backup()
+
+WRITE_SQL_PREFIXES = (
+    "insert",
+    "update",
+    "delete",
+    "replace",
+    "create",
+    "alter",
+    "drop",
+)
+
+_backup_queue = queue.Queue()
+_backup_worker_started = False
+_backup_worker_lock = threading.Lock()
+
+
+def _should_track_write_sql(sql, is_script=False):
+    if not sql:
+        return False
+
+    normalized = sql.strip().lower()
+    if not normalized:
+        return False
+
+    if is_script:
+        return any(prefix in normalized for prefix in WRITE_SQL_PREFIXES)
+
+    # Ignore transaction control statements and read-only PRAGMAs.
+    if normalized.startswith(("begin", "commit", "rollback", "select")):
+        return False
+
+    if normalized.startswith("pragma") and "=" not in normalized:
+        return False
+
+    return normalized.startswith(WRITE_SQL_PREFIXES)
+
+
+def _ensure_backup_worker_started():
+    global _backup_worker_started
+
+    with _backup_worker_lock:
+        if _backup_worker_started:
+            return
+
+        worker = threading.Thread(target=_backup_worker, daemon=True)
+        worker.start()
+        _backup_worker_started = True
+
+
+def _backup_worker():
+    while True:
+        _backup_queue.get()
+        try:
+            create_database_backup()
+        finally:
+            _backup_queue.task_done()
+
+
+def queue_database_backup():
+    _ensure_backup_worker_started()
+    _backup_queue.put(object())
+
+
+def create_database_backup():
+    if not os.path.exists(DB_PATH):
+        return None
+
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+    backup_path = os.path.join(BACKUP_DIR, f"archive_backup_{timestamp}.db")
+
+    source_conn = sqlite3.connect(DB_PATH)
+    backup_conn = sqlite3.connect(backup_path)
+    try:
+        source_conn.backup(backup_conn)
+    finally:
+        backup_conn.close()
+        source_conn.close()
+
+    return backup_path
+
+
+class ArchiverCursor(sqlite3.Cursor):
+    def execute(self, sql, parameters=()):
+        result = super().execute(sql, parameters)
+        self.connection._mark_successful_write(sql, is_script=False)
+        return result
+
+    def executemany(self, sql, seq_of_parameters):
+        result = super().executemany(sql, seq_of_parameters)
+        self.connection._mark_successful_write(sql, is_script=False)
+        return result
+
+    def executescript(self, sql_script):
+        result = super().executescript(sql_script)
+        self.connection._mark_successful_write(sql_script, is_script=True)
+        return result
+
+
+class ArchiverConnection(sqlite3.Connection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._has_successful_write = False
+
+    def cursor(self, factory=ArchiverCursor):
+        return super().cursor(factory=factory)
+
+    def _mark_successful_write(self, sql, is_script=False):
+        if _should_track_write_sql(sql, is_script=is_script):
+            self._has_successful_write = True
+
+    def commit(self):
+        super().commit()
+        if self._has_successful_write:
+            queue_database_backup()
+            self._has_successful_write = False
+
+    def rollback(self):
+        super().rollback()
+        self._has_successful_write = False
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is None:
+            try:
+                self.commit()
+            except Exception:
+                self.rollback()
+                raise
+        else:
+            self.rollback()
+        return False
 
 
 def create_database_backup():
