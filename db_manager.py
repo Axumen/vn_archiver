@@ -1,8 +1,6 @@
 import sqlite3
 import os
 import contextlib
-import threading
-import queue
 from datetime import datetime
 
 DB_PATH = "archive.db"
@@ -356,6 +354,62 @@ class ArchiverConnection(sqlite3.Connection):
     def rollback(self):
         super().rollback()
         self._has_successful_write = False
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is None:
+            try:
+                self.commit()
+            except Exception:
+                self.rollback()
+                raise
+        else:
+            self.rollback()
+        return False
+
+
+def create_database_backup():
+    """
+    Creates a timestamped backup of archive.db.
+    Returns the backup path, or None if the main DB does not exist.
+    """
+    if not os.path.exists(DB_PATH):
+        return None
+
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+    backup_path = os.path.join(BACKUP_DIR, f"archive_backup_{timestamp}.db")
+
+    source_conn = sqlite3.connect(DB_PATH)
+    backup_conn = sqlite3.connect(backup_path)
+    try:
+        source_conn.backup(backup_conn)
+    finally:
+        backup_conn.close()
+        source_conn.close()
+
+    return backup_path
+
+
+class ArchiverConnection(sqlite3.Connection):
+    """
+    Minimal backup-aware connection:
+    - Backup only after successful commit.
+    - No backup on rollback/cancelled operations.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._last_total_changes = self.total_changes
+
+    def commit(self):
+        super().commit()
+        if self.total_changes > self._last_total_changes:
+            create_database_backup()
+        self._last_total_changes = self.total_changes
+
+    def rollback(self):
+        super().rollback()
+        self._last_total_changes = self.total_changes
 
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type is None:
