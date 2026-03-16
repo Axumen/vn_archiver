@@ -7,7 +7,7 @@ from datetime import datetime
 
 DB_PATH = "archive.db"
 SCHEMA_PATH = "db_schema.sql"
-BACKUP_DIR = "db_backups"
+BACKUP_DIR = "backups"
 
 # Database is treated as fresh-initialized from db_schema.sql.
 TARGET_SCHEMA_VERSION = 4
