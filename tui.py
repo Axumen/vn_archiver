@@ -661,7 +661,7 @@ def get_sidecar_metadata_files(zip_path):
     """Return staged metadata sidecars matching a zip stem in uploading/."""
     stem = Path(zip_path).stem
     directory = Path(zip_path).parent
-    return sorted(directory.glob(f"{stem}_v*_meta.yaml"))
+    return sorted(directory.glob(f"{stem}_meta_v*.yaml"))
 
 
 def delete_uploading_files():
