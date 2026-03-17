@@ -65,7 +65,8 @@ Uploads now use a strict separation model:
 - metadata must be provided as a sidecar YAML file in `uploading/` with the pattern `<archive_name>_meta_vN.yaml` (where `vN` is the metadata revision number)
 - archive upload path format: `archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{archive_file_name}`
 - metadata upload path format: `metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{sidecar_file_name}`
-- upload requires sidecar metadata to match the build's current metadata hash in database (`metadata_versions.is_current = 1`)
+- upload requires sidecar metadata to match the corresponding metadata revision stored in database
+- when uploading metadata revision `vN` (N > 1), the parent metadata revision `vN-1` must already be uploaded
 
 Embedded `metadata.yaml` inside archives is no longer used by the upload pipeline.
 

@@ -1654,6 +1654,9 @@ def upload_archive(file_path):
 
     print(Fore.CYAN + f"Metadata source: sidecar file ({metadata_source})")
 
+    revision_match = re.search(r"_meta_v(\d+)\.ya?ml$", Path(metadata_source).name)
+    requested_metadata_revision = int(revision_match.group(1)) if revision_match else None
+
     title = str(metadata.get("title", "")).strip()
     version = str(metadata.get("version", "")).strip()
     language = normalize_text_list_value(metadata.get("language")) or ""
@@ -1708,7 +1711,7 @@ def upload_archive(file_path):
         build_id = build_row["id"]
 
     # -------------------------------------------------------------------
-    # 3. Block upload if sidecar metadata does not match DB current metadata
+    # 3. Validate sidecar metadata revision against DB metadata history
     # -------------------------------------------------------------------
     canonical_metadata_json = json.dumps(
         metadata,
@@ -1720,22 +1723,32 @@ def upload_archive(file_path):
     sidecar_metadata_hash = hashlib.sha256(canonical_metadata_json.encode("utf-8")).hexdigest()
 
     with get_connection() as conn:
-        metadata_row = conn.execute(
-            "SELECT metadata_hash FROM metadata_versions WHERE build_id = ? AND is_current = 1",
-            (build_id,)
-        ).fetchone()
+        if requested_metadata_revision is not None:
+            metadata_row = conn.execute(
+                "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND version_number = ?",
+                (build_id, requested_metadata_revision)
+            ).fetchone()
+        else:
+            metadata_row = conn.execute(
+                "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND is_current = 1",
+                (build_id,)
+            ).fetchone()
 
     if not metadata_row:
-        print(Fore.RED + f"Upload Blocked: Build {build_id} has no current metadata version in database.")
+        if requested_metadata_revision is not None:
+            print(Fore.RED + f"Upload Blocked: Build {build_id} has no metadata version v{requested_metadata_revision} in database.")
+        else:
+            print(Fore.RED + f"Upload Blocked: Build {build_id} has no current metadata version in database.")
         print(Fore.YELLOW + "Please run '(1) Create Metadata' or update metadata before uploading.")
         return False
 
-    current_metadata_hash = metadata_row["metadata_hash"]
-    if sidecar_metadata_hash != current_metadata_hash:
-        print(Fore.RED + "Upload Blocked: Sidecar metadata does not match the current metadata stored in database.")
-        print(Fore.YELLOW + f"DB metadata hash : {current_metadata_hash}")
+    db_metadata_hash = metadata_row["metadata_hash"]
+    db_version_number = metadata_row["version_number"]
+    if sidecar_metadata_hash != db_metadata_hash:
+        print(Fore.RED + "Upload Blocked: Sidecar metadata does not match metadata stored in database for this revision.")
+        print(Fore.YELLOW + f"DB metadata hash : {db_metadata_hash}")
         print(Fore.YELLOW + f"Sidecar hash     : {sidecar_metadata_hash}")
-        print(Fore.YELLOW + "Regenerate/stage metadata so the sidecar matches the current build metadata.")
+        print(Fore.YELLOW + "Regenerate/stage metadata so the sidecar matches the intended build metadata revision.")
         return False
 
     # -------------------------------------------------------------------
@@ -1755,7 +1768,19 @@ def upload_archive(file_path):
     metadata_file_name = Path(metadata_source).name
     metadata_cloud_path = f"metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{metadata_file_name}"
 
-    print(Fore.GREEN + f"Database verification passed (VN ID: {vn_id})")
+    if db_version_number > 1:
+        parent_metadata_cloud_path = re.sub(r"_meta_v\d+(\.ya?ml)$", f"_meta_v{db_version_number - 1}\1", metadata_cloud_path)
+        with get_connection() as conn:
+            parent_uploaded_row = conn.execute(
+                "SELECT 1 FROM metadata_file_objects WHERE storage_path = ?",
+                (parent_metadata_cloud_path,)
+            ).fetchone()
+        if not parent_uploaded_row:
+            print(Fore.RED + f"Upload Blocked: Parent metadata revision v{db_version_number - 1} is not uploaded yet.")
+            print(Fore.YELLOW + f"Expected parent path: {parent_metadata_cloud_path}")
+            return False
+
+    print(Fore.GREEN + f"Database verification passed (VN ID: {vn_id}, metadata v{db_version_number})")
 
     # Ensure queued local file uses the same recommended naming scheme
     current_name = os.path.basename(file_path)

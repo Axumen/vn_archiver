@@ -507,6 +507,8 @@ def edit_metadata_only():
         notify("Editing cancelled.", "warn")
         return
 
+    prior_metadata_revision = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
+
     # 5. Open in System Text Editor
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as tf:
         yaml.dump(current_metadata, tf, sort_keys=False, allow_unicode=True)
@@ -549,11 +551,12 @@ def edit_metadata_only():
 
         build_id = build_row["id"] if build_row else None
         metadata_version_number = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
+        next_metadata_revision = prior_metadata_revision + 1
         print()
-        panel(f"Updated Metadata Copy (v{metadata_version_number})")
+        panel(f"Updated Metadata Copy (db v{metadata_version_number}, staged v{next_metadata_revision})")
         print(TEXT + yaml.dump(updated_metadata, sort_keys=False, allow_unicode=True))
 
-        staged_path = stage_metadata_yaml_for_upload(updated_metadata, metadata_version_number)
+        staged_path = stage_metadata_yaml_for_upload(updated_metadata, next_metadata_revision)
 
         notify(f"Staged metadata copy for upload: {staged_path}", "ok")
 
