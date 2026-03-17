@@ -1708,7 +1708,38 @@ def upload_archive(file_path):
         build_id = build_row["id"]
 
     # -------------------------------------------------------------------
-    # 3. Formulate cloud naming paths & hashes
+    # 3. Block upload if sidecar metadata does not match DB current metadata
+    # -------------------------------------------------------------------
+    canonical_metadata_json = json.dumps(
+        metadata,
+        default=safe_json_serialize,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":")
+    )
+    sidecar_metadata_hash = hashlib.sha256(canonical_metadata_json.encode("utf-8")).hexdigest()
+
+    with get_connection() as conn:
+        metadata_row = conn.execute(
+            "SELECT metadata_hash FROM metadata_versions WHERE build_id = ? AND is_current = 1",
+            (build_id,)
+        ).fetchone()
+
+    if not metadata_row:
+        print(Fore.RED + f"Upload Blocked: Build {build_id} has no current metadata version in database.")
+        print(Fore.YELLOW + "Please run '(1) Create Metadata' or update metadata before uploading.")
+        return False
+
+    current_metadata_hash = metadata_row["metadata_hash"]
+    if sidecar_metadata_hash != current_metadata_hash:
+        print(Fore.RED + "Upload Blocked: Sidecar metadata does not match the current metadata stored in database.")
+        print(Fore.YELLOW + f"DB metadata hash : {current_metadata_hash}")
+        print(Fore.YELLOW + f"Sidecar hash     : {sidecar_metadata_hash}")
+        print(Fore.YELLOW + "Regenerate/stage metadata so the sidecar matches the current build metadata.")
+        return False
+
+    # -------------------------------------------------------------------
+    # 4. Formulate cloud naming paths & hashes
     # -------------------------------------------------------------------
     title_slug = slugify_component(title, "unknown")
     version_slug = slugify_component(version, "unknown")
@@ -1739,7 +1770,7 @@ def upload_archive(file_path):
     file_size = os.path.getsize(file_path)
 
     # -------------------------------------------------------------------
-    # 4. CAS Deduplication Check (archive object only)
+    # 5. CAS Deduplication Check (archive object only)
     # -------------------------------------------------------------------
     with get_connection() as conn:
         existing_obj = conn.execute(
@@ -1768,7 +1799,7 @@ def upload_archive(file_path):
             sync_visual_novel_upload_status(conn, vn_id)
 
     # -------------------------------------------------------------------
-    # 5. Backblaze B2 Authentication via Config
+    # 6. Backblaze B2 Authentication via Config
     # -------------------------------------------------------------------
     try:
         key_id, app_key, bucket_name, dry_run = load_b2_config()
@@ -1782,7 +1813,7 @@ def upload_archive(file_path):
         return False
 
     # -------------------------------------------------------------------
-    # 6. Upload archive object (if not deduplicated)
+    # 7. Upload archive object (if not deduplicated)
     # -------------------------------------------------------------------
     if dry_run:
         if archive_needs_upload:
@@ -1862,7 +1893,7 @@ def upload_archive(file_path):
                 return False
 
     # -------------------------------------------------------------------
-    # 7. Upload metadata sidecar object (with CAS dedup + DB record)
+    # 8. Upload metadata sidecar object (with CAS dedup + DB record)
     # -------------------------------------------------------------------
     metadata_sha256 = sha256_file(selected_sidecar)
     metadata_local_size = os.path.getsize(selected_sidecar)
