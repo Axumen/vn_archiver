@@ -62,7 +62,7 @@ When a list/map is used, vn_archiver stores it in the `builds.translator` text c
 
 Uploads now use a strict separation model:
 - the VN archive file is uploaded as the cloud object
-- metadata must be provided as a sidecar YAML file in `uploading/` with the pattern `<archive_name>_vN_meta.yaml`
+- metadata must be provided as a sidecar YAML file in `uploading/` with the pattern `<archive_name>_meta_vN.yaml` (where `vN` is the metadata revision number)
 
 Embedded `metadata.yaml` inside archives is no longer used by the upload pipeline.
 

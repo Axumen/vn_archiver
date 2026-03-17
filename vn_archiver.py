@@ -1415,7 +1415,7 @@ def build_recommended_metadata_name(metadata, sha256, metadata_version_number):
     title_slug = slugify_component(metadata.get('title'), 'unknown')
     version_slug = slugify_component(metadata.get('version'), 'unknown')
     short_hash = (sha256 or 'nohash')[:8]
-    return f"{title_slug}_{version_slug}_{short_hash}_v{metadata_version_number}_meta.yaml"
+    return f"{title_slug}_{version_slug}_{short_hash}_meta_v{metadata_version_number}.yaml"
 
 
 def order_metadata_for_yaml(metadata):
@@ -1625,10 +1625,10 @@ def upload_archive(file_path):
 
     archive_stem = Path(file_path).stem
     sidecar_dir = Path(file_path).parent
-    sidecar_candidates = list(sidecar_dir.glob(f"{archive_stem}_v*_meta.yaml"))
+    sidecar_candidates = list(sidecar_dir.glob(f"{archive_stem}_meta_v*.yaml"))
 
     def sidecar_sort_key(path_obj):
-        match = re.search(r"_v(\d+)_meta\.ya?ml$", path_obj.name)
+        match = re.search(r"_meta_v(\d+)\.ya?ml$", path_obj.name)
         numeric_version = int(match.group(1)) if match else -1
         return (numeric_version, path_obj.stat().st_mtime, path_obj.name)
 
@@ -1646,7 +1646,7 @@ def upload_archive(file_path):
 
     if not isinstance(metadata, dict):
         print(Fore.RED + "Upload Blocked: Could not find valid metadata sidecar file.")
-        print(Fore.YELLOW + "Expected '<archive_name>_vN_meta.yaml' next to the archive in uploading/.")
+        print(Fore.YELLOW + "Expected '<archive_name>_meta_vN.yaml' next to the archive in uploading/.")
         return False
 
     metadata = normalize_metadata_fields(metadata)
