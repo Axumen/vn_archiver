@@ -57,6 +57,17 @@ translator:
 
 When a list/map is used, vn_archiver stores it in the `builds.translator` text column as JSON while preserving the full value in metadata history. Stored `metadata_objects.metadata_json` keeps template-style field ordering for readability/export consistency while version hashing remains canonical.
 
+
+## Upload format (separate archive + metadata sidecar)
+
+Uploads now use a strict separation model:
+- the VN archive file is uploaded as the cloud object
+- metadata must be provided as a sidecar YAML file in `uploading/` with the pattern `<archive_name>_meta_vN.yaml` (where `vN` is the metadata revision number)
+- archive upload path format: `archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{archive_file_name}`
+- metadata upload path format: `metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{sidecar_file_name}`
+
+Embedded `metadata.yaml` inside archives is no longer used by the upload pipeline.
+
 ## Undoing a mistaken metadata/create entry
 
 Use `metadata_rollback_tool.py` to manage `metadata_versions` and, if needed, remove the full created build entry.

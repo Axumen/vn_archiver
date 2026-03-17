@@ -8,7 +8,6 @@ import shutil
 import sys
 import time
 import yaml
-import zipfile
 from tqdm import tqdm
 from colorama import Fore
 from datetime import date, datetime
@@ -345,25 +344,6 @@ def create_metadata(zip_path):
             metadata[key] = value
 
     return metadata
-
-
-def create_archive(original_zip, metadata_dict, output_path):
-    # Ensure metadata_version exists
-    metadata_dict.setdefault(
-        "metadata_version",
-        detect_latest_metadata_template_version()
-    )
-
-    temp_metadata_path = "metadata.yaml"
-
-    with open(temp_metadata_path, "w", encoding="utf-8") as f:
-        yaml.dump(metadata_dict, f, sort_keys=False, allow_unicode=True)
-
-    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_STORED) as archive:
-        archive.write(original_zip, arcname=os.path.basename(original_zip))
-        archive.write(temp_metadata_path, arcname="metadata.yaml")
-
-    os.remove(temp_metadata_path)
 
 
 # ==============================
@@ -1359,7 +1339,7 @@ def finalize_archive_creation(metadata, archives_data):
 
             print(Fore.GREEN + f"Moved to uploading and mirrored to VN archive: {arch['filename']}")
 
-        print(Fore.GREEN + f"\nSidecar bundle successfully created at: {uploaded_dest_dir}")
+        print(Fore.GREEN + f"\nUpload queue prepared at: {uploaded_dest_dir}")
         print(Fore.GREEN + f"VN archive updated at: {vn_archive_version_dir}")
         print(Fore.GREEN + "Archive processing complete!")
     else:
@@ -1435,7 +1415,7 @@ def build_recommended_metadata_name(metadata, sha256, metadata_version_number):
     title_slug = slugify_component(metadata.get('title'), 'unknown')
     version_slug = slugify_component(metadata.get('version'), 'unknown')
     short_hash = (sha256 or 'nohash')[:8]
-    return f"{title_slug}_{version_slug}_{short_hash}_v{metadata_version_number}_meta.yaml"
+    return f"{title_slug}_{version_slug}_{short_hash}_meta_v{metadata_version_number}.yaml"
 
 
 def order_metadata_for_yaml(metadata):
@@ -1638,55 +1618,41 @@ def upload_archive(file_path):
     print(Fore.CYAN + f"\nAnalyzing {os.path.basename(file_path)}...")
 
     # -------------------------------------------------------------------
-    # 1. Read metadata from bundle (preferred) or queued sidecar file
+    # 1. Read metadata only from queued sidecar file
     # -------------------------------------------------------------------
     metadata = None
     metadata_source = None
+    selected_sidecar = None
 
-    try:
-        with zipfile.ZipFile(file_path, 'r') as z:
-            if 'metadata.yaml' in z.namelist():
-                with z.open('metadata.yaml') as f:
-                    yaml_content = f.read().decode('utf-8')
-                    metadata = yaml.safe_load(yaml_content)
-                    metadata_source = "zip"
-    except zipfile.BadZipFile:
-        print(Fore.RED + "Upload Blocked: File is not a valid zip archive.")
-        return False
+    archive_stem = Path(file_path).stem
+    sidecar_dir = Path(file_path).parent
+    sidecar_candidates = list(sidecar_dir.glob(f"{archive_stem}_meta_v*.yaml"))
 
-    if metadata is None:
-        bundle_stem = Path(file_path).stem
-        sidecar_dir = Path(file_path).parent
-        sidecar_candidates = list(sidecar_dir.glob(f"{bundle_stem}_v*_meta.yaml"))
+    def sidecar_sort_key(path_obj):
+        match = re.search(r"_meta_v(\d+)\.ya?ml$", path_obj.name)
+        numeric_version = int(match.group(1)) if match else -1
+        return (numeric_version, path_obj.stat().st_mtime, path_obj.name)
 
-        def sidecar_sort_key(path_obj):
-            match = re.search(r"_v(\d+)_meta\.ya?ml$", path_obj.name)
-            numeric_version = int(match.group(1)) if match else -1
-            return (numeric_version, path_obj.stat().st_mtime, path_obj.name)
+    sidecar_candidates.sort(key=sidecar_sort_key)
 
-        sidecar_candidates.sort(key=sidecar_sort_key)
-
-        if sidecar_candidates:
-            selected_sidecar = sidecar_candidates[-1]
-            try:
-                with open(selected_sidecar, 'r', encoding='utf-8') as handle:
-                    metadata = yaml.safe_load(handle)
-                    metadata_source = str(selected_sidecar)
-            except Exception as e:
-                print(Fore.RED + f"Upload Blocked: Failed to read sidecar metadata file '{selected_sidecar.name}': {e}")
-                return False
+    if sidecar_candidates:
+        selected_sidecar = sidecar_candidates[-1]
+        try:
+            with open(selected_sidecar, 'r', encoding='utf-8') as handle:
+                metadata = yaml.safe_load(handle)
+                metadata_source = str(selected_sidecar)
+        except Exception as e:
+            print(Fore.RED + f"Upload Blocked: Failed to read sidecar metadata file '{selected_sidecar.name}': {e}")
+            return False
 
     if not isinstance(metadata, dict):
-        print(Fore.RED + "Upload Blocked: Could not find valid metadata in zip or sidecar file.")
-        print(Fore.YELLOW + "Expected either metadata.yaml in the zip or '<name>_<version>_<hash>_vN_meta.yaml' next to it.")
+        print(Fore.RED + "Upload Blocked: Could not find valid metadata sidecar file.")
+        print(Fore.YELLOW + "Expected '<archive_name>_meta_vN.yaml' next to the archive in uploading/.")
         return False
 
     metadata = normalize_metadata_fields(metadata)
 
-    if metadata_source == "zip":
-        print(Fore.CYAN + "Metadata source: embedded metadata.yaml")
-    else:
-        print(Fore.CYAN + f"Metadata source: sidecar file ({metadata_source})")
+    print(Fore.CYAN + f"Metadata source: sidecar file ({metadata_source})")
 
     title = str(metadata.get("title", "")).strip()
     version = str(metadata.get("version", "")).strip()
@@ -1694,7 +1660,7 @@ def upload_archive(file_path):
     edition = str(metadata.get("edition", "")).strip()
 
     if not title:
-        print(Fore.RED + "Upload Blocked: 'metadata.yaml' is missing 'title'.")
+        print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
         return False
 
     # -------------------------------------------------------------------
@@ -1737,25 +1703,26 @@ def upload_archive(file_path):
                 print(Fore.YELLOW + "Please run '(1) Create Metadata' to register a build before uploading.")
                 return False
             version = str(build_row["version"]).strip()
-            print(Fore.YELLOW + f"No version supplied in metadata.yaml; using latest DB build version: {version}")
+            print(Fore.YELLOW + f"No version supplied in sidecar metadata; using latest DB build version: {version}")
 
         build_id = build_row["id"]
 
     # -------------------------------------------------------------------
-    # 3. Formulate the Strict Cloud Naming Scheme & Hash
+    # 3. Formulate cloud naming paths & hashes
     # -------------------------------------------------------------------
     title_slug = slugify_component(title, "unknown")
     version_slug = slugify_component(version, "unknown")
 
-    print(Fore.CYAN + "Calculating outer bundle SHA-256 for cloud verification...")
-    bundle_sha256 = sha256_file(file_path)
-    short_hash = bundle_sha256[:8]
+    print(Fore.CYAN + "Calculating archive SHA-256 for cloud verification...")
+    archive_sha256 = sha256_file(file_path)
 
     ext = os.path.splitext(file_path)[1].lower()
 
-    # Standardized naming for VN bundles (title + build version + hash)
-    file_name = build_recommended_archive_name(metadata, bundle_sha256, ext=ext)
+    # Standardized naming for VN archives (title + build version + hash)
+    file_name = build_recommended_archive_name(metadata, archive_sha256, ext=ext)
     cloud_path = f"archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{file_name}"
+    metadata_file_name = Path(metadata_source).name
+    metadata_cloud_path = f"metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{metadata_file_name}"
 
     print(Fore.GREEN + f"Database verification passed (VN ID: {vn_id})")
 
@@ -1772,19 +1739,20 @@ def upload_archive(file_path):
     file_size = os.path.getsize(file_path)
 
     # -------------------------------------------------------------------
-    # 4. CAS Deduplication Check
+    # 4. CAS Deduplication Check (archive object only)
     # -------------------------------------------------------------------
     with get_connection() as conn:
         existing_obj = conn.execute(
             "SELECT storage_path FROM archive_objects WHERE sha256 = ?",
-            (bundle_sha256,)
+            (archive_sha256,)
         ).fetchone()
 
-    if existing_obj:
+    archive_needs_upload = existing_obj is None
+    if not archive_needs_upload:
         existing_cloud_path = existing_obj["storage_path"]
-        print(Fore.GREEN + f"\n[DEDUPLICATION MATCH] File already exists in cloud!")
+        print(Fore.GREEN + f"\n[DEDUPLICATION MATCH] Archive already exists in cloud!")
         print(Fore.CYAN + f"Existing Path: {existing_cloud_path}")
-        print(Fore.YELLOW + "Skipping Backblaze upload. Linking database records...")
+        print(Fore.YELLOW + "Skipping archive upload. Linking database records...")
 
         with get_connection() as conn:
             conn.execute(
@@ -1794,11 +1762,10 @@ def upload_archive(file_path):
                     uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
                 WHERE build_id = ? AND sha256 = ?
                 """,
-                (build_id, bundle_sha256)
+                (build_id, archive_sha256)
             )
-            conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", bundle_sha256, build_id))
+            conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", archive_sha256, build_id))
             sync_visual_novel_upload_status(conn, vn_id)
-        return True
 
     # -------------------------------------------------------------------
     # 5. Backblaze B2 Authentication via Config
@@ -1815,84 +1782,116 @@ def upload_archive(file_path):
         return False
 
     # -------------------------------------------------------------------
-    # 6. Actual Upload with Progress Bar (Standardized UI)
+    # 6. Upload archive object (if not deduplicated)
     # -------------------------------------------------------------------
     if dry_run:
-        print(Fore.YELLOW + f"[DRY RUN] Would upload {file_name} to: {cloud_path}")
+        if archive_needs_upload:
+            print(Fore.YELLOW + f"[DRY RUN] Would upload archive {file_name} to: {cloud_path}")
+        else:
+            print(Fore.YELLOW + f"[DRY RUN] Archive already deduplicated at: {cloud_path}")
+        print(Fore.YELLOW + f"[DRY RUN] Would upload metadata {metadata_file_name} to: {metadata_cloud_path}")
         return True
 
-    print(Fore.CYAN + f"\nUploading File: {file_name}")
-    print(Fore.CYAN + f"Destination   : {cloud_path}")
+    if archive_needs_upload:
+        print(Fore.CYAN + f"\nUploading Archive: {file_name}")
+        print(Fore.CYAN + f"Destination      : {cloud_path}")
 
-    with tqdm(total=file_size, unit='B', unit_scale=True, desc="Progress", colour="green") as pbar:
-        class TqdmProgressListener:
-            def set_total_bytes(self, total_bytes): pass
+        with tqdm(total=file_size, unit='B', unit_scale=True, desc="Progress", colour="green") as pbar:
+            class TqdmProgressListener:
+                def set_total_bytes(self, total_bytes):
+                    pass
 
-            def bytes_completed(self, byte_count):
-                pbar.update(byte_count - pbar.n)
+                def bytes_completed(self, byte_count):
+                    pbar.update(byte_count - pbar.n)
 
-            def close(self): pass
+                def close(self):
+                    pass
+
+            try:
+                bucket.upload_local_file(
+                    local_file=str(file_path),
+                    file_name=cloud_path,
+                    progress_listener=TqdmProgressListener()
+                )
+            except Exception as e:
+                print(Fore.RED + f"\nUpload failed for {file_name}: {e}")
+                return False
+
+        print(Fore.GREEN + "\nArchive upload complete!")
 
         try:
-            bucket.upload_local_file(
-                local_file=str(file_path),
-                file_name=cloud_path,
-                progress_listener=TqdmProgressListener()
-            )
+            uploaded_info = bucket.get_file_info_by_name(cloud_path)
         except Exception as e:
-            print(Fore.RED + f"\nUpload failed for {file_name}: {e}")
+            print(Fore.RED + f"Post-upload verification failed for {cloud_path}: {e}")
             return False
 
-    print(Fore.GREEN + "\nUpload Complete!")
+        remote_size = getattr(uploaded_info, "size", None)
+        if remote_size is not None and int(remote_size) != int(file_size):
+            print(
+                Fore.RED
+                + f"Post-upload verification failed: remote size {remote_size} does not match local size {file_size}."
+            )
+            return False
+
+        print(Fore.GREEN + f"Verified remote archive object: {cloud_path}")
+
+        with get_connection() as conn:
+            try:
+                conn.execute(
+                    '''
+                    INSERT OR IGNORE INTO archive_objects (sha256, file_size, storage_path)
+                    VALUES (?, ?, ?)
+                    ''',
+                    (archive_sha256, file_size, cloud_path)
+                )
+
+                conn.execute(
+                    """
+                    UPDATE archives
+                    SET status = 'uploaded',
+                        uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
+                    WHERE build_id = ? AND sha256 = ?
+                    """,
+                    (build_id, archive_sha256)
+                )
+
+                conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", archive_sha256, build_id))
+                sync_visual_novel_upload_status(conn, vn_id)
+            except Exception as e:
+                print(Fore.RED + f"Database update failed after upload verification: {e}")
+                return False
 
     # -------------------------------------------------------------------
-    # 7. Verify uploaded object exists remotely before DB write-through
+    # 7. Upload metadata sidecar object
     # -------------------------------------------------------------------
+    metadata_local_size = os.path.getsize(selected_sidecar)
+    print(Fore.CYAN + f"\nUploading Metadata: {metadata_file_name}")
+    print(Fore.CYAN + f"Destination       : {metadata_cloud_path}")
     try:
-        uploaded_info = bucket.get_file_info_by_name(cloud_path)
+        bucket.upload_local_file(
+            local_file=str(selected_sidecar),
+            file_name=metadata_cloud_path
+        )
     except Exception as e:
-        print(Fore.RED + f"Post-upload verification failed for {cloud_path}: {e}")
+        print(Fore.RED + f"Upload failed for metadata sidecar {metadata_file_name}: {e}")
         return False
 
-    remote_size = getattr(uploaded_info, "size", None)
-    if remote_size is not None and int(remote_size) != int(file_size):
+    try:
+        metadata_info = bucket.get_file_info_by_name(metadata_cloud_path)
+    except Exception as e:
+        print(Fore.RED + f"Post-upload verification failed for metadata {metadata_cloud_path}: {e}")
+        return False
+
+    metadata_remote_size = getattr(metadata_info, "size", None)
+    if metadata_remote_size is not None and int(metadata_remote_size) != int(metadata_local_size):
         print(
             Fore.RED
-            + f"Post-upload verification failed: remote size {remote_size} does not match local size {file_size}."
+            + f"Post-upload verification failed for metadata: remote size {metadata_remote_size} does not match local size {metadata_local_size}."
         )
         return False
 
-    print(Fore.GREEN + f"Verified remote object: {cloud_path}")
-
-    # -------------------------------------------------------------------
-    # 8. Update Database with new physical CAS object
-    # -------------------------------------------------------------------
-    with get_connection() as conn:
-        try:
-            # Insert the physical object first so builds.archive_object_sha256 FK can reference it.
-            conn.execute('''
-                INSERT OR IGNORE INTO archive_objects (sha256, file_size, storage_path)
-                VALUES (?, ?, ?)
-            ''', (bundle_sha256, file_size, cloud_path))
-
-            conn.execute(
-                """
-                UPDATE archives
-                SET status = 'uploaded',
-                    uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
-                WHERE build_id = ? AND sha256 = ?
-                """,
-                (build_id, bundle_sha256)
-            )
-
-            conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", bundle_sha256, build_id))
-            sync_visual_novel_upload_status(conn, vn_id)
-        except Exception as e:
-            print(Fore.RED + f"Database update failed after upload verification: {e}")
-            return False
-
+    print(Fore.GREEN + f"Metadata upload complete: {metadata_cloud_path}")
     return True
-
 
 def slugify_component(value, fallback):
     """
