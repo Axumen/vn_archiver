@@ -1862,36 +1862,59 @@ def upload_archive(file_path):
                 return False
 
     # -------------------------------------------------------------------
-    # 7. Upload metadata sidecar object
+    # 7. Upload metadata sidecar object (with CAS dedup + DB record)
     # -------------------------------------------------------------------
+    metadata_sha256 = sha256_file(selected_sidecar)
     metadata_local_size = os.path.getsize(selected_sidecar)
-    print(Fore.CYAN + f"\nUploading Metadata: {metadata_file_name}")
-    print(Fore.CYAN + f"Destination       : {metadata_cloud_path}")
-    try:
-        bucket.upload_local_file(
-            local_file=str(selected_sidecar),
-            file_name=metadata_cloud_path
+
+    with get_connection() as conn:
+        existing_meta_obj = conn.execute(
+            "SELECT storage_path FROM metadata_file_objects WHERE sha256 = ?",
+            (metadata_sha256,)
+        ).fetchone()
+
+    metadata_needs_upload = existing_meta_obj is None
+    if not metadata_needs_upload:
+        existing_meta_path = existing_meta_obj["storage_path"]
+        print(Fore.GREEN + f"\n[DEDUPLICATION MATCH] Metadata sidecar already exists in cloud!")
+        print(Fore.CYAN + f"Existing Path: {existing_meta_path}")
+
+    if metadata_needs_upload:
+        print(Fore.CYAN + f"\nUploading Metadata: {metadata_file_name}")
+        print(Fore.CYAN + f"Destination       : {metadata_cloud_path}")
+        try:
+            bucket.upload_local_file(
+                local_file=str(selected_sidecar),
+                file_name=metadata_cloud_path
+            )
+        except Exception as e:
+            print(Fore.RED + f"Upload failed for metadata sidecar {metadata_file_name}: {e}")
+            return False
+
+        try:
+            metadata_info = bucket.get_file_info_by_name(metadata_cloud_path)
+        except Exception as e:
+            print(Fore.RED + f"Post-upload verification failed for metadata {metadata_cloud_path}: {e}")
+            return False
+
+        metadata_remote_size = getattr(metadata_info, "size", None)
+        if metadata_remote_size is not None and int(metadata_remote_size) != int(metadata_local_size):
+            print(
+                Fore.RED
+                + f"Post-upload verification failed for metadata: remote size {metadata_remote_size} does not match local size {metadata_local_size}."
+            )
+            return False
+
+        print(Fore.GREEN + f"Metadata upload complete: {metadata_cloud_path}")
+
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO metadata_file_objects (sha256, file_size, storage_path) VALUES (?, ?, ?)",
+            (metadata_sha256, metadata_local_size, metadata_cloud_path)
         )
-    except Exception as e:
-        print(Fore.RED + f"Upload failed for metadata sidecar {metadata_file_name}: {e}")
-        return False
 
-    try:
-        metadata_info = bucket.get_file_info_by_name(metadata_cloud_path)
-    except Exception as e:
-        print(Fore.RED + f"Post-upload verification failed for metadata {metadata_cloud_path}: {e}")
-        return False
-
-    metadata_remote_size = getattr(metadata_info, "size", None)
-    if metadata_remote_size is not None and int(metadata_remote_size) != int(metadata_local_size):
-        print(
-            Fore.RED
-            + f"Post-upload verification failed for metadata: remote size {metadata_remote_size} does not match local size {metadata_local_size}."
-        )
-        return False
-
-    print(Fore.GREEN + f"Metadata upload complete: {metadata_cloud_path}")
     return True
+
 
 def slugify_component(value, fallback):
     """
