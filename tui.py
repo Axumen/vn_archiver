@@ -588,7 +588,12 @@ def upload_archives():
 
     for i, path in enumerate(upload_files, 1):
         rel_path = os.path.relpath(path, UPLOADING_DIR)
-        kind = "metadata" if rel_path.lower().endswith((".yaml", ".yml")) else "archive"
+        if rel_path.lower().endswith((".yaml", ".yml")):
+            kind = "metadata"
+        elif rel_path.lower().endswith(".zip"):
+            kind = "archive"
+        else:
+            kind = "artifact"
         print(TEXT + f"[{i}] ({kind}) {rel_path}")
 
     print(TEXT + "[A] Upload all files in uploading/")
@@ -612,7 +617,10 @@ def upload_archives():
                     (file_hash,)
                 ).fetchone()
             else:
-                return False
+                existing_obj = conn.execute(
+                    "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                    (file_hash,)
+                ).fetchone()
         return bool(existing_obj)
 
     def dispatch_upload(file_path):
@@ -621,8 +629,7 @@ def upload_archives():
             return upload_archive(file_path)
         if lower.endswith(('.yaml', '.yml')):
             return upload_metadata_sidecar(file_path)
-        notify(f"Unsupported file type: {os.path.basename(file_path)}", "warn")
-        return False
+        return upload_archive(file_path)
 
     if choice.lower() == "a":
         uploaded_count = 0
@@ -661,13 +668,37 @@ def upload_archives():
 
 
 def get_uploading_upload_files():
-    """Return uploadable files (archives + metadata sidecars) from uploading/ root."""
-    return sorted([
+    """Return uploadable files from uploading/ root.
+
+    Uploadable includes:
+      - metadata sidecars named *_meta_vN.yaml|yml
+      - archives/artifacts that have a matching sidecar in the same directory
+    """
+    entries = [
         os.path.join(UPLOADING_DIR, entry)
         for entry in os.listdir(UPLOADING_DIR)
         if os.path.isfile(os.path.join(UPLOADING_DIR, entry))
-        and (entry.lower().endswith(".zip") or re.search(r"_meta_v\d+\.ya?ml$", entry.lower()))
-    ])
+    ]
+
+    sidecar_pattern = re.compile(r"^(?P<stem>.+)_meta_v\d+\.ya?ml$", re.IGNORECASE)
+    sidecar_stems = set()
+    uploadable = []
+
+    for path in entries:
+        name = os.path.basename(path)
+        match = sidecar_pattern.match(name)
+        if match:
+            uploadable.append(path)
+            sidecar_stems.add(match.group("stem"))
+
+    for path in entries:
+        name = os.path.basename(path)
+        if sidecar_pattern.match(name):
+            continue
+        if Path(name).stem in sidecar_stems:
+            uploadable.append(path)
+
+    return sorted(set(uploadable))
 
 
 def is_upload_file_confirmed_uploaded(file_path):
@@ -686,7 +717,10 @@ def is_upload_file_confirmed_uploaded(file_path):
                 (file_hash,)
             ).fetchone()
         else:
-            return False
+            existing_obj = conn.execute(
+                "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                (file_hash,)
+            ).fetchone()
     return bool(existing_obj)
 
 
@@ -717,17 +751,20 @@ def delete_uploading_files():
     if mode in ("", "0"):
         return
 
-    upload_files = [p for p in get_uploading_upload_files() if p.lower().endswith(".zip")]
+    upload_files = [
+        p for p in get_uploading_upload_files()
+        if not p.lower().endswith((".yaml", ".yml"))
+    ]
     if not upload_files:
-        notify("No zip files found in uploading/.", "warn")
+        notify("No archive/artifact files with sidecar metadata found in uploading/.", "warn")
         return
 
     if mode == "1":
-        panel("Choose Zip File")
+        panel("Choose Archive/Artifact File")
         for i, path in enumerate(upload_files, 1):
             print(TEXT + f"[{i}] {os.path.basename(path)}")
 
-        selection = prompt("Select zip number, or 0 to cancel: ")
+        selection = prompt("Select archive/artifact number, or 0 to cancel: ")
         if selection in ("", "0"):
             return
 
