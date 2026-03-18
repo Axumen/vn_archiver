@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import json
+import re
 from db_manager import initialize_database, get_connection
 from pathlib import Path
 from colorama import init, Fore, Style
@@ -13,6 +14,7 @@ from vn_archiver import (
     create_archive_only,
     create_archive_from_metadata_file,
     upload_archive,
+    upload_metadata_sidecar,
     INCOMING_DIR,
     UPLOADING_DIR,
     sha256_file,
@@ -573,35 +575,54 @@ def edit_metadata_only():
 
 def upload_archives():
     print()
-    panel("Upload Archive")
+    panel("Upload Queue")
     if not os.path.exists(UPLOADING_DIR):
         notify("Uploading directory does not exist.", "error")
         return
 
-    upload_files = get_uploading_zip_files()
+    upload_files = get_uploading_upload_files()
 
     if not upload_files:
-        notify("No zip files found in the uploading directory root.", "error")
+        notify("No uploadable files found in the uploading directory root.", "error")
         return
 
     for i, path in enumerate(upload_files, 1):
         rel_path = os.path.relpath(path, UPLOADING_DIR)
-        print(TEXT + f"[{i}] {rel_path}")
+        kind = "metadata" if rel_path.lower().endswith((".yaml", ".yml")) else "archive"
+        print(TEXT + f"[{i}] ({kind}) {rel_path}")
 
     print(TEXT + "[A] Upload all files in uploading/")
 
-    choice = prompt("Select zip number, 'A' for all, or 0 to cancel: ")
+    choice = prompt("Select file number, 'A' for all, or 0 to cancel: ")
     if choice == "0" or not choice:
         return
 
     def is_already_uploaded(file_path):
+        lower = file_path.lower()
         file_hash = sha256_file(file_path)
         with get_connection() as conn:
-            existing_obj = conn.execute(
-                "SELECT 1 FROM archive_objects WHERE sha256 = ?",
-                (file_hash,)
-            ).fetchone()
+            if lower.endswith('.zip'):
+                existing_obj = conn.execute(
+                    "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                    (file_hash,)
+                ).fetchone()
+            elif lower.endswith(('.yaml', '.yml')):
+                existing_obj = conn.execute(
+                    "SELECT 1 FROM metadata_file_objects WHERE sha256 = ?",
+                    (file_hash,)
+                ).fetchone()
+            else:
+                return False
         return bool(existing_obj)
+
+    def dispatch_upload(file_path):
+        lower = file_path.lower()
+        if lower.endswith('.zip'):
+            return upload_archive(file_path)
+        if lower.endswith(('.yaml', '.yml')):
+            return upload_metadata_sidecar(file_path)
+        notify(f"Unsupported file type: {os.path.basename(file_path)}", "warn")
+        return False
 
     if choice.lower() == "a":
         uploaded_count = 0
@@ -614,7 +635,7 @@ def upload_archives():
                 skipped_count += 1
                 continue
 
-            if upload_archive(file_path):
+            if dispatch_upload(file_path):
                 uploaded_count += 1
             else:
                 failed_count += 1
@@ -632,20 +653,20 @@ def upload_archives():
             if is_already_uploaded(selected_file):
                 notify(f"Skipping already uploaded file: {os.path.basename(selected_file)}", "warn")
                 return
-            upload_archive(selected_file)
+            dispatch_upload(selected_file)
         else:
             notify("Invalid selection.", "error")
     except ValueError:
         notify("Invalid input.", "error")
 
 
-def get_uploading_zip_files():
-    """Return zip files from the root of uploading/ sorted by filename."""
+def get_uploading_upload_files():
+    """Return uploadable files (archives + metadata sidecars) from uploading/ root."""
     return sorted([
         os.path.join(UPLOADING_DIR, entry)
         for entry in os.listdir(UPLOADING_DIR)
-        if entry.lower().endswith(".zip")
-        and os.path.isfile(os.path.join(UPLOADING_DIR, entry))
+        if os.path.isfile(os.path.join(UPLOADING_DIR, entry))
+        and (entry.lower().endswith(".zip") or re.search(r"_meta_v\d+\.ya?ml$", entry.lower()))
     ])
 
 
@@ -683,7 +704,7 @@ def delete_uploading_files():
     if mode in ("", "0"):
         return
 
-    upload_files = get_uploading_zip_files()
+    upload_files = [p for p in get_uploading_upload_files() if p.lower().endswith(".zip")]
     if not upload_files:
         notify("No zip files found in uploading/.", "warn")
         return
