@@ -460,6 +460,8 @@ def process_artifact_with_metadata():
         return
 
     content_type = prompt("content_type [story_expansion]: ") or "story_expansion"
+    default_artifact_edition = f"artifact:{Path(artifact_filename).stem}"
+    edition = prompt(f"edition [{default_artifact_edition}]: ") or default_artifact_edition
 
     print()
     notify("Select base archive for dependency linking (required for artifacts).")
@@ -478,16 +480,15 @@ def process_artifact_with_metadata():
         "metadata_version": get_active_metadata_template_version(),
         "title": title,
         "version": version,
+        "edition": edition,
         "content_type": content_type,
         "base_archive_sha256": selected_sha,
         "notes": notes,
         "change_note": change_note,
     }
 
-    for field in ("language", "edition"):
-        value = defaults.get(field)
-        if value not in (None, ""):
-            metadata[field] = value
+    if defaults.get("language") not in (None, ""):
+        metadata["language"] = defaults.get("language")
 
     create_archive_from_metadata_file([artifact_path], metadata)
 
