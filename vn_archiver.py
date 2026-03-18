@@ -41,6 +41,16 @@ SUGGESTED_CONTENT_TYPE = [
     "april_fools", "side_story", "non_canon_special"
 ]
 
+DEPENDENCY_CONTENT_TYPES = {
+    "story_expansion",
+    "side_story",
+    "patch",
+    "dlc",
+    "mod",
+    "append_disc",
+    "engine_port",
+}
+
 AUTO_METADATA_FIELDS = {
     "original_filename": lambda zip_path: os.path.basename(zip_path),
     "file_size_bytes": lambda zip_path: os.path.getsize(zip_path),
@@ -395,6 +405,52 @@ def normalize_text_list_value(value):
 
     fallback = str(value).strip()
     return fallback or None
+
+
+def _normalized_content_types(metadata):
+    raw_content_type = metadata.get("content_type")
+    if raw_content_type is None:
+        return set()
+
+    if isinstance(raw_content_type, list):
+        values = [str(item).strip().lower() for item in raw_content_type if str(item).strip()]
+    else:
+        values = [part.strip().lower() for part in str(raw_content_type).split(",") if part.strip()]
+
+    return set(values)
+
+
+def validate_base_archive_guardrail(file_path, metadata):
+    """Enforce base-archive policy for dependent uploads.
+
+    - Non-zip artifact uploads must provide base_archive_sha256.
+    - Dependency-like content_type values must provide base_archive_sha256.
+    - If base_archive_sha256 is provided, it must already exist in archive_objects.
+    """
+    ext = os.path.splitext(file_path)[1].lower()
+    base_archive_sha = str(metadata.get("base_archive_sha256") or "").strip().lower()
+    content_types = _normalized_content_types(metadata)
+    is_dependency_content = any(ct in DEPENDENCY_CONTENT_TYPES for ct in content_types)
+    requires_base_archive = (ext != ".zip") or is_dependency_content
+
+    if requires_base_archive and not base_archive_sha:
+        reason = "non-zip artifact upload" if ext != ".zip" else "dependency content_type"
+        print(Fore.RED + f"Upload Blocked: base_archive_sha256 is required ({reason}).")
+        print(Fore.YELLOW + "Set base_archive_sha256 in the metadata sidecar and try again.")
+        return False
+
+    if base_archive_sha:
+        with get_connection() as conn:
+            base_row = conn.execute(
+                "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                (base_archive_sha,)
+            ).fetchone()
+        if not base_row:
+            print(Fore.RED + "Upload Blocked: base_archive_sha256 does not exist in archive_objects.")
+            print(Fore.YELLOW + f"Missing base archive sha256: {base_archive_sha}")
+            return False
+
+    return True
 
 
 CSV_TO_TEXT_FIELDS = {
@@ -1248,6 +1304,13 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
                     defaults = get_latest_metadata_for_title(raw_val)
                     if defaults:
                         print(Fore.GREEN + f"Loaded defaults from latest metadata for '{raw_val}'.")
+                        latest_known_version = defaults.get('version')
+                        if latest_known_version not in (None, ""):
+                            print(
+                                Fore.CYAN
+                                + f"Latest known version is '{latest_known_version}'. "
+                                "Press ENTER on version to reuse it, or type a new version."
+                            )
                         defaults.pop('archives', None)
                         defaults.pop('metadata_version', None)
             elif default_val not in (None, ""):
@@ -1626,7 +1689,11 @@ def upload_archive(file_path):
 
     archive_stem = Path(file_path).stem
     sidecar_dir = Path(file_path).parent
-    sidecar_candidates = list(sidecar_dir.glob(f"{archive_stem}_meta_v*.yaml"))
+    sidecar_pattern = re.compile(rf"^{re.escape(archive_stem)}_meta_v\d+\.ya?ml$", re.IGNORECASE)
+    sidecar_candidates = [
+        candidate for candidate in sidecar_dir.iterdir()
+        if candidate.is_file() and sidecar_pattern.match(candidate.name)
+    ]
 
     def sidecar_sort_key(path_obj):
         match = re.search(r"_meta_v(\d+)\.ya?ml$", path_obj.name)
@@ -1664,6 +1731,9 @@ def upload_archive(file_path):
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
+        return False
+
+    if not validate_base_archive_guardrail(file_path, metadata):
         return False
 
     # -------------------------------------------------------------------
@@ -1761,12 +1831,29 @@ def upload_archive(file_path):
     archive_sha256 = sha256_file(file_path)
 
     ext = os.path.splitext(file_path)[1].lower()
+    base_archive_sha = str(metadata.get("base_archive_sha256") or "").strip().lower()
+    parent_archive_dir = None
 
     # Standardized naming for VN archives (title + build version + hash)
     file_name = build_recommended_archive_name(metadata, archive_sha256, ext=ext)
-    cloud_path = f"archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{file_name}"
     metadata_file_name = Path(metadata_source).name
-    metadata_cloud_path = f"metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{metadata_file_name}"
+
+    if ext != ".zip" and base_archive_sha:
+        with get_connection() as conn:
+            parent_archive_row = conn.execute(
+                "SELECT storage_path FROM archive_objects WHERE sha256 = ?",
+                (base_archive_sha,)
+            ).fetchone()
+        if not parent_archive_row or not parent_archive_row["storage_path"]:
+            print(Fore.RED + "Upload Blocked: Could not resolve parent archive storage path for artifact.")
+            return False
+
+        parent_archive_dir = os.path.dirname(parent_archive_row["storage_path"].strip())
+        cloud_path = f"{parent_archive_dir}/{file_name}"
+        metadata_cloud_path = f"{parent_archive_dir}/{metadata_file_name}"
+    else:
+        cloud_path = f"archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{file_name}"
+        metadata_cloud_path = f"metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{metadata_file_name}"
 
     if db_version_number > 1:
         parent_metadata_cloud_path = re.sub(r"_meta_v\d+(\.ya?ml)$", f"_meta_v{db_version_number - 1}\\1", metadata_cloud_path)

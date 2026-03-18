@@ -23,9 +23,11 @@ from vn_archiver import (
     get_available_metadata_template_versions,
     detect_latest_metadata_template_version,
     insert_visual_novel,
+    get_latest_metadata_for_title,
     get_current_metadata_version_number,
     stage_metadata_yaml_for_upload,
-    order_metadata_for_yaml
+    order_metadata_for_yaml,
+    select_base_archive_from_db
 )
 
 init(autoreset=True)
@@ -402,6 +404,94 @@ def quick_process_with_metadata_yaml():
         notify("Invalid input.", "error")
 
 
+def process_artifact_with_metadata():
+    print()
+    panel("Process Artifact (Minimal Metadata)")
+
+    if not os.path.exists(INCOMING_DIR):
+        os.makedirs(INCOMING_DIR)
+
+    artifact_files = sorted([
+        f for f in os.listdir(INCOMING_DIR)
+        if os.path.isfile(os.path.join(INCOMING_DIR, f))
+        and not f.lower().endswith((".zip", ".yaml", ".yml"))
+    ])
+
+    if not artifact_files:
+        notify(f"No artifact files found in '{INCOMING_DIR}' (non-zip, non-yaml).", "error")
+        return
+
+    panel("Select Artifact File")
+    for i, filename in enumerate(artifact_files, 1):
+        print(TEXT + f"[{i}] {filename}")
+
+    selection = prompt("Select artifact number, or 0 to cancel: ")
+    if selection in ("", "0"):
+        return
+
+    try:
+        idx = int(selection) - 1
+    except ValueError:
+        notify("Invalid input.", "error")
+        return
+
+    if idx < 0 or idx >= len(artifact_files):
+        notify("Invalid artifact selection.", "error")
+        return
+
+    artifact_filename = artifact_files[idx]
+    artifact_path = os.path.join(INCOMING_DIR, artifact_filename)
+    show_file_info(artifact_filename)
+
+    title = prompt("title: ")
+    if not title:
+        notify("title is required.", "error")
+        return
+
+    defaults = get_latest_metadata_for_title(title) or {}
+    default_version = defaults.get("version") or ""
+
+    version_prompt = "version"
+    if default_version:
+        version_prompt += f" [{default_version}]"
+    version = prompt(f"{version_prompt}: ") or default_version
+    if not version:
+        notify("version is required.", "error")
+        return
+
+    content_type = prompt("content_type [story_expansion]: ") or "story_expansion"
+
+    print()
+    notify("Select base archive for dependency linking (required for artifacts).")
+    selected_sha = select_base_archive_from_db(defaults.get("series"), title)
+    if not selected_sha:
+        selected_sha = prompt("base_archive_sha256 (required): ")
+    selected_sha = (selected_sha or "").strip()
+    if not selected_sha:
+        notify("base_archive_sha256 is required for artifact processing.", "error")
+        return
+
+    notes = prompt("notes (optional): ")
+    change_note = prompt("change_note (optional): ")
+
+    metadata = {
+        "metadata_version": get_active_metadata_template_version(),
+        "title": title,
+        "version": version,
+        "content_type": content_type,
+        "base_archive_sha256": selected_sha,
+        "notes": notes,
+        "change_note": change_note,
+    }
+
+    for field in ("language", "edition"):
+        value = defaults.get(field)
+        if value not in (None, ""):
+            metadata[field] = value
+
+    create_archive_from_metadata_file([artifact_path], metadata)
+
+
 # =============================
 # METADATA EDITING
 # =============================
@@ -588,7 +678,12 @@ def upload_archives():
 
     for i, path in enumerate(upload_files, 1):
         rel_path = os.path.relpath(path, UPLOADING_DIR)
-        kind = "metadata" if rel_path.lower().endswith((".yaml", ".yml")) else "archive"
+        if rel_path.lower().endswith((".yaml", ".yml")):
+            kind = "metadata"
+        elif rel_path.lower().endswith(".zip"):
+            kind = "archive"
+        else:
+            kind = "artifact"
         print(TEXT + f"[{i}] ({kind}) {rel_path}")
 
     print(TEXT + "[A] Upload all files in uploading/")
@@ -612,7 +707,10 @@ def upload_archives():
                     (file_hash,)
                 ).fetchone()
             else:
-                return False
+                existing_obj = conn.execute(
+                    "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                    (file_hash,)
+                ).fetchone()
         return bool(existing_obj)
 
     def dispatch_upload(file_path):
@@ -621,8 +719,7 @@ def upload_archives():
             return upload_archive(file_path)
         if lower.endswith(('.yaml', '.yml')):
             return upload_metadata_sidecar(file_path)
-        notify(f"Unsupported file type: {os.path.basename(file_path)}", "warn")
-        return False
+        return upload_archive(file_path)
 
     if choice.lower() == "a":
         uploaded_count = 0
@@ -661,23 +758,59 @@ def upload_archives():
 
 
 def get_uploading_upload_files():
-    """Return uploadable files (archives + metadata sidecars) from uploading/ root."""
-    return sorted([
+    """Return uploadable files from uploading/ root.
+
+    Uploadable includes:
+      - metadata sidecars named *_meta_vN.yaml|yml
+      - archives/artifacts that have a matching sidecar in the same directory
+    """
+    entries = [
         os.path.join(UPLOADING_DIR, entry)
         for entry in os.listdir(UPLOADING_DIR)
         if os.path.isfile(os.path.join(UPLOADING_DIR, entry))
-        and (entry.lower().endswith(".zip") or re.search(r"_meta_v\d+\.ya?ml$", entry.lower()))
-    ])
+    ]
+
+    sidecar_pattern = re.compile(r"^(?P<stem>.+)_meta_v\d+\.ya?ml$", re.IGNORECASE)
+    sidecar_stems = set()
+    uploadable = []
+
+    for path in entries:
+        name = os.path.basename(path)
+        match = sidecar_pattern.match(name)
+        if match:
+            uploadable.append(path)
+            sidecar_stems.add(match.group("stem"))
+
+    for path in entries:
+        name = os.path.basename(path)
+        if sidecar_pattern.match(name):
+            continue
+        if Path(name).stem in sidecar_stems:
+            uploadable.append(path)
+
+    return sorted(set(uploadable))
 
 
-def is_archive_hash_uploaded(file_path):
-    """True when a file's sha256 exists as a stored archive object."""
+def is_upload_file_confirmed_uploaded(file_path):
+    """True when a file is already present in DB object storage tables."""
+    lower = str(file_path).lower()
     file_hash = sha256_file(file_path)
     with get_connection() as conn:
-        existing_obj = conn.execute(
-            "SELECT 1 FROM archive_objects WHERE sha256 = ?",
-            (file_hash,)
-        ).fetchone()
+        if lower.endswith(".zip"):
+            existing_obj = conn.execute(
+                "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                (file_hash,)
+            ).fetchone()
+        elif lower.endswith((".yaml", ".yml")):
+            existing_obj = conn.execute(
+                "SELECT 1 FROM metadata_file_objects WHERE sha256 = ?",
+                (file_hash,)
+            ).fetchone()
+        else:
+            existing_obj = conn.execute(
+                "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                (file_hash,)
+            ).fetchone()
     return bool(existing_obj)
 
 
@@ -685,7 +818,11 @@ def get_sidecar_metadata_files(zip_path):
     """Return staged metadata sidecars matching a zip stem in uploading/."""
     stem = Path(zip_path).stem
     directory = Path(zip_path).parent
-    return sorted(directory.glob(f"{stem}_meta_v*.yaml"))
+    pattern = re.compile(rf"^{re.escape(stem)}_meta_v\d+\.ya?ml$", re.IGNORECASE)
+    return sorted([
+        entry for entry in directory.iterdir()
+        if entry.is_file() and pattern.match(entry.name)
+    ])
 
 
 def delete_uploading_files():
@@ -697,24 +834,27 @@ def delete_uploading_files():
         return
 
     print(TEXT + "[1] Choose a file and optional metadata sidecar(s) to delete")
-    print(TEXT + "[2] Scan uploading/ and delete only archives already confirmed uploaded")
+    print(TEXT + "[2] Scan uploading/ and delete only files already confirmed uploaded")
     print(TEXT + "[0] Cancel")
 
     mode = prompt("Select deletion mode: ")
     if mode in ("", "0"):
         return
 
-    upload_files = [p for p in get_uploading_upload_files() if p.lower().endswith(".zip")]
+    upload_files = [
+        p for p in get_uploading_upload_files()
+        if not p.lower().endswith((".yaml", ".yml"))
+    ]
     if not upload_files:
-        notify("No zip files found in uploading/.", "warn")
+        notify("No archive/artifact files with sidecar metadata found in uploading/.", "warn")
         return
 
     if mode == "1":
-        panel("Choose Zip File")
+        panel("Choose Archive/Artifact File")
         for i, path in enumerate(upload_files, 1):
             print(TEXT + f"[{i}] {os.path.basename(path)}")
 
-        selection = prompt("Select zip number, or 0 to cancel: ")
+        selection = prompt("Select archive/artifact number, or 0 to cancel: ")
         if selection in ("", "0"):
             return
 
@@ -782,24 +922,30 @@ def delete_uploading_files():
         return
 
     if mode == "2":
+        upload_candidates = get_uploading_upload_files()
+        if not upload_candidates:
+            notify("No uploadable files found in uploading/.", "warn")
+            return
+
         confirmed = []
-        for file_path in upload_files:
+        for file_path in upload_candidates:
             try:
-                if is_archive_hash_uploaded(file_path):
+                if is_upload_file_confirmed_uploaded(file_path):
                     confirmed.append(Path(file_path))
             except Exception as e:
                 notify(f"Could not validate {os.path.basename(file_path)}: {e}", "warn")
 
         if not confirmed:
-            notify("No archives in uploading/ are confirmed as uploaded.", "warn")
+            notify("No uploadable files in uploading/ are confirmed as uploaded.", "warn")
             return
 
-        panel("Confirmed Uploaded Archives")
+        panel("Confirmed Uploaded Files")
         for i, path_obj in enumerate(confirmed, 1):
-            print(TEXT + f"[{i}] {path_obj.name}")
+            kind = "metadata" if path_obj.name.lower().endswith((".yaml", ".yml")) else "archive"
+            print(TEXT + f"[{i}] ({kind}) {path_obj.name}")
 
         print()
-        print(TEXT + "[A] Delete all confirmed uploaded archives listed above")
+        print(TEXT + "[A] Delete all confirmed uploaded files listed above")
         choice = prompt("Select number, 'A' for all, or 0 to cancel: ")
         if choice in ("", "0"):
             return
@@ -819,7 +965,7 @@ def delete_uploading_files():
                 return
 
         print()
-        notify("The following confirmed uploaded archive(s) will be deleted:", "warn")
+        notify("The following confirmed uploaded file(s) will be deleted:", "warn")
         for path_obj in to_delete:
             print(TEXT + f"  - {path_obj.name}")
 
@@ -832,7 +978,7 @@ def delete_uploading_files():
             if path_obj.exists() and path_obj.is_file():
                 path_obj.unlink()
 
-        notify(f"Deleted {len(to_delete)} confirmed uploaded archive(s).", "ok")
+        notify(f"Deleted {len(to_delete)} confirmed uploaded file(s).", "ok")
         return
 
     notify("Invalid option.", "error")
@@ -851,11 +997,12 @@ def main():
         panel("Main Menu")
         print(PRIMARY + "  1) Create Metadata")
         print(PRIMARY + "  2) Quick Process (Zip + Metadata YAML)")
-        print(PRIMARY + "  3) Edit Metadata")
-        print(PRIMARY + "  4) Upload Archive")
-        print(PRIMARY + "  5) Delete From Uploading")
-        print(PRIMARY + "  6) Config")
-        print(PRIMARY + "  7) Quit\n")
+        print(PRIMARY + "  3) Process Artifact (Minimal Metadata)")
+        print(PRIMARY + "  4) Edit Metadata")
+        print(PRIMARY + "  5) Upload Archive")
+        print(PRIMARY + "  6) Delete From Uploading")
+        print(PRIMARY + "  7) Config")
+        print(PRIMARY + "  8) Quit\n")
 
         active_version = get_active_metadata_template_version()
         notify(f"Active metadata template: v{active_version}")
@@ -868,14 +1015,16 @@ def main():
         elif choice == "2":
             quick_process_with_metadata_yaml()
         elif choice == "3":
-            edit_metadata_only()
+            process_artifact_with_metadata()
         elif choice == "4":
-            upload_archives()
+            edit_metadata_only()
         elif choice == "5":
-            delete_uploading_files()
+            upload_archives()
         elif choice == "6":
-            configure_metadata_template_version()
+            delete_uploading_files()
         elif choice == "7":
+            configure_metadata_template_version()
+        elif choice == "8":
             print()
             panel("Goodbye", "Session closed")
             print()
