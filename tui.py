@@ -23,9 +23,11 @@ from vn_archiver import (
     get_available_metadata_template_versions,
     detect_latest_metadata_template_version,
     insert_visual_novel,
+    get_latest_metadata_for_title,
     get_current_metadata_version_number,
     stage_metadata_yaml_for_upload,
-    order_metadata_for_yaml
+    order_metadata_for_yaml,
+    select_base_archive_from_db
 )
 
 init(autoreset=True)
@@ -400,6 +402,95 @@ def quick_process_with_metadata_yaml():
             notify(f"Removed processed metadata yaml: {os.path.basename(metadata_path)}", "info")
     except ValueError:
         notify("Invalid input.", "error")
+
+
+def process_artifact_with_metadata():
+    print()
+    panel("Process Artifact (Minimal Metadata)")
+
+    if not os.path.exists(INCOMING_DIR):
+        os.makedirs(INCOMING_DIR)
+
+    artifact_files = sorted([
+        f for f in os.listdir(INCOMING_DIR)
+        if os.path.isfile(os.path.join(INCOMING_DIR, f))
+        and not f.lower().endswith((".zip", ".yaml", ".yml"))
+    ])
+
+    if not artifact_files:
+        notify(f"No artifact files found in '{INCOMING_DIR}' (non-zip, non-yaml).", "error")
+        return
+
+    panel("Select Artifact File")
+    for i, filename in enumerate(artifact_files, 1):
+        print(TEXT + f"[{i}] {filename}")
+
+    selection = prompt("Select artifact number, or 0 to cancel: ")
+    if selection in ("", "0"):
+        return
+
+    try:
+        idx = int(selection) - 1
+    except ValueError:
+        notify("Invalid input.", "error")
+        return
+
+    if idx < 0 or idx >= len(artifact_files):
+        notify("Invalid artifact selection.", "error")
+        return
+
+    artifact_filename = artifact_files[idx]
+    artifact_path = os.path.join(INCOMING_DIR, artifact_filename)
+    show_file_info(artifact_filename)
+
+    title = prompt("title: ")
+    if not title:
+        notify("title is required.", "error")
+        return
+
+    defaults = get_latest_metadata_for_title(title) or {}
+    default_version = defaults.get("version") or ""
+
+    version_prompt = "version"
+    if default_version:
+        version_prompt += f" [{default_version}]"
+    version = prompt(f"{version_prompt}: ") or default_version
+    if not version:
+        notify("version is required.", "error")
+        return
+
+    content_type = prompt("content_type [story_expansion]: ") or "story_expansion"
+    default_artifact_edition = f"artifact:{Path(artifact_filename).stem}"
+    edition = prompt(f"edition [{default_artifact_edition}]: ") or default_artifact_edition
+
+    print()
+    notify("Select base archive for dependency linking (required for artifacts).")
+    selected_sha = select_base_archive_from_db(defaults.get("series"), title)
+    if not selected_sha:
+        selected_sha = prompt("base_archive_sha256 (required): ")
+    selected_sha = (selected_sha or "").strip()
+    if not selected_sha:
+        notify("base_archive_sha256 is required for artifact processing.", "error")
+        return
+
+    notes = prompt("notes (optional): ")
+    change_note = prompt("change_note (optional): ")
+
+    metadata = {
+        "metadata_version": get_active_metadata_template_version(),
+        "title": title,
+        "version": version,
+        "edition": edition,
+        "content_type": content_type,
+        "base_archive_sha256": selected_sha,
+        "notes": notes,
+        "change_note": change_note,
+    }
+
+    if defaults.get("language") not in (None, ""):
+        metadata["language"] = defaults.get("language")
+
+    create_archive_from_metadata_file([artifact_path], metadata)
 
 
 # =============================
@@ -907,11 +998,12 @@ def main():
         panel("Main Menu")
         print(PRIMARY + "  1) Create Metadata")
         print(PRIMARY + "  2) Quick Process (Zip + Metadata YAML)")
-        print(PRIMARY + "  3) Edit Metadata")
-        print(PRIMARY + "  4) Upload Archive")
-        print(PRIMARY + "  5) Delete From Uploading")
-        print(PRIMARY + "  6) Config")
-        print(PRIMARY + "  7) Quit\n")
+        print(PRIMARY + "  3) Process Artifact (Minimal Metadata)")
+        print(PRIMARY + "  4) Edit Metadata")
+        print(PRIMARY + "  5) Upload Archive")
+        print(PRIMARY + "  6) Delete From Uploading")
+        print(PRIMARY + "  7) Config")
+        print(PRIMARY + "  8) Quit\n")
 
         active_version = get_active_metadata_template_version()
         notify(f"Active metadata template: v{active_version}")
@@ -924,14 +1016,16 @@ def main():
         elif choice == "2":
             quick_process_with_metadata_yaml()
         elif choice == "3":
-            edit_metadata_only()
+            process_artifact_with_metadata()
         elif choice == "4":
-            upload_archives()
+            edit_metadata_only()
         elif choice == "5":
-            delete_uploading_files()
+            upload_archives()
         elif choice == "6":
-            configure_metadata_template_version()
+            delete_uploading_files()
         elif choice == "7":
+            configure_metadata_template_version()
+        elif choice == "8":
             print()
             panel("Goodbye", "Session closed")
             print()
