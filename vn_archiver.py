@@ -589,19 +589,23 @@ def get_latest_metadata_for_title(title):
     """Fetch the current metadata blob for an existing VN title, if present."""
     if not title:
         return {}
+    normalized_title = str(title).strip()
+    if not normalized_title:
+        return {}
 
     with get_connection() as conn:
         row = conn.execute(
             '''
             SELECT mo.metadata_json
             FROM visual_novels v
-            JOIN metadata_versions mv ON mv.vn_id = v.id AND mv.is_current = 1
+            JOIN builds b ON b.vn_id = v.id
+            JOIN metadata_versions mv ON mv.build_id = b.id AND mv.is_current = 1
             JOIN metadata_objects mo ON mo.hash = mv.metadata_hash
-            WHERE v.title = ?
-            ORDER BY mv.version_number DESC
+            WHERE TRIM(v.title) = TRIM(?) COLLATE NOCASE
+            ORDER BY b.created_at DESC, b.id DESC, mv.created_at DESC, mv.id DESC
             LIMIT 1
             ''',
-            (title,)
+            (normalized_title,)
         ).fetchone()
 
     if not row or not row['metadata_json']:
