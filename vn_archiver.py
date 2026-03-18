@@ -1309,11 +1309,10 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
                             print(
                                 Fore.CYAN
                                 + f"Latest known version is '{latest_known_version}'. "
-                                "Please enter the new version explicitly."
+                                "Press ENTER on version to reuse it, or type a new version."
                             )
                         defaults.pop('archives', None)
                         defaults.pop('metadata_version', None)
-                        defaults.pop('version', None)
             elif default_val not in (None, ""):
                 metadata[field] = default_val
 
