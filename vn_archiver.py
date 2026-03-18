@@ -1831,12 +1831,29 @@ def upload_archive(file_path):
     archive_sha256 = sha256_file(file_path)
 
     ext = os.path.splitext(file_path)[1].lower()
+    base_archive_sha = str(metadata.get("base_archive_sha256") or "").strip().lower()
+    parent_archive_dir = None
 
     # Standardized naming for VN archives (title + build version + hash)
     file_name = build_recommended_archive_name(metadata, archive_sha256, ext=ext)
-    cloud_path = f"archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{file_name}"
     metadata_file_name = Path(metadata_source).name
-    metadata_cloud_path = f"metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{metadata_file_name}"
+
+    if ext != ".zip" and base_archive_sha:
+        with get_connection() as conn:
+            parent_archive_row = conn.execute(
+                "SELECT storage_path FROM archive_objects WHERE sha256 = ?",
+                (base_archive_sha,)
+            ).fetchone()
+        if not parent_archive_row or not parent_archive_row["storage_path"]:
+            print(Fore.RED + "Upload Blocked: Could not resolve parent archive storage path for artifact.")
+            return False
+
+        parent_archive_dir = os.path.dirname(parent_archive_row["storage_path"].strip())
+        cloud_path = f"{parent_archive_dir}/{file_name}"
+        metadata_cloud_path = f"{parent_archive_dir}/{metadata_file_name}"
+    else:
+        cloud_path = f"archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{file_name}"
+        metadata_cloud_path = f"metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{metadata_file_name}"
 
     if db_version_number > 1:
         parent_metadata_cloud_path = re.sub(r"_meta_v\d+(\.ya?ml)$", f"_meta_v{db_version_number - 1}\\1", metadata_cloud_path)
