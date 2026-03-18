@@ -184,7 +184,18 @@ CREATE TABLE IF NOT EXISTS archive_objects (
 );
 
 -- =====================================================
--- 9. METADATA OBJECTS (Immutable Blob Store)
+-- 9. METADATA FILE OBJECTS (Content-Addressed Storage)
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS metadata_file_objects (
+    sha256 TEXT PRIMARY KEY,
+    file_size INTEGER NOT NULL,
+    storage_path TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =====================================================
+-- 10. METADATA OBJECTS (Immutable Blob Store)
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS metadata_objects (
@@ -195,7 +206,7 @@ CREATE TABLE IF NOT EXISTS metadata_objects (
 );
 
 -- =====================================================
--- 10. METADATA VERSIONS (Version History Per Build)
+-- 11. METADATA VERSIONS (Version History Per Build)
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS metadata_versions (
@@ -228,7 +239,7 @@ CREATE TABLE IF NOT EXISTS metadata_versions (
 );
 
 -- =====================================================
--- 11. UNIQUE CONSTRAINTS
+-- 12. UNIQUE CONSTRAINTS
 -- =====================================================
 
 -- Ensure only one current metadata version per build
@@ -241,7 +252,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_version_number
 ON metadata_versions(build_id, version_number);
 
 -- =====================================================
--- 12. INDEXES FOR PERFORMANCE
+-- 13. INDEXES FOR PERFORMANCE
 -- =====================================================
 
 CREATE INDEX IF NOT EXISTS idx_metadata_versions_vn
@@ -254,7 +265,7 @@ CREATE INDEX IF NOT EXISTS idx_metadata_versions_hash
 ON metadata_versions(metadata_hash);
 
 -- =====================================================
--- 13. TRIGGERS FOR ARCHIVE-ID DRIVEN CASCADE CLEANUP
+-- 14. TRIGGERS FOR ARCHIVE-ID DRIVEN CASCADE CLEANUP
 -- =====================================================
 
 -- If the last archive row for a build is deleted, remove the build.
