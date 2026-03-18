@@ -1304,8 +1304,16 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
                     defaults = get_latest_metadata_for_title(raw_val)
                     if defaults:
                         print(Fore.GREEN + f"Loaded defaults from latest metadata for '{raw_val}'.")
+                        latest_known_version = defaults.get('version')
+                        if latest_known_version not in (None, ""):
+                            print(
+                                Fore.CYAN
+                                + f"Latest known version is '{latest_known_version}'. "
+                                "Please enter the new version explicitly."
+                            )
                         defaults.pop('archives', None)
                         defaults.pop('metadata_version', None)
+                        defaults.pop('version', None)
             elif default_val not in (None, ""):
                 metadata[field] = default_val
 
