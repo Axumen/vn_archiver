@@ -670,14 +670,23 @@ def get_uploading_upload_files():
     ])
 
 
-def is_archive_hash_uploaded(file_path):
-    """True when a file's sha256 exists as a stored archive object."""
+def is_upload_file_confirmed_uploaded(file_path):
+    """True when a file is already present in DB object storage tables."""
+    lower = str(file_path).lower()
     file_hash = sha256_file(file_path)
     with get_connection() as conn:
-        existing_obj = conn.execute(
-            "SELECT 1 FROM archive_objects WHERE sha256 = ?",
-            (file_hash,)
-        ).fetchone()
+        if lower.endswith(".zip"):
+            existing_obj = conn.execute(
+                "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                (file_hash,)
+            ).fetchone()
+        elif lower.endswith((".yaml", ".yml")):
+            existing_obj = conn.execute(
+                "SELECT 1 FROM metadata_file_objects WHERE sha256 = ?",
+                (file_hash,)
+            ).fetchone()
+        else:
+            return False
     return bool(existing_obj)
 
 
@@ -685,7 +694,11 @@ def get_sidecar_metadata_files(zip_path):
     """Return staged metadata sidecars matching a zip stem in uploading/."""
     stem = Path(zip_path).stem
     directory = Path(zip_path).parent
-    return sorted(directory.glob(f"{stem}_meta_v*.yaml"))
+    pattern = re.compile(rf"^{re.escape(stem)}_meta_v\d+\.ya?ml$", re.IGNORECASE)
+    return sorted([
+        entry for entry in directory.iterdir()
+        if entry.is_file() and pattern.match(entry.name)
+    ])
 
 
 def delete_uploading_files():
@@ -697,7 +710,7 @@ def delete_uploading_files():
         return
 
     print(TEXT + "[1] Choose a file and optional metadata sidecar(s) to delete")
-    print(TEXT + "[2] Scan uploading/ and delete only archives already confirmed uploaded")
+    print(TEXT + "[2] Scan uploading/ and delete only files already confirmed uploaded")
     print(TEXT + "[0] Cancel")
 
     mode = prompt("Select deletion mode: ")
@@ -782,24 +795,30 @@ def delete_uploading_files():
         return
 
     if mode == "2":
+        upload_candidates = get_uploading_upload_files()
+        if not upload_candidates:
+            notify("No uploadable files found in uploading/.", "warn")
+            return
+
         confirmed = []
-        for file_path in upload_files:
+        for file_path in upload_candidates:
             try:
-                if is_archive_hash_uploaded(file_path):
+                if is_upload_file_confirmed_uploaded(file_path):
                     confirmed.append(Path(file_path))
             except Exception as e:
                 notify(f"Could not validate {os.path.basename(file_path)}: {e}", "warn")
 
         if not confirmed:
-            notify("No archives in uploading/ are confirmed as uploaded.", "warn")
+            notify("No uploadable files in uploading/ are confirmed as uploaded.", "warn")
             return
 
-        panel("Confirmed Uploaded Archives")
+        panel("Confirmed Uploaded Files")
         for i, path_obj in enumerate(confirmed, 1):
-            print(TEXT + f"[{i}] {path_obj.name}")
+            kind = "metadata" if path_obj.name.lower().endswith((".yaml", ".yml")) else "archive"
+            print(TEXT + f"[{i}] ({kind}) {path_obj.name}")
 
         print()
-        print(TEXT + "[A] Delete all confirmed uploaded archives listed above")
+        print(TEXT + "[A] Delete all confirmed uploaded files listed above")
         choice = prompt("Select number, 'A' for all, or 0 to cancel: ")
         if choice in ("", "0"):
             return
@@ -819,7 +838,7 @@ def delete_uploading_files():
                 return
 
         print()
-        notify("The following confirmed uploaded archive(s) will be deleted:", "warn")
+        notify("The following confirmed uploaded file(s) will be deleted:", "warn")
         for path_obj in to_delete:
             print(TEXT + f"  - {path_obj.name}")
 
@@ -832,7 +851,7 @@ def delete_uploading_files():
             if path_obj.exists() and path_obj.is_file():
                 path_obj.unlink()
 
-        notify(f"Deleted {len(to_delete)} confirmed uploaded archive(s).", "ok")
+        notify(f"Deleted {len(to_delete)} confirmed uploaded file(s).", "ok")
         return
 
     notify("Invalid option.", "error")
