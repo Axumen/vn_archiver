@@ -55,6 +55,7 @@ optional:
   # -------------------------------------
   # MISC
   # -------------------------------------
+  - artifact_type        # Suggested: game_archive, patch, instructions, readme, manual, soundtrack, bonus, checksum
   - notes
   - change_note          # Metadata revision note
 

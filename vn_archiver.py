@@ -1213,6 +1213,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
         "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story",
                          "non_canon_special"],
+        "artifact_type": SUGGESTED_ARTIFACT_TYPE,
         "tags": [
             "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
             "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
