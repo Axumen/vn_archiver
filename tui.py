@@ -513,7 +513,6 @@ def process_artifact_with_metadata():
         "language": selected_build["language"],
         "edition": selected_build_edition,
         "artifact_type": artifact_type,
-        "content_type": "artifact",
         "notes": notes,
         "change_note": change_note,
     }
