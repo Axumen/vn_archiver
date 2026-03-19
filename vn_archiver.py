@@ -390,12 +390,6 @@ def normalize_text_list_value(value):
     return fallback or None
 
 
-def is_artifact_metadata(metadata):
-    if not isinstance(metadata, dict):
-        return False
-    return bool(str(metadata.get("artifact_type") or "").strip())
-
-
 CSV_TO_TEXT_FIELDS = {
     "developer",
     "publisher",
@@ -992,15 +986,11 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
 
         print(Fore.MAGENTA + f'[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.')
 
-    is_artifact_content = is_artifact_metadata(metadata)
-    if not is_artifact_content:
-        try:
-            finalize_metadata_objects(conn, metadata, vn_id, build_id)
-        except Exception as e:
-            print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
-            raise e
-    else:
-        print(Fore.MAGENTA + f'[DEBUG] Skipping metadata version increment for artifact content on build {build_id}.')
+    try:
+        finalize_metadata_objects(conn, metadata, vn_id, build_id)
+    except Exception as e:
+        print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
+        raise e
 
     try:
         conn.commit()
@@ -1713,7 +1703,6 @@ def upload_archive(file_path):
     build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
-    is_artifact_content = is_artifact_metadata(metadata)
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
@@ -1791,23 +1780,20 @@ def upload_archive(file_path):
     db_metadata_hash = metadata_row["metadata_hash"]
     db_version_number = metadata_row["version_number"]
 
-    if not is_artifact_content:
-        canonical_metadata_json = json.dumps(
-            metadata,
-            default=safe_json_serialize,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":")
-        )
-        sidecar_metadata_hash = hashlib.sha256(canonical_metadata_json.encode("utf-8")).hexdigest()
-        if sidecar_metadata_hash != db_metadata_hash:
-            print(Fore.RED + "Upload Blocked: Sidecar metadata does not match metadata stored in database for this revision.")
-            print(Fore.YELLOW + f"DB metadata hash : {db_metadata_hash}")
-            print(Fore.YELLOW + f"Sidecar hash     : {sidecar_metadata_hash}")
-            print(Fore.YELLOW + "Regenerate/stage metadata so the sidecar matches the intended build metadata revision.")
-            return False
-    else:
-        print(Fore.CYAN + f"Artifact sidecar detected; skipping metadata hash equality check for build {build_id}.")
+    canonical_metadata_json = json.dumps(
+        metadata,
+        default=safe_json_serialize,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":")
+    )
+    sidecar_metadata_hash = hashlib.sha256(canonical_metadata_json.encode("utf-8")).hexdigest()
+    if sidecar_metadata_hash != db_metadata_hash:
+        print(Fore.RED + "Upload Blocked: Sidecar metadata does not match metadata stored in database for this revision.")
+        print(Fore.YELLOW + f"DB metadata hash : {db_metadata_hash}")
+        print(Fore.YELLOW + f"Sidecar hash     : {sidecar_metadata_hash}")
+        print(Fore.YELLOW + "Regenerate/stage metadata so the sidecar matches the intended build metadata revision.")
+        return False
 
     # -------------------------------------------------------------------
     # 4. Formulate cloud naming paths & hashes
@@ -2075,7 +2061,6 @@ def upload_metadata_sidecar(sidecar_path):
     build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
-    is_artifact_content = is_artifact_metadata(metadata)
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
@@ -2137,22 +2122,19 @@ def upload_metadata_sidecar(sidecar_path):
 
     db_metadata_hash = metadata_row["metadata_hash"]
     db_version_number = metadata_row["version_number"]
-    if not is_artifact_content:
-        canonical_metadata_json = json.dumps(
-            metadata,
-            default=safe_json_serialize,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":")
-        )
-        sidecar_metadata_hash = hashlib.sha256(canonical_metadata_json.encode("utf-8")).hexdigest()
-        if sidecar_metadata_hash != db_metadata_hash:
-            print(Fore.RED + "Upload Blocked: Sidecar metadata does not match metadata stored in database for this revision.")
-            print(Fore.YELLOW + f"DB metadata hash : {db_metadata_hash}")
-            print(Fore.YELLOW + f"Sidecar hash     : {sidecar_metadata_hash}")
-            return False
-    else:
-        print(Fore.CYAN + f"Artifact sidecar detected; skipping metadata hash equality check for build {build_id}.")
+    canonical_metadata_json = json.dumps(
+        metadata,
+        default=safe_json_serialize,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":")
+    )
+    sidecar_metadata_hash = hashlib.sha256(canonical_metadata_json.encode("utf-8")).hexdigest()
+    if sidecar_metadata_hash != db_metadata_hash:
+        print(Fore.RED + "Upload Blocked: Sidecar metadata does not match metadata stored in database for this revision.")
+        print(Fore.YELLOW + f"DB metadata hash : {db_metadata_hash}")
+        print(Fore.YELLOW + f"Sidecar hash     : {sidecar_metadata_hash}")
+        return False
 
     title_slug = slugify_component(title, "unknown")
     version_slug = slugify_component(version, "unknown")
