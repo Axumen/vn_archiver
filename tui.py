@@ -632,13 +632,17 @@ def edit_metadata_only():
                 SELECT id FROM builds
                 WHERE vn_id = ? AND version = ?
                   AND COALESCE(language, '') = COALESCE(?, '')
+                  AND COALESCE(build_type, '') = COALESCE(?, '')
                   AND COALESCE(edition, '') = COALESCE(?, '')
+                  AND COALESCE(distribution_platform, '') = COALESCE(?, '')
                 """,
                 (
                     vn_id,
                     updated_metadata.get("version"),
                     updated_metadata.get("language"),
-                    updated_metadata.get("edition")
+                    updated_metadata.get("build_type"),
+                    updated_metadata.get("edition"),
+                    updated_metadata.get("distribution_platform")
                 )
             ).fetchone()
 
