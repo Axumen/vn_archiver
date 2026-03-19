@@ -43,6 +43,7 @@ It now requires entering a title first, then selecting an existing build from th
 Artifact records are normalized in the `artifacts` table and linked to their parent `builds` row.
 Current core columns: `artifact_id`, `build_id`, `artifact_type`, `filename`, `sha256`,
 `is_primary`, `base_artifact_id`, `notes`, `created_at`.
+Artifact ingests do not create a new `metadata_versions` revision for the linked build.
 
 ```yaml
 artifact_type: "patch"
