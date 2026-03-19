@@ -95,7 +95,14 @@ CREATE TABLE IF NOT EXISTS builds (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_build_release
-ON builds(vn_id, version, COALESCE(language, ''), COALESCE(edition, ''));
+ON builds(
+    vn_id,
+    version,
+    COALESCE(language, ''),
+    COALESCE(build_type, ''),
+    COALESCE(edition, ''),
+    COALESCE(distribution_platform, '')
+);
 
 -- =====================================================
 -- 5. TARGET PLATFORMS (Normalized)
