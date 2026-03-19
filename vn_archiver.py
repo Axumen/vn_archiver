@@ -953,7 +953,7 @@ def finalize_metadata_objects(conn, metadata, vn_id, build_id):
         metadata_hash,
         parent_version_id,
         next_version_number,
-        metadata.get('change_note') or metadata.get('notes')
+        metadata.get('change_note')
     ))
 
     print(Fore.GREEN + f'[DEBUG] Metadata version v{next_version_number} recorded for build {build_id}.')
