@@ -37,6 +37,8 @@ content_mode: "selectable"
 When processing a non-runnable artifact, set `artifact_type` using these suggested labels:
 `game_archive`, `patch`, `instructions`, `readme`, `manual`, `soundtrack`, `bonus`, `checksum`.
 
+`Process Artifact` in the TUI accepts both `.zip` and non-zip artifact files (YAML files are excluded).
+
 ```yaml
 artifact_type: "patch"
 ```

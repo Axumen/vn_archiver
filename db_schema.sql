@@ -82,8 +82,6 @@ CREATE TABLE IF NOT EXISTS builds (
     engine TEXT,
     engine_version TEXT,
     source TEXT,
-    
-    base_archive_sha256 TEXT, -- References the base game for patches/append discs
     archive_object_sha256 TEXT, -- Uploaded bundle object (CAS pointer)
 
     status TEXT DEFAULT 'local', -- Updated default to 'local' for consistency
