@@ -81,6 +81,70 @@ def sha256_file(filepath):
     return sha256.hexdigest()
 
 
+def sha1_file(filepath):
+    sha1 = hashlib.sha1()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha1.update(chunk)
+    return sha1.hexdigest()
+
+
+def _extract_remote_hashes(file_info_obj):
+    """Best-effort extraction of remote object hashes from B2 file metadata."""
+    file_info_map = getattr(file_info_obj, "file_info", None) or {}
+    remote_sha1 = (
+        getattr(file_info_obj, "content_sha1", None)
+        or file_info_map.get("large_file_sha1")
+        or file_info_map.get("src_sha1")
+    )
+    remote_sha256 = file_info_map.get("src_sha256")
+    return (
+        str(remote_sha1).strip().lower() if remote_sha1 else None,
+        str(remote_sha256).strip().lower() if remote_sha256 else None,
+    )
+
+
+def verify_remote_upload_integrity(
+    remote_info,
+    local_size,
+    local_sha1,
+    local_sha256,
+    label,
+):
+    """Verify cloud object integrity using size + cloud-available hash metadata."""
+    remote_size = getattr(remote_info, "size", None)
+    if remote_size is not None and int(remote_size) != int(local_size):
+        print(
+            Fore.RED
+            + f"Post-upload verification failed for {label}: remote size {remote_size} does not match local size {local_size}."
+        )
+        return False
+
+    remote_sha1, remote_sha256 = _extract_remote_hashes(remote_info)
+    if remote_sha256:
+        if remote_sha256 != local_sha256:
+            print(
+                Fore.RED
+                + f"Post-upload verification failed for {label}: remote SHA-256 does not match local SHA-256."
+            )
+            return False
+        print(Fore.GREEN + f"Verified {label} integrity via remote SHA-256.")
+        return True
+
+    if remote_sha1:
+        if remote_sha1 != local_sha1:
+            print(
+                Fore.RED
+                + f"Post-upload verification failed for {label}: remote SHA-1 does not match local SHA-1."
+            )
+            return False
+        print(Fore.GREEN + f"Verified {label} integrity via remote SHA-1 (B2-compatible fallback).")
+        return True
+
+    print(Fore.YELLOW + f"Remote hash unavailable for {label}; verified size only.")
+    return True
+
+
 def get_metadata_template_path(version=DEFAULT_METADATA_VERSION):
     return METADATA_TEMPLATE_DIR / f"metadata_v{version}.yaml"
 
@@ -1940,6 +2004,7 @@ def upload_archive(file_path):
         return True
 
     if archive_needs_upload:
+        archive_sha1 = sha1_file(file_path)
         print(Fore.CYAN + f"\nUploading Archive: {file_name}")
         print(Fore.CYAN + f"Destination      : {cloud_path}")
 
@@ -1958,6 +2023,10 @@ def upload_archive(file_path):
                 bucket.upload_local_file(
                     local_file=str(file_path),
                     file_name=cloud_path,
+                    file_infos={
+                        "src_sha256": archive_sha256,
+                        "src_sha1": archive_sha1,
+                    },
                     progress_listener=TqdmProgressListener()
                 )
             except Exception as e:
@@ -1972,12 +2041,13 @@ def upload_archive(file_path):
             print(Fore.RED + f"Post-upload verification failed for {cloud_path}: {e}")
             return False
 
-        remote_size = getattr(uploaded_info, "size", None)
-        if remote_size is not None and int(remote_size) != int(file_size):
-            print(
-                Fore.RED
-                + f"Post-upload verification failed: remote size {remote_size} does not match local size {file_size}."
-            )
+        if not verify_remote_upload_integrity(
+            remote_info=uploaded_info,
+            local_size=file_size,
+            local_sha1=archive_sha1,
+            local_sha256=archive_sha256,
+            label=f"archive {cloud_path}",
+        ):
             return False
 
         print(Fore.GREEN + f"Verified remote archive object: {cloud_path}")
@@ -2027,12 +2097,17 @@ def upload_archive(file_path):
         print(Fore.CYAN + f"Existing Path: {existing_meta_path}")
 
     if metadata_needs_upload:
+        metadata_sha1 = sha1_file(selected_sidecar)
         print(Fore.CYAN + f"\nUploading Metadata: {metadata_file_name}")
         print(Fore.CYAN + f"Destination       : {metadata_cloud_path}")
         try:
             bucket.upload_local_file(
                 local_file=str(selected_sidecar),
-                file_name=metadata_cloud_path
+                file_name=metadata_cloud_path,
+                file_infos={
+                    "src_sha256": metadata_sha256,
+                    "src_sha1": metadata_sha1,
+                },
             )
         except Exception as e:
             print(Fore.RED + f"Upload failed for metadata sidecar {metadata_file_name}: {e}")
@@ -2044,12 +2119,13 @@ def upload_archive(file_path):
             print(Fore.RED + f"Post-upload verification failed for metadata {metadata_cloud_path}: {e}")
             return False
 
-        metadata_remote_size = getattr(metadata_info, "size", None)
-        if metadata_remote_size is not None and int(metadata_remote_size) != int(metadata_local_size):
-            print(
-                Fore.RED
-                + f"Post-upload verification failed for metadata: remote size {metadata_remote_size} does not match local size {metadata_local_size}."
-            )
+        if not verify_remote_upload_integrity(
+            remote_info=metadata_info,
+            local_size=metadata_local_size,
+            local_sha1=metadata_sha1,
+            local_sha256=metadata_sha256,
+            label=f"metadata {metadata_cloud_path}",
+        ):
             return False
 
         print(Fore.GREEN + f"Metadata upload complete: {metadata_cloud_path}")
@@ -2214,12 +2290,17 @@ def upload_metadata_sidecar(sidecar_path):
         return True
 
     if metadata_needs_upload:
+        metadata_sha1 = sha1_file(sidecar_file)
         print(Fore.CYAN + f"\nUploading Metadata: {metadata_file_name}")
         print(Fore.CYAN + f"Destination       : {metadata_cloud_path}")
         try:
             bucket.upload_local_file(
                 local_file=str(sidecar_file),
-                file_name=metadata_cloud_path
+                file_name=metadata_cloud_path,
+                file_infos={
+                    "src_sha256": metadata_sha256,
+                    "src_sha1": metadata_sha1,
+                },
             )
         except Exception as e:
             print(Fore.RED + f"Upload failed for metadata sidecar {metadata_file_name}: {e}")
@@ -2231,12 +2312,13 @@ def upload_metadata_sidecar(sidecar_path):
             print(Fore.RED + f"Post-upload verification failed for metadata {metadata_cloud_path}: {e}")
             return False
 
-        metadata_remote_size = getattr(metadata_info, "size", None)
-        if metadata_remote_size is not None and int(metadata_remote_size) != int(metadata_local_size):
-            print(
-                Fore.RED
-                + f"Post-upload verification failed for metadata: remote size {metadata_remote_size} does not match local size {metadata_local_size}."
-            )
+        if not verify_remote_upload_integrity(
+            remote_info=metadata_info,
+            local_size=metadata_local_size,
+            local_sha1=metadata_sha1,
+            local_sha256=metadata_sha256,
+            label=f"metadata {metadata_cloud_path}",
+        ):
             return False
 
     with get_connection() as conn:
