@@ -27,8 +27,7 @@ from vn_archiver import (
     get_current_metadata_version_number,
     stage_metadata_yaml_for_upload,
     order_metadata_for_yaml,
-    select_base_archive_from_db,
-    validate_base_archive_guardrail
+    SUGGESTED_ARTIFACT_TYPE
 )
 
 init(autoreset=True)
@@ -368,11 +367,6 @@ def quick_process_with_metadata_yaml():
             notify("Metadata must include 'version'.", "error")
             return
 
-        for selected_path in selected_paths:
-            if not validate_base_archive_guardrail(selected_path, metadata):
-                notify("Quick Process blocked: metadata dependency/base_archive_sha256 validation failed.", "error")
-                return
-
         selected_sha256 = [sha256_file(path) for path in selected_paths]
         yaml_sha256 = []
 
@@ -420,11 +414,11 @@ def process_artifact_with_metadata():
     artifact_files = sorted([
         f for f in os.listdir(INCOMING_DIR)
         if os.path.isfile(os.path.join(INCOMING_DIR, f))
-        and not f.lower().endswith((".zip", ".yaml", ".yml"))
+        and not f.lower().endswith((".yaml", ".yml"))
     ])
 
     if not artifact_files:
-        notify(f"No artifact files found in '{INCOMING_DIR}' (non-zip, non-yaml).", "error")
+        notify(f"No artifact files found in '{INCOMING_DIR}' (zip/non-zip files, excluding yaml).", "error")
         return
 
     panel("Select Artifact File")
@@ -465,19 +459,10 @@ def process_artifact_with_metadata():
         notify("version is required.", "error")
         return
 
-    content_type = prompt("content_type [story_expansion]: ") or "story_expansion"
+    notify("Suggested artifact_type labels: " + ", ".join(SUGGESTED_ARTIFACT_TYPE), "info")
+    artifact_type = prompt("artifact_type [patch]: ") or "patch"
     default_artifact_edition = f"artifact:{Path(artifact_filename).stem}"
     edition = prompt(f"edition [{default_artifact_edition}]: ") or default_artifact_edition
-
-    print()
-    notify("Select base archive for dependency linking (required for artifacts).")
-    selected_sha = select_base_archive_from_db(defaults.get("series"), title)
-    if not selected_sha:
-        selected_sha = prompt("base_archive_sha256 (required): ")
-    selected_sha = (selected_sha or "").strip()
-    if not selected_sha:
-        notify("base_archive_sha256 is required for artifact processing.", "error")
-        return
 
     notes = prompt("notes (optional): ")
     change_note = prompt("change_note (optional): ")
@@ -487,8 +472,8 @@ def process_artifact_with_metadata():
         "title": title,
         "version": version,
         "edition": edition,
-        "content_type": content_type,
-        "base_archive_sha256": selected_sha,
+        "artifact_type": artifact_type,
+        "content_type": "artifact",
         "notes": notes,
         "change_note": change_note,
     }

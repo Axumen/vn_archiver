@@ -32,6 +32,17 @@ content_rating: "18+"
 content_mode: "selectable"
 ```
 
+## Artifact type metadata
+
+When processing a non-runnable artifact, set `artifact_type` using these suggested labels:
+`game_archive`, `patch`, `instructions`, `readme`, `manual`, `soundtrack`, `bonus`, `checksum`.
+
+`Process Artifact` in the TUI accepts both `.zip` and non-zip artifact files (YAML files are excluded).
+
+```yaml
+artifact_type: "patch"
+```
+
 ## Translator metadata for multi-language releases
 
 The `translator` field supports three formats:
@@ -151,4 +162,3 @@ python rebuild_archive_db_from_yaml.py --source-dir .
 # Rebuild a specific DB path without creating a backup
 python rebuild_archive_db_from_yaml.py --source-dir ./metadata_dump --db-path ./archive.db --no-backup
 ```
-
