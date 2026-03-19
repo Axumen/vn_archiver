@@ -443,21 +443,59 @@ def process_artifact_with_metadata():
     artifact_path = os.path.join(INCOMING_DIR, artifact_filename)
     show_file_info(artifact_filename)
 
-    title = prompt("title: ")
-    if not title:
-        notify("title is required.", "error")
+    title_input = prompt("title: ")
+    if not title_input:
+        notify("title is required to locate existing builds.", "error")
         return
 
-    defaults = get_latest_metadata_for_title(title) or {}
-    default_version = defaults.get("version") or ""
+    with get_connection() as conn:
+        build_rows = conn.execute(
+            """
+            SELECT
+                b.id AS build_id,
+                v.title AS vn_title,
+                b.version,
+                b.build_type,
+                b.language,
+                b.edition,
+                b.distribution_platform
+            FROM builds b
+            JOIN visual_novels v ON v.id = b.vn_id
+            WHERE TRIM(v.title) LIKE TRIM(?) COLLATE NOCASE
+            ORDER BY v.title, b.created_at DESC, b.id DESC
+            """,
+            (f"%{title_input}%",)
+        ).fetchall()
 
-    version_prompt = "version"
-    if default_version:
-        version_prompt += f" [{default_version}]"
-    version = prompt(f"{version_prompt}: ") or default_version
-    if not version:
-        notify("version is required.", "error")
+    if not build_rows:
+        notify("No builds found for that title. Create metadata/build first, then add artifact.", "error")
         return
+
+    panel("Select Build For Artifact Link")
+    for i, row in enumerate(build_rows, 1):
+        lang = row["language"] or "default"
+        btype = row["build_type"] or "default"
+        edition = row["edition"] or "default"
+        platform = row["distribution_platform"] or "default"
+        print(TEXT + f"[{i}] {row['vn_title']} | v{row['version']} | lang={lang} | type={btype} | edition={edition} | platform={platform} | build_id={row['build_id']}")
+
+    build_choice = prompt("Select build number, or 0 to cancel: ")
+    if build_choice in ("", "0"):
+        return
+
+    try:
+        build_idx = int(build_choice) - 1
+    except ValueError:
+        notify("Invalid build selection.", "error")
+        return
+
+    if build_idx < 0 or build_idx >= len(build_rows):
+        notify("Invalid build selection.", "error")
+        return
+
+    selected_build = build_rows[build_idx]
+    title = selected_build["vn_title"]
+    version = selected_build["version"]
 
     notify("Suggested artifact_type labels: " + ", ".join(SUGGESTED_ARTIFACT_TYPE), "info")
     artifact_type = prompt("artifact_type [patch]: ") or "patch"
@@ -471,15 +509,15 @@ def process_artifact_with_metadata():
         "metadata_version": get_active_metadata_template_version(),
         "title": title,
         "version": version,
+        "build_type": selected_build["build_type"],
+        "distribution_platform": selected_build["distribution_platform"],
+        "language": selected_build["language"],
         "edition": edition,
         "artifact_type": artifact_type,
         "content_type": "artifact",
         "notes": notes,
         "change_note": change_note,
     }
-
-    if defaults.get("language") not in (None, ""):
-        metadata["language"] = defaults.get("language")
 
     create_archive_from_metadata_file([artifact_path], metadata)
 
