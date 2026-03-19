@@ -11,7 +11,7 @@ SCHEMA_PATH = "db_schema.sql"
 BACKUP_DIR = "db_backups"
 
 # Database is treated as fresh-initialized from db_schema.sql.
-TARGET_SCHEMA_VERSION = 2
+TARGET_SCHEMA_VERSION = 3
 BACKUP_DEBOUNCE_SECONDS = 1.0
 
 WRITE_SQL_PREFIXES = (
@@ -485,6 +485,8 @@ def run_migrations(conn, current_version):
     with exclusive_transaction(conn):
         if current_version < 2:
             _migrate_change_note_fallback_rows(conn)
+        if current_version < 3:
+            _migrate_build_identity_index(conn)
 
         # Stamp DB at the current supported schema version.
         conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
@@ -510,6 +512,28 @@ def _migrate_change_note_fallback_rows(conn):
                 AND COALESCE(NULLIF(TRIM(json_extract(mo.metadata_json, '$.change_note')), ''), NULL) IS NULL
                 AND TRIM(COALESCE(json_extract(mo.metadata_json, '$.notes'), '')) = TRIM(metadata_versions.change_note)
           );
+        """
+    )
+
+
+def _migrate_build_identity_index(conn):
+    """
+    Schema migration for v3:
+    rebuild builds uniqueness index so build identity includes build_type
+    and distribution_platform in addition to vn_id/version/language/edition.
+    """
+    conn.execute("DROP INDEX IF EXISTS idx_unique_build_release;")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_build_release
+        ON builds(
+            vn_id,
+            version,
+            COALESCE(language, ''),
+            COALESCE(build_type, ''),
+            COALESCE(edition, ''),
+            COALESCE(distribution_platform, '')
+        );
         """
     )
 

@@ -51,6 +51,11 @@ DEPENDENCY_CONTENT_TYPES = {
     "engine_port",
 }
 
+DEPENDENCY_BUILD_TYPES = {
+    "patch",
+    "dlc",
+}
+
 AUTO_METADATA_FIELDS = {
     "original_filename": lambda zip_path: os.path.basename(zip_path),
     "file_size_bytes": lambda zip_path: os.path.getsize(zip_path),
@@ -489,16 +494,24 @@ def validate_base_archive_guardrail(file_path, metadata):
 
     - Non-zip artifact uploads must provide base_archive_sha256.
     - Dependency-like content_type values must provide base_archive_sha256.
+    - Dependency-like build_type values must provide base_archive_sha256.
     - If base_archive_sha256 is provided, it must already exist in archive_objects.
     """
     ext = os.path.splitext(file_path)[1].lower()
     base_archive_sha = str(metadata.get("base_archive_sha256") or "").strip().lower()
     content_types = _normalized_content_types(metadata)
+    build_type = str(metadata.get("build_type") or "").strip().lower()
     is_dependency_content = any(ct in DEPENDENCY_CONTENT_TYPES for ct in content_types)
-    requires_base_archive = (ext != ".zip") or is_dependency_content
+    is_dependency_build = build_type in DEPENDENCY_BUILD_TYPES
+    requires_base_archive = (ext != ".zip") or is_dependency_content or is_dependency_build
 
     if requires_base_archive and not base_archive_sha:
-        reason = "non-zip artifact upload" if ext != ".zip" else "dependency content_type"
+        if ext != ".zip":
+            reason = "non-zip artifact upload"
+        elif is_dependency_content:
+            reason = "dependency content_type"
+        else:
+            reason = "dependency build_type"
         print(Fore.RED + f"Upload Blocked: base_archive_sha256 is required ({reason}).")
         print(Fore.YELLOW + "Set base_archive_sha256 in the metadata sidecar and try again.")
         return False
@@ -826,7 +839,9 @@ def sync_visual_novel_upload_status(conn, vn_id):
 def upsert_build_record(conn, vn_id, metadata):
     build_version = metadata.get('version', '1.0')
     build_language = normalize_text_list_value(metadata.get('language'))
+    build_type = metadata.get('build_type')
     build_edition = metadata.get('edition')
+    build_distribution_platform = metadata.get('distribution_platform')
     build_exists = conn.execute(
         '''
         SELECT id, build_type, distribution_model, distribution_platform,
@@ -835,9 +850,11 @@ def upsert_build_record(conn, vn_id, metadata):
         FROM builds
         WHERE vn_id = ? AND version = ?
           AND COALESCE(language, '') = COALESCE(?, '')
+          AND COALESCE(build_type, '') = COALESCE(?, '')
           AND COALESCE(edition, '') = COALESCE(?, '')
+          AND COALESCE(distribution_platform, '') = COALESCE(?, '')
         ''',
-        (vn_id, build_version, build_language, build_edition)
+        (vn_id, build_version, build_language, build_type, build_edition, build_distribution_platform)
     ).fetchone()
 
     existing = build_exists if build_exists else {}
@@ -1409,16 +1426,20 @@ def finalize_archive_creation(metadata, archives_data):
 
     build_id = None
     build_language = normalize_text_list_value(metadata.get('language'))
+    build_type = metadata.get('build_type')
     build_edition = metadata.get('edition')
+    build_distribution_platform = metadata.get('distribution_platform')
     with get_connection() as conn:
         build_row = conn.execute(
             '''
             SELECT id FROM builds
             WHERE vn_id = ? AND version = ?
               AND COALESCE(language, '') = COALESCE(?, '')
+              AND COALESCE(build_type, '') = COALESCE(?, '')
               AND COALESCE(edition, '') = COALESCE(?, '')
+              AND COALESCE(distribution_platform, '') = COALESCE(?, '')
             ''',
-            (vn_id, metadata.get('version'), build_language, build_edition)
+            (vn_id, metadata.get('version'), build_language, build_type, build_edition, build_distribution_platform)
         ).fetchone()
         if build_row:
             build_id = build_row['id']
@@ -1795,7 +1816,9 @@ def upload_archive(file_path):
     title = str(metadata.get("title", "")).strip()
     version = str(metadata.get("version", "")).strip()
     language = normalize_text_list_value(metadata.get("language")) or ""
+    build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
+    distribution_platform = str(metadata.get("distribution_platform", "")).strip()
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
@@ -1824,9 +1847,11 @@ def upload_archive(file_path):
                 SELECT id, version FROM builds
                 WHERE vn_id = ? AND version = ?
                   AND COALESCE(language, '') = COALESCE(?, '')
+                  AND COALESCE(build_type, '') = COALESCE(?, '')
                   AND COALESCE(edition, '') = COALESCE(?, '')
+                  AND COALESCE(distribution_platform, '') = COALESCE(?, '')
                 """,
-                (vn_id, version, language, edition)
+                (vn_id, version, language, build_type, edition, distribution_platform)
             ).fetchone()
             if not build_row:
                 lang_label = language if language else "default"
@@ -2169,7 +2194,9 @@ def upload_metadata_sidecar(sidecar_path):
     title = str(metadata.get("title", "")).strip()
     version = str(metadata.get("version", "")).strip()
     language = normalize_text_list_value(metadata.get("language")) or ""
+    build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
+    distribution_platform = str(metadata.get("distribution_platform", "")).strip()
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
@@ -2191,9 +2218,11 @@ def upload_metadata_sidecar(sidecar_path):
                 SELECT id, version FROM builds
                 WHERE vn_id = ? AND version = ?
                   AND COALESCE(language, '') = COALESCE(?, '')
+                  AND COALESCE(build_type, '') = COALESCE(?, '')
                   AND COALESCE(edition, '') = COALESCE(?, '')
+                  AND COALESCE(distribution_platform, '') = COALESCE(?, '')
                 """,
-                (vn_id, version, language, edition)
+                (vn_id, version, language, build_type, edition, distribution_platform)
             ).fetchone()
             if not build_row:
                 print(Fore.RED + f"Upload Blocked: Version '{version}' for '{title}' does not exist in the database.")

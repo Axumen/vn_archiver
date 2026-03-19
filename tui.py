@@ -27,7 +27,8 @@ from vn_archiver import (
     get_current_metadata_version_number,
     stage_metadata_yaml_for_upload,
     order_metadata_for_yaml,
-    select_base_archive_from_db
+    select_base_archive_from_db,
+    validate_base_archive_guardrail
 )
 
 init(autoreset=True)
@@ -367,6 +368,11 @@ def quick_process_with_metadata_yaml():
             notify("Metadata must include 'version'.", "error")
             return
 
+        for selected_path in selected_paths:
+            if not validate_base_archive_guardrail(selected_path, metadata):
+                notify("Quick Process blocked: metadata dependency/base_archive_sha256 validation failed.", "error")
+                return
+
         selected_sha256 = [sha256_file(path) for path in selected_paths]
         yaml_sha256 = []
 
@@ -632,13 +638,17 @@ def edit_metadata_only():
                 SELECT id FROM builds
                 WHERE vn_id = ? AND version = ?
                   AND COALESCE(language, '') = COALESCE(?, '')
+                  AND COALESCE(build_type, '') = COALESCE(?, '')
                   AND COALESCE(edition, '') = COALESCE(?, '')
+                  AND COALESCE(distribution_platform, '') = COALESCE(?, '')
                 """,
                 (
                     vn_id,
                     updated_metadata.get("version"),
                     updated_metadata.get("language"),
-                    updated_metadata.get("edition")
+                    updated_metadata.get("build_type"),
+                    updated_metadata.get("edition"),
+                    updated_metadata.get("distribution_platform")
                 )
             ).fetchone()
 
