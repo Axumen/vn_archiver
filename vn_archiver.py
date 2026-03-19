@@ -41,6 +41,17 @@ SUGGESTED_CONTENT_TYPE = [
     "april_fools", "side_story", "non_canon_special"
 ]
 
+SUGGESTED_ARTIFACT_TYPE = [
+    "game_archive",
+    "patch",
+    "instructions",
+    "readme",
+    "manual",
+    "soundtrack",
+    "bonus",
+    "checksum",
+]
+
 DEPENDENCY_CONTENT_TYPES = {
     "story_expansion",
     "side_story",
@@ -375,6 +386,9 @@ def prompt_field(field_name, current_value):
     if field_name == "content_type":
         print("\nSuggested content_type:")
         print(", ".join(SUGGESTED_CONTENT_TYPE))
+    elif field_name == "artifact_type":
+        print("\nSuggested artifact_type:")
+        print(", ".join(SUGGESTED_ARTIFACT_TYPE))
 
     # Add specific handling for base_archive_sha256
     if field_name == "base_archive_sha256":
@@ -566,6 +580,7 @@ PASSTHROUGH_FIELDS = {
     "relationship_type",
     "notes",
     "change_note",
+    "artifact_type",
     "base_archive_sha256",
     "archives",
     "archive",
@@ -1305,6 +1320,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
         "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story",
                          "non_canon_special"],
+        "artifact_type": SUGGESTED_ARTIFACT_TYPE,
         "tags": [
             "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
             "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
