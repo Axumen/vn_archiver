@@ -316,7 +316,7 @@ def create_metadata(zip_path):
         "metadata_version",
         detect_latest_metadata_template_version()
     )
-    prompt_fields = resolve_prompt_fields(template)
+    prompt_fields = [field for field in resolve_prompt_fields(template) if field != "artifact_type"]
 
     metadata = {"metadata_version": metadata_version}
 
@@ -1146,7 +1146,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
     # 2. Prepare metadata (Beautiful TUI Prompts)
     # -------------------------------------------------------------------
     base_template = load_metadata_template(metadata_version)
-    prompt_fields = resolve_prompt_fields(base_template)
+    prompt_fields = [field for field in resolve_prompt_fields(base_template) if field != "artifact_type"]
 
     metadata = {"metadata_version": metadata_version}
     defaults = {}
