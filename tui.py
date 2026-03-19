@@ -462,7 +462,7 @@ def process_artifact_with_metadata():
             FROM builds b
             JOIN visual_novels v ON v.id = b.vn_id
             WHERE TRIM(v.title) LIKE TRIM(?) COLLATE NOCASE
-            ORDER BY v.title, b.created_at DESC, b.id DESC
+            ORDER BY v.title, b.version COLLATE NOCASE, b.id
             """,
             (f"%{title_input}%",)
         ).fetchall()
@@ -498,9 +498,8 @@ def process_artifact_with_metadata():
     version = selected_build["version"]
 
     notify("Suggested artifact_type labels: " + ", ".join(SUGGESTED_ARTIFACT_TYPE), "info")
-    artifact_type = prompt("artifact_type [patch]: ") or "patch"
-    default_artifact_edition = f"artifact:{Path(artifact_filename).stem}"
-    edition = prompt(f"edition [{default_artifact_edition}]: ") or default_artifact_edition
+    artifact_type = prompt("artifact_type: ")
+    edition = prompt("edition: ")
 
     notes = prompt("notes (optional): ")
     change_note = prompt("change_note (optional): ")
