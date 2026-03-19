@@ -39,6 +39,10 @@ When processing a non-runnable artifact, set `artifact_type` using these suggest
 
 `Process Artifact` in the TUI accepts both `.zip` and non-zip artifact files (YAML files are excluded).
 
+Artifact records are normalized in the `artifacts` table and linked to their parent `builds` row.
+Current core columns: `artifact_id`, `build_id`, `artifact_type`, `filename`, `sha256`,
+`is_primary`, `base_artifact_id`, `notes`, `created_at`.
+
 ```yaml
 artifact_type: "patch"
 ```

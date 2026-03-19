@@ -817,21 +817,68 @@ def collect_archives_for_db(metadata):
     if top_level_sha:
         archives_to_process.append({
             'sha256': top_level_sha,
-            'file_size': metadata.get('file_size_bytes', 0)
+            'file_size': metadata.get('file_size_bytes', 0),
+            'filename': metadata.get('original_filename') or get_nested_value(metadata, 'archive.filename'),
+            'is_primary': 1,
         })
 
     if 'archives' in metadata and isinstance(metadata['archives'], list):
-        for archive in metadata['archives']:
+        for idx, archive in enumerate(metadata['archives']):
             if isinstance(archive, dict) and archive.get('sha256'):
                 archives_to_process.append({
                     'sha256': archive.get('sha256'),
-                    'file_size': archive.get('file_size_bytes', 0)
+                    'file_size': archive.get('file_size_bytes', 0),
+                    'filename': archive.get('filename'),
+                    'is_primary': 1 if not top_level_sha and idx == 0 else 0,
                 })
 
     if not top_level_sha and archives_to_process:
         top_level_sha = archives_to_process[0].get('sha256')
 
     return archives_to_process, top_level_sha
+
+
+def upsert_artifact_record(conn, build_id, metadata, archive_data):
+    artifact_sha256 = archive_data.get('sha256')
+    if not artifact_sha256:
+        return
+
+    artifact_type = str(metadata.get('artifact_type') or '').strip().lower() or "game_archive"
+    filename = archive_data.get('filename') or metadata.get('original_filename')
+    notes = metadata.get('notes')
+    is_primary = 1 if archive_data.get('is_primary') else 0
+
+    existing_row = conn.execute(
+        '''
+        SELECT artifact_id
+        FROM artifacts
+        WHERE build_id = ? AND sha256 = ?
+        ''',
+        (build_id, artifact_sha256)
+    ).fetchone()
+
+    if existing_row:
+        conn.execute(
+            '''
+            UPDATE artifacts
+            SET artifact_type = COALESCE(NULLIF(?, ''), artifact_type),
+                filename = COALESCE(?, filename),
+                is_primary = CASE WHEN ? = 1 THEN 1 ELSE is_primary END,
+                notes = COALESCE(?, notes)
+            WHERE artifact_id = ?
+            ''',
+            (artifact_type, filename, is_primary, notes, existing_row['artifact_id'])
+        )
+        return
+
+    conn.execute(
+        '''
+        INSERT INTO artifacts (
+            build_id, artifact_type, filename, sha256, is_primary, base_artifact_id, notes
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?)
+        ''',
+        (build_id, artifact_type, filename, artifact_sha256, is_primary, notes)
+    )
 
 
 def finalize_metadata_objects(conn, metadata, vn_id, build_id):
@@ -909,6 +956,8 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
         if not sha256:
             print(Fore.RED + '[DEBUG] Skipping archive insertion - missing SHA256.')
             continue
+
+        upsert_artifact_record(conn, build_id, metadata, arch_data)
 
         archive_exists = conn.execute(
             'SELECT id FROM archives WHERE build_id = ? AND sha256 = ?',
