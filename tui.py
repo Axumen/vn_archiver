@@ -27,7 +27,8 @@ from vn_archiver import (
     get_current_metadata_version_number,
     stage_metadata_yaml_for_upload,
     order_metadata_for_yaml,
-    select_base_archive_from_db
+    select_base_archive_from_db,
+    validate_base_archive_guardrail
 )
 
 init(autoreset=True)
@@ -366,6 +367,11 @@ def quick_process_with_metadata_yaml():
         if not metadata.get("version"):
             notify("Metadata must include 'version'.", "error")
             return
+
+        for selected_path in selected_paths:
+            if not validate_base_archive_guardrail(selected_path, metadata):
+                notify("Quick Process blocked: metadata dependency/base_archive_sha256 validation failed.", "error")
+                return
 
         selected_sha256 = [sha256_file(path) for path in selected_paths]
         yaml_sha256 = []

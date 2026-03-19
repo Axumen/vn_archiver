@@ -51,6 +51,11 @@ DEPENDENCY_CONTENT_TYPES = {
     "engine_port",
 }
 
+DEPENDENCY_BUILD_TYPES = {
+    "patch",
+    "dlc",
+}
+
 AUTO_METADATA_FIELDS = {
     "original_filename": lambda zip_path: os.path.basename(zip_path),
     "file_size_bytes": lambda zip_path: os.path.getsize(zip_path),
@@ -489,16 +494,24 @@ def validate_base_archive_guardrail(file_path, metadata):
 
     - Non-zip artifact uploads must provide base_archive_sha256.
     - Dependency-like content_type values must provide base_archive_sha256.
+    - Dependency-like build_type values must provide base_archive_sha256.
     - If base_archive_sha256 is provided, it must already exist in archive_objects.
     """
     ext = os.path.splitext(file_path)[1].lower()
     base_archive_sha = str(metadata.get("base_archive_sha256") or "").strip().lower()
     content_types = _normalized_content_types(metadata)
+    build_type = str(metadata.get("build_type") or "").strip().lower()
     is_dependency_content = any(ct in DEPENDENCY_CONTENT_TYPES for ct in content_types)
-    requires_base_archive = (ext != ".zip") or is_dependency_content
+    is_dependency_build = build_type in DEPENDENCY_BUILD_TYPES
+    requires_base_archive = (ext != ".zip") or is_dependency_content or is_dependency_build
 
     if requires_base_archive and not base_archive_sha:
-        reason = "non-zip artifact upload" if ext != ".zip" else "dependency content_type"
+        if ext != ".zip":
+            reason = "non-zip artifact upload"
+        elif is_dependency_content:
+            reason = "dependency content_type"
+        else:
+            reason = "dependency build_type"
         print(Fore.RED + f"Upload Blocked: base_archive_sha256 is required ({reason}).")
         print(Fore.YELLOW + "Set base_archive_sha256 in the metadata sidecar and try again.")
         return False
