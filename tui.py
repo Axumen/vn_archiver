@@ -27,8 +27,6 @@ from vn_archiver import (
     get_current_metadata_version_number,
     stage_metadata_yaml_for_upload,
     order_metadata_for_yaml,
-    select_base_archive_from_db,
-    validate_base_archive_guardrail,
     SUGGESTED_ARTIFACT_TYPE
 )
 
@@ -369,11 +367,6 @@ def quick_process_with_metadata_yaml():
             notify("Metadata must include 'version'.", "error")
             return
 
-        for selected_path in selected_paths:
-            if not validate_base_archive_guardrail(selected_path, metadata):
-                notify("Quick Process blocked: metadata dependency/base_archive_sha256 validation failed.", "error")
-                return
-
         selected_sha256 = [sha256_file(path) for path in selected_paths]
         yaml_sha256 = []
 
@@ -471,16 +464,6 @@ def process_artifact_with_metadata():
     default_artifact_edition = f"artifact:{Path(artifact_filename).stem}"
     edition = prompt(f"edition [{default_artifact_edition}]: ") or default_artifact_edition
 
-    print()
-    notify("Select base archive for dependency linking (required for artifacts).")
-    selected_sha = select_base_archive_from_db(defaults.get("series"), title)
-    if not selected_sha:
-        selected_sha = prompt("base_archive_sha256 (required): ")
-    selected_sha = (selected_sha or "").strip()
-    if not selected_sha:
-        notify("base_archive_sha256 is required for artifact processing.", "error")
-        return
-
     notes = prompt("notes (optional): ")
     change_note = prompt("change_note (optional): ")
 
@@ -491,7 +474,6 @@ def process_artifact_with_metadata():
         "edition": edition,
         "artifact_type": artifact_type,
         "content_type": "artifact",
-        "base_archive_sha256": selected_sha,
         "notes": notes,
         "change_note": change_note,
     }
