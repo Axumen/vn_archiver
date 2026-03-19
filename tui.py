@@ -28,7 +28,8 @@ from vn_archiver import (
     stage_metadata_yaml_for_upload,
     order_metadata_for_yaml,
     select_base_archive_from_db,
-    validate_base_archive_guardrail
+    validate_base_archive_guardrail,
+    SUGGESTED_ARTIFACT_TYPE
 )
 
 init(autoreset=True)
@@ -420,11 +421,11 @@ def process_artifact_with_metadata():
     artifact_files = sorted([
         f for f in os.listdir(INCOMING_DIR)
         if os.path.isfile(os.path.join(INCOMING_DIR, f))
-        and not f.lower().endswith((".zip", ".yaml", ".yml"))
+        and not f.lower().endswith((".yaml", ".yml"))
     ])
 
     if not artifact_files:
-        notify(f"No artifact files found in '{INCOMING_DIR}' (non-zip, non-yaml).", "error")
+        notify(f"No artifact files found in '{INCOMING_DIR}' (zip/non-zip files, excluding yaml).", "error")
         return
 
     panel("Select Artifact File")
@@ -465,7 +466,8 @@ def process_artifact_with_metadata():
         notify("version is required.", "error")
         return
 
-    content_type = prompt("content_type [story_expansion]: ") or "story_expansion"
+    notify("Suggested artifact_type labels: " + ", ".join(SUGGESTED_ARTIFACT_TYPE), "info")
+    artifact_type = prompt("artifact_type [patch]: ") or "patch"
     default_artifact_edition = f"artifact:{Path(artifact_filename).stem}"
     edition = prompt(f"edition [{default_artifact_edition}]: ") or default_artifact_edition
 
@@ -487,7 +489,8 @@ def process_artifact_with_metadata():
         "title": title,
         "version": version,
         "edition": edition,
-        "content_type": content_type,
+        "artifact_type": artifact_type,
+        "content_type": "artifact",
         "base_archive_sha256": selected_sha,
         "notes": notes,
         "change_note": change_note,
