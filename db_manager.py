@@ -11,7 +11,7 @@ SCHEMA_PATH = "db_schema.sql"
 BACKUP_DIR = "db_backups"
 
 # Database is treated as fresh-initialized from db_schema.sql.
-TARGET_SCHEMA_VERSION = 1
+TARGET_SCHEMA_VERSION = 2
 BACKUP_DEBOUNCE_SECONDS = 1.0
 
 WRITE_SQL_PREFIXES = (
@@ -468,8 +468,9 @@ def initialize_database():
             schema_sql = f.read()
 
         with get_connection() as conn:
+            current_version = conn.execute("PRAGMA user_version;").fetchone()[0]
             conn.executescript(schema_sql)
-            conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
+            run_migrations(conn, current_version)
 
 
 def _column_exists(conn, table_name, column_name):
@@ -479,11 +480,38 @@ def _column_exists(conn, table_name, column_name):
 
 def run_migrations(conn, current_version):
     """
-    No-op: migrations are intentionally disabled in the current fresh-schema workflow.
+    Apply incremental schema/data migrations.
     """
     with exclusive_transaction(conn):
-        # Stamp DB at the single supported schema version.
+        if current_version < 2:
+            _migrate_change_note_fallback_rows(conn)
+
+        # Stamp DB at the current supported schema version.
         conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
+
+
+def _migrate_change_note_fallback_rows(conn):
+    """
+    Data migration for v2:
+    clear metadata_versions.change_note rows that were implicitly copied from
+    metadata.notes (legacy fallback behavior), unless metadata explicitly stored
+    a non-empty change_note value.
+    """
+    conn.execute(
+        """
+        UPDATE metadata_versions
+        SET change_note = NULL
+        WHERE change_note IS NOT NULL
+          AND EXISTS (
+              SELECT 1
+              FROM metadata_objects mo
+              WHERE mo.hash = metadata_versions.metadata_hash
+                AND json_valid(mo.metadata_json)
+                AND COALESCE(NULLIF(TRIM(json_extract(mo.metadata_json, '$.change_note')), ''), NULL) IS NULL
+                AND TRIM(COALESCE(json_extract(mo.metadata_json, '$.notes'), '')) = TRIM(metadata_versions.change_note)
+          );
+        """
+    )
 
 
 def cleanup_orphaned_metadata(conn):
