@@ -496,10 +496,10 @@ def process_artifact_with_metadata():
     selected_build = build_rows[build_idx]
     title = selected_build["vn_title"]
     version = selected_build["version"]
+    selected_build_edition = selected_build["edition"]
 
     notify("Suggested artifact_type labels: " + ", ".join(SUGGESTED_ARTIFACT_TYPE), "info")
     artifact_type = prompt("artifact_type: ")
-    edition = prompt("edition: ")
 
     notes = prompt("notes (optional): ")
     change_note = prompt("change_note (optional): ")
@@ -511,7 +511,7 @@ def process_artifact_with_metadata():
         "build_type": selected_build["build_type"],
         "distribution_platform": selected_build["distribution_platform"],
         "language": selected_build["language"],
-        "edition": edition,
+        "edition": selected_build_edition,
         "artifact_type": artifact_type,
         "content_type": "artifact",
         "notes": notes,
