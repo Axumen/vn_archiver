@@ -32,6 +32,23 @@ content_rating: "18+"
 content_mode: "selectable"
 ```
 
+## Artifact type metadata
+
+When processing a non-runnable artifact, set `artifact_type` using these suggested labels:
+`game_archive`, `patch`, `instructions`, `readme`, `manual`, `soundtrack`, `bonus`, `checksum`.
+
+`Process Artifact` in the TUI accepts both `.zip` and non-zip artifact files (YAML files are excluded).
+It now requires entering a title first, then selecting an existing build from the database so the artifact is linked to a specific build.
+
+Artifact records are normalized in the `artifacts` table and linked to their parent `builds` row.
+Current core columns: `artifact_id`, `build_id`, `artifact_type`, `filename`, `sha256`,
+`is_primary`, `base_artifact_id`, `notes`, `created_at`.
+Artifact ingests do not create a new `metadata_versions` revision for the linked build.
+
+```yaml
+artifact_type: "patch"
+```
+
 ## Translator metadata for multi-language releases
 
 The `translator` field supports three formats:
@@ -151,4 +168,3 @@ python rebuild_archive_db_from_yaml.py --source-dir .
 # Rebuild a specific DB path without creating a backup
 python rebuild_archive_db_from_yaml.py --source-dir ./metadata_dump --db-path ./archive.db --no-backup
 ```
-
