@@ -421,11 +421,11 @@ def process_artifact_with_metadata():
     artifact_files = sorted([
         f for f in os.listdir(INCOMING_DIR)
         if os.path.isfile(os.path.join(INCOMING_DIR, f))
-        and not f.lower().endswith((".zip", ".yaml", ".yml"))
+        and not f.lower().endswith((".yaml", ".yml"))
     ])
 
     if not artifact_files:
-        notify(f"No artifact files found in '{INCOMING_DIR}' (non-zip, non-yaml).", "error")
+        notify(f"No artifact files found in '{INCOMING_DIR}' (zip/non-zip files, excluding yaml).", "error")
         return
 
     panel("Select Artifact File")
