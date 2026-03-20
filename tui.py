@@ -500,6 +500,9 @@ def process_artifact_with_metadata():
 
     notify("Suggested artifact_type labels: " + ", ".join(SUGGESTED_ARTIFACT_TYPE), "info")
     artifact_type = prompt("artifact_type: ")
+    if not artifact_type:
+        artifact_type = "game_archive"
+        notify("artifact_type not provided; defaulting to 'game_archive'.", "warn")
     artifact_release_date = prompt("artifact_release_date (optional, YYYY-MM-DD): ")
 
     notes = prompt("notes (optional): ")
@@ -513,6 +516,7 @@ def process_artifact_with_metadata():
         "distribution_platform": selected_build["distribution_platform"],
         "language": selected_build["language"],
         "edition": selected_build_edition,
+        "content_type": "artifact",
         "artifact_type": artifact_type,
         "release_date": artifact_release_date,
         "notes": notes,
