@@ -1,0 +1,30 @@
+metadata_version: 1
+
+# Artifact-focused sidecar baseline for Process Artifact workflows.
+# These files are still inserted/validated through the same metadata
+# object/version pipelines as archive metadata.
+
+required:
+  - title
+  - version
+  - artifact_type
+
+optional:
+  - build_type
+  - distribution_platform
+  - language
+  - edition
+  - release_date
+  - notes
+  - change_note
+
+# Example
+# title: "Example VN"
+# version: "1.0"
+# build_type: "full"
+# distribution_platform: "steam"
+# language: "english"
+# edition: "default"
+# release_date: "2026-03-19"
+# artifact_type: "patch"
+# notes: "Standalone artifact sidecar baseline."
