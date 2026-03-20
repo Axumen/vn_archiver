@@ -482,11 +482,6 @@ def is_artifact_metadata(metadata):
     """Return True when metadata payload represents an artifact-sidecar record."""
     if not isinstance(metadata, dict):
         return False
-
-    artifact_type = str(metadata.get("artifact_type") or "").strip().lower()
-    if artifact_type:
-        return True
-
     content_type = str(metadata.get("content_type") or "").strip().lower()
     return content_type == "artifact"
 
