@@ -11,7 +11,7 @@ SCHEMA_PATH = "db_schema.sql"
 BACKUP_DIR = "db_backups"
 
 # Database is treated as fresh-initialized from db_schema.sql.
-TARGET_SCHEMA_VERSION = 3
+TARGET_SCHEMA_VERSION = 4
 BACKUP_DEBOUNCE_SECONDS = 1.0
 
 WRITE_SQL_PREFIXES = (
@@ -487,6 +487,9 @@ def run_migrations(conn, current_version):
             _migrate_change_note_fallback_rows(conn)
         if current_version < 3:
             _migrate_build_identity_index(conn)
+        if current_version < 4:
+            # v4 relies on schema re-application for artifact metadata version tables/indexes.
+            pass
 
         # Stamp DB at the current supported schema version.
         conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")

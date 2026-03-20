@@ -478,6 +478,14 @@ def normalize_metadata_fields(metadata):
     return normalized
 
 
+def is_artifact_metadata(metadata):
+    """Return True when metadata payload represents an artifact-sidecar record."""
+    if not isinstance(metadata, dict):
+        return False
+    content_type = str(metadata.get("content_type") or "").strip().lower()
+    return content_type == "artifact"
+
+
 def normalize_translator_value(value):
     """Normalize translator metadata into a storable TEXT value.
 
@@ -582,12 +590,11 @@ def upsert_series(conn, metadata):
 
 
 def upsert_visual_novel_record(conn, metadata, series_id):
-    aliases = normalize_metadata_list(metadata, 'aliases')
     title = metadata['title']
 
     vn_exists = conn.execute(
         '''
-        SELECT id, developer, publisher, description,
+        SELECT id, series_id, aliases, developer, publisher, description,
                release_status, content_rating, source
         FROM visual_novels
         WHERE title = ?
@@ -606,6 +613,30 @@ def upsert_visual_novel_record(conn, metadata, series_id):
             return incoming_value
         return vn_exists[field_name] if vn_exists else None
 
+    def effective_aliases():
+        if 'aliases' in metadata:
+            return normalize_metadata_list(metadata, 'aliases')
+
+        if not vn_exists:
+            return []
+
+        existing_aliases_raw = vn_exists['aliases']
+        if not existing_aliases_raw:
+            return []
+
+        try:
+            parsed = json.loads(existing_aliases_raw)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return []
+
+    def effective_series_id():
+        if 'series' in metadata:
+            return series_id
+        return vn_exists['series_id'] if vn_exists else series_id
+
     if vn_exists:
         vn_id = vn_exists['id']
         conn.execute('''
@@ -615,9 +646,9 @@ def upsert_visual_novel_record(conn, metadata, series_id):
                 content_rating = ?, source = ?
             WHERE id = ?
         ''', (
-            series_id,
+            effective_series_id(),
             slug,
-            json.dumps(aliases),
+            json.dumps(effective_aliases()),
             normalize_text_list_value(effective_vn('developer')),
             normalize_text_list_value(effective_vn('publisher')),
             effective_vn('description'),
@@ -637,7 +668,7 @@ def upsert_visual_novel_record(conn, metadata, series_id):
         series_id,
         title,
         slug,
-        json.dumps(aliases),
+        json.dumps(effective_aliases()),
         normalize_text_list_value(metadata.get('developer')),
         normalize_text_list_value(metadata.get('publisher')),
         metadata.get('description'),
@@ -1024,6 +1055,8 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
             continue
 
         artifact_id = upsert_artifact_record(conn, build_id, metadata, arch_data)
+        if artifact_id is not None:
+            artifact_ids.append(artifact_id)
 
         archive_exists = conn.execute(
             'SELECT id FROM archives WHERE build_id = ? AND sha256 = ?',
@@ -1584,7 +1617,16 @@ def order_metadata_for_yaml(metadata):
     except (ValueError, TypeError):
         template_version = DEFAULT_METADATA_VERSION
 
-    template = load_metadata_template(template_version)
+    try:
+        template = load_metadata_template(template_version)
+    except FileNotFoundError:
+        # Keep quick/sidecar processing resilient when a metadata file references
+        # a template version that is not currently available on disk.
+        print(
+            Fore.YELLOW
+            + f"Metadata template v{template_version} not found; preserving existing field order."
+        )
+        return dict(metadata)
     if not isinstance(template, dict):
         return dict(metadata)
 
