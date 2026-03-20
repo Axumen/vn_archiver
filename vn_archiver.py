@@ -1291,6 +1291,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
         "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story",
                          "non_canon_special"],
+        "artifact_type": SUGGESTED_ARTIFACT_TYPE,
         "tags": [
             "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
             "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
@@ -1830,6 +1831,7 @@ def upload_archive(file_path):
     build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
+    is_artifact_content = str(metadata.get("content_type", "")).strip().lower() == "artifact"
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
@@ -2204,6 +2206,7 @@ def upload_metadata_sidecar(sidecar_path):
     build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
+    is_artifact_content = str(metadata.get("content_type", "")).strip().lower() == "artifact"
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
