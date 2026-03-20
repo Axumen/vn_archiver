@@ -1044,6 +1044,7 @@ def finalize_artifact_metadata_objects(conn, metadata, artifact_id):
 
 def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_process):
     print(Fore.CYAN + f'\n[DEBUG] Found {len(archives_to_process)} archive(s) to process for DB.')
+    metadata_is_artifact = is_artifact_metadata(metadata)
     artifact_ids = []
 
     for arch_data in archives_to_process:
@@ -1054,9 +1055,10 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
             print(Fore.RED + '[DEBUG] Skipping archive insertion - missing SHA256.')
             continue
 
-        artifact_id = upsert_artifact_record(conn, build_id, metadata, arch_data)
-        if artifact_id is not None:
-            artifact_ids.append(artifact_id)
+        if metadata_is_artifact:
+            artifact_id = upsert_artifact_record(conn, build_id, metadata, arch_data)
+            if artifact_id is not None:
+                artifact_ids.append(artifact_id)
 
         archive_exists = conn.execute(
             'SELECT id FROM archives WHERE build_id = ? AND sha256 = ?',
@@ -1086,7 +1088,7 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
         print(Fore.MAGENTA + f'[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.')
 
     try:
-        if is_artifact_metadata(metadata):
+        if metadata_is_artifact:
             for artifact_id in sorted(set(artifact_ids)):
                 finalize_artifact_metadata_objects(conn, metadata, artifact_id)
         else:

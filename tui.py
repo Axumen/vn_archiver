@@ -371,6 +371,10 @@ def quick_process_with_metadata_yaml():
             metadata.pop("artifact_type", None)
             notify("Removed 'artifact_type' from Quick Process metadata (build metadata must not include artifact_type).", "warn")
 
+        if str(metadata.get("content_type", "")).strip().lower() == "artifact":
+            metadata.pop("content_type", None)
+            notify("Removed artifact 'content_type' from Quick Process metadata (use Process Artifact for artifacts).", "warn")
+
         selected_sha256 = [sha256_file(path) for path in selected_paths]
         yaml_sha256 = []
 
