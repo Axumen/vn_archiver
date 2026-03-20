@@ -1424,11 +1424,31 @@ def create_archive_only(
                 default_value = preselected_title
             metadata_editor_seed[field] = default_value
 
-        try:
-            edited_metadata = open_metadata_in_editor_with_defaults(metadata_editor_seed)
-        except (RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
-            print(Fore.RED + f"Editor metadata mode failed: {exc}")
-            return
+        edited_metadata = None
+        while True:
+            try:
+                edited_metadata = open_metadata_in_editor_with_defaults(metadata_editor_seed)
+            except (RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+                print(Fore.RED + f"Editor metadata mode failed: {exc}")
+                retry_choice = input(
+                    Fore.YELLOW + "Retry opening editor? [y/N]: "
+                ).strip().lower()
+                if retry_choice in ("y", "yes"):
+                    continue
+                return
+
+            confirm_choice = input(
+                Fore.YELLOW
+                + "Use edited metadata? [Y]es / [E]dit again / [C]ancel: "
+            ).strip().lower()
+            if confirm_choice in ("", "y", "yes"):
+                break
+            if confirm_choice in ("e", "edit", "edit again"):
+                continue
+            if confirm_choice in ("c", "cancel", "n", "no"):
+                print(Fore.YELLOW + "Metadata editor flow cancelled.")
+                return
+            print(Fore.YELLOW + "Invalid choice. Re-opening editor.")
 
         title_value = str(edited_metadata.get("title", "")).strip()
         if title_value:
