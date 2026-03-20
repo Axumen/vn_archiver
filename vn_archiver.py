@@ -478,6 +478,19 @@ def normalize_metadata_fields(metadata):
     return normalized
 
 
+def is_artifact_metadata(metadata):
+    """Return True when metadata payload represents an artifact-sidecar record."""
+    if not isinstance(metadata, dict):
+        return False
+
+    artifact_type = str(metadata.get("artifact_type") or "").strip().lower()
+    if artifact_type:
+        return True
+
+    content_type = str(metadata.get("content_type") or "").strip().lower()
+    return content_type == "artifact"
+
+
 def normalize_translator_value(value):
     """Normalize translator metadata into a storable TEXT value.
 
@@ -1584,7 +1597,16 @@ def order_metadata_for_yaml(metadata):
     except (ValueError, TypeError):
         template_version = DEFAULT_METADATA_VERSION
 
-    template = load_metadata_template(template_version)
+    try:
+        template = load_metadata_template(template_version)
+    except FileNotFoundError:
+        # Keep quick/sidecar processing resilient when a metadata file references
+        # a template version that is not currently available on disk.
+        print(
+            Fore.YELLOW
+            + f"Metadata template v{template_version} not found; preserving existing field order."
+        )
+        return dict(metadata)
     if not isinstance(template, dict):
         return dict(metadata)
 
