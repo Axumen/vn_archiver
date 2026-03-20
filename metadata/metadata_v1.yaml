@@ -57,7 +57,6 @@ optional:
   # -------------------------------------
   - notes
   - change_note          # Metadata revision note
-  - base_archive_sha256  # Link dependent builds (patches/add-ons) to a base archive
 
 # Multi-archive metadata block (optional)
 archives:

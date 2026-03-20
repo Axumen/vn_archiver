@@ -41,20 +41,16 @@ SUGGESTED_CONTENT_TYPE = [
     "april_fools", "side_story", "non_canon_special"
 ]
 
-DEPENDENCY_CONTENT_TYPES = {
-    "story_expansion",
-    "side_story",
+SUGGESTED_ARTIFACT_TYPE = [
+    "game_archive",
     "patch",
-    "dlc",
-    "mod",
-    "append_disc",
-    "engine_port",
-}
-
-DEPENDENCY_BUILD_TYPES = {
-    "patch",
-    "dlc",
-}
+    "instructions",
+    "readme",
+    "manual",
+    "soundtrack",
+    "bonus",
+    "checksum",
+]
 
 AUTO_METADATA_FIELDS = {
     "original_filename": lambda zip_path: os.path.basename(zip_path),
@@ -292,96 +288,14 @@ def load_b2_config(config_path=B2_CONFIG_FILE):
     return key_id, application_key, bucket_name, bool(dry_run)
 
 
-def select_base_archive_from_db(current_series=None, current_title=None):
-    from db_manager import get_connection
-    from colorama import Fore
-
-    with get_connection() as conn:
-        # Removed the restrictive WHERE clause.
-        # Now demos, append discs, and even other patches can act as a base!
-        base_query = '''
-            SELECT a.sha256, v.title, b.version, b.build_type, s.name as series_name
-            FROM archives a
-            JOIN builds b ON a.build_id = b.id
-            JOIN visual_novels v ON b.vn_id = v.id
-            LEFT JOIN series s ON v.series_id = s.id
-        '''
-
-        rows = []
-        use_filter = False
-
-        # 1. Ask the user if they want to filter using the context they just provided
-        if current_series or current_title:
-            filter_desc = []
-            if current_series: filter_desc.append(f"Series: '{current_series}'")
-            if current_title: filter_desc.append(f"Title: '{current_title}'")
-
-            print(Fore.CYAN + f"\nDetected contextual info: {' and '.join(filter_desc)}")
-            ans = input(Fore.YELLOW + "Filter available base archives using this info? [Y/n]: ").strip().lower()
-
-            if ans in ('', 'y', 'yes'):
-                use_filter = True
-                conditions = []
-                params = []
-                if current_series:
-                    conditions.append("s.name LIKE ?")
-                    params.append(f"%{current_series}%")
-                if current_title:
-                    conditions.append("v.title LIKE ?")
-                    params.append(f"%{current_title}%")
-
-                # Changed from AND to WHERE since the base_query no longer has a WHERE clause
-                query = base_query + " WHERE (" + " OR ".join(conditions) + ") ORDER BY v.title, b.version"
-                rows = conn.execute(query, params).fetchall()
-
-                if not rows:
-                    print(
-                        Fore.RED + "No matching base archives found with that filter. Falling back to the entire database...")
-                    use_filter = False
-
-        # 2. If user said 'No' or the filter returned 0 results, show the whole database
-        if not use_filter:
-            query = base_query + " ORDER BY v.title, b.version"
-            rows = conn.execute(query).fetchall()
-
-    # 3. Handle edge case where the database is completely empty
-    if not rows:
-        print(Fore.RED + "No base archives found in the database.")
-        return input(Fore.YELLOW + "Enter base_archive_sha256 manually (or press Enter to skip): ").strip()
-
-    # 4. Display the formatted menu
-    print(Fore.MAGENTA + "\nAvailable Base Archives:")
-    for i, row in enumerate(rows, 1):
-        series_str = f"[{row['series_name']}] " if row['series_name'] else ""
-        print(
-            Fore.GREEN + f"{i}) {series_str}{row['title']} (v{row['version']}) [{row['build_type']}] -> {row['sha256'][:8]}...")
-
-    # 5. Process user choice
-    choice = input(Fore.YELLOW + "\nSelect the base archive number (or press Enter to paste manually): ").strip()
-    try:
-        if choice:
-            idx = int(choice) - 1
-            if 0 <= idx < len(rows):
-                return rows[idx]['sha256']
-    except ValueError:
-        pass
-
-    # Fallback if they just press Enter to paste a hash manually
-    return input(Fore.YELLOW + "base_archive_sha256: ").strip()
-
-
 def prompt_field(field_name, current_value):
     # Existing content_type suggestion logic...
     if field_name == "content_type":
         print("\nSuggested content_type:")
         print(", ".join(SUGGESTED_CONTENT_TYPE))
-
-    # Add specific handling for base_archive_sha256
-    if field_name == "base_archive_sha256":
-        selected_sha = select_base_archive_from_db()
-        if selected_sha:
-            print(f"Selected SHA: {selected_sha}")
-            return selected_sha
+    elif field_name == "artifact_type":
+        print("\nSuggested artifact_type:")
+        print(", ".join(SUGGESTED_ARTIFACT_TYPE))
 
     value = input(f"{field_name} [{current_value}]: ").strip()
     return value if value else current_value
@@ -402,7 +316,7 @@ def create_metadata(zip_path):
         "metadata_version",
         detect_latest_metadata_template_version()
     )
-    prompt_fields = resolve_prompt_fields(template)
+    prompt_fields = [field for field in resolve_prompt_fields(template) if field != "artifact_type"]
 
     metadata = {"metadata_version": metadata_version}
 
@@ -476,58 +390,10 @@ def normalize_text_list_value(value):
     return fallback or None
 
 
-def _normalized_content_types(metadata):
-    raw_content_type = metadata.get("content_type")
-    if raw_content_type is None:
-        return set()
-
-    if isinstance(raw_content_type, list):
-        values = [str(item).strip().lower() for item in raw_content_type if str(item).strip()]
-    else:
-        values = [part.strip().lower() for part in str(raw_content_type).split(",") if part.strip()]
-
-    return set(values)
-
-
-def validate_base_archive_guardrail(file_path, metadata):
-    """Enforce base-archive policy for dependent uploads.
-
-    - Non-zip artifact uploads must provide base_archive_sha256.
-    - Dependency-like content_type values must provide base_archive_sha256.
-    - Dependency-like build_type values must provide base_archive_sha256.
-    - If base_archive_sha256 is provided, it must already exist in archive_objects.
-    """
-    ext = os.path.splitext(file_path)[1].lower()
-    base_archive_sha = str(metadata.get("base_archive_sha256") or "").strip().lower()
-    content_types = _normalized_content_types(metadata)
-    build_type = str(metadata.get("build_type") or "").strip().lower()
-    is_dependency_content = any(ct in DEPENDENCY_CONTENT_TYPES for ct in content_types)
-    is_dependency_build = build_type in DEPENDENCY_BUILD_TYPES
-    requires_base_archive = (ext != ".zip") or is_dependency_content or is_dependency_build
-
-    if requires_base_archive and not base_archive_sha:
-        if ext != ".zip":
-            reason = "non-zip artifact upload"
-        elif is_dependency_content:
-            reason = "dependency content_type"
-        else:
-            reason = "dependency build_type"
-        print(Fore.RED + f"Upload Blocked: base_archive_sha256 is required ({reason}).")
-        print(Fore.YELLOW + "Set base_archive_sha256 in the metadata sidecar and try again.")
+def is_artifact_metadata(metadata):
+    if not isinstance(metadata, dict):
         return False
-
-    if base_archive_sha:
-        with get_connection() as conn:
-            base_row = conn.execute(
-                "SELECT 1 FROM archive_objects WHERE sha256 = ?",
-                (base_archive_sha,)
-            ).fetchone()
-        if not base_row:
-            print(Fore.RED + "Upload Blocked: base_archive_sha256 does not exist in archive_objects.")
-            print(Fore.YELLOW + f"Missing base archive sha256: {base_archive_sha}")
-            return False
-
-    return True
+    return bool(str(metadata.get("artifact_type") or "").strip())
 
 
 CSV_TO_TEXT_FIELDS = {
@@ -566,7 +432,7 @@ PASSTHROUGH_FIELDS = {
     "relationship_type",
     "notes",
     "change_note",
-    "base_archive_sha256",
+    "artifact_type",
     "archives",
     "archive",
     "sha256",
@@ -846,7 +712,7 @@ def upsert_build_record(conn, vn_id, metadata):
         '''
         SELECT id, build_type, distribution_model, distribution_platform,
                language, translator, edition, original_release_date, release_date, engine,
-               engine_version, source, base_archive_sha256
+               engine_version, source
         FROM builds
         WHERE vn_id = ? AND version = ?
           AND COALESCE(language, '') = COALESCE(?, '')
@@ -876,7 +742,6 @@ def upsert_build_record(conn, vn_id, metadata):
         effective('engine'),
         effective('engine_version'),
         effective('source'),
-        effective('base_archive_sha256')
     )
 
     if build_exists:
@@ -885,7 +750,7 @@ def upsert_build_record(conn, vn_id, metadata):
             UPDATE builds SET
                 build_type = ?, distribution_model = ?, distribution_platform = ?,
                 language = ?, translator = ?, edition = ?, original_release_date = ?, release_date = ?,
-                engine = ?, engine_version = ?, source = ?, base_archive_sha256 = ?
+                engine = ?, engine_version = ?, source = ?
             WHERE id = ?
         ''', values + (build_id,))
         return build_id
@@ -894,8 +759,8 @@ def upsert_build_record(conn, vn_id, metadata):
         INSERT INTO builds (
             vn_id, version, build_type, distribution_model,
             distribution_platform, language, translator, edition,
-            original_release_date, release_date, engine, engine_version, source, base_archive_sha256
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            original_release_date, release_date, engine, engine_version, source
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         vn_id,
         build_version,
@@ -958,21 +823,71 @@ def collect_archives_for_db(metadata):
     if top_level_sha:
         archives_to_process.append({
             'sha256': top_level_sha,
-            'file_size': metadata.get('file_size_bytes', 0)
+            'file_size': metadata.get('file_size_bytes', 0),
+            'filename': metadata.get('original_filename') or get_nested_value(metadata, 'archive.filename'),
+            'is_primary': 1,
         })
 
     if 'archives' in metadata and isinstance(metadata['archives'], list):
-        for archive in metadata['archives']:
+        for idx, archive in enumerate(metadata['archives']):
             if isinstance(archive, dict) and archive.get('sha256'):
                 archives_to_process.append({
                     'sha256': archive.get('sha256'),
-                    'file_size': archive.get('file_size_bytes', 0)
+                    'file_size': archive.get('file_size_bytes', 0),
+                    'filename': archive.get('filename'),
+                    'is_primary': 1 if not top_level_sha and idx == 0 else 0,
                 })
 
     if not top_level_sha and archives_to_process:
         top_level_sha = archives_to_process[0].get('sha256')
 
     return archives_to_process, top_level_sha
+
+
+def upsert_artifact_record(conn, build_id, metadata, archive_data):
+    artifact_sha256 = archive_data.get('sha256')
+    if not artifact_sha256:
+        return
+
+    artifact_type = str(metadata.get('artifact_type') or '').strip().lower() or "game_archive"
+    filename = archive_data.get('filename') or metadata.get('original_filename')
+    notes = metadata.get('notes')
+    release_date = metadata.get('release_date')
+    is_primary = 1 if archive_data.get('is_primary') else 0
+
+    existing_row = conn.execute(
+        '''
+        SELECT artifact_id
+        FROM artifacts
+        WHERE build_id = ? AND sha256 = ?
+        ''',
+        (build_id, artifact_sha256)
+    ).fetchone()
+
+    if existing_row:
+        conn.execute(
+            '''
+            UPDATE artifacts
+            SET artifact_type = COALESCE(NULLIF(?, ''), artifact_type),
+                filename = COALESCE(?, filename),
+                is_primary = CASE WHEN ? = 1 THEN 1 ELSE is_primary END,
+                release_date = COALESCE(?, release_date),
+                notes = COALESCE(?, notes)
+            WHERE artifact_id = ?
+            ''',
+            (artifact_type, filename, is_primary, release_date, notes, existing_row['artifact_id'])
+        )
+        return existing_row['artifact_id']
+
+    conn.execute(
+        '''
+        INSERT INTO artifacts (
+            build_id, artifact_type, filename, sha256, is_primary, base_artifact_id, release_date, notes
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+        ''',
+        (build_id, artifact_type, filename, artifact_sha256, is_primary, release_date, notes)
+    )
+    return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
 
 
 def finalize_metadata_objects(conn, metadata, vn_id, build_id):
@@ -1040,8 +955,71 @@ def finalize_metadata_objects(conn, metadata, vn_id, build_id):
     print(Fore.GREEN + f'[DEBUG] Metadata version v{next_version_number} recorded for build {build_id}.')
 
 
+def finalize_artifact_metadata_objects(conn, metadata, artifact_id):
+    try:
+        schema_version = int(metadata.get('metadata_version') or 1)
+    except (ValueError, TypeError):
+        schema_version = 1
+
+    canonical_json = json.dumps(
+        metadata,
+        default=safe_json_serialize,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":")
+    )
+    stored_metadata = order_metadata_for_yaml(metadata)
+    stored_metadata_json = json.dumps(
+        stored_metadata,
+        default=safe_json_serialize,
+        ensure_ascii=False,
+        separators=(",", ":")
+    )
+    metadata_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+    conn.execute(
+        '''
+        INSERT OR IGNORE INTO artifact_metadata_objects (hash, schema_version, metadata_json)
+        VALUES (?, ?, ?)
+        ''',
+        (metadata_hash, schema_version, stored_metadata_json)
+    )
+
+    current_row = conn.execute(
+        'SELECT id, metadata_hash FROM artifact_metadata_versions WHERE artifact_id = ? AND is_current = 1',
+        (artifact_id,)
+    ).fetchone()
+
+    if current_row and current_row['metadata_hash'] == metadata_hash:
+        print(Fore.MAGENTA + f'[DEBUG] Artifact metadata unchanged for artifact {artifact_id}; current pointer retained.')
+        return
+
+    parent_version_id = current_row['id'] if current_row else None
+    next_version_number = conn.execute(
+        'SELECT COALESCE(MAX(version_number), 0) + 1 FROM artifact_metadata_versions WHERE artifact_id = ?',
+        (artifact_id,)
+    ).fetchone()[0]
+
+    conn.execute(
+        'UPDATE artifact_metadata_versions SET is_current = 0 WHERE artifact_id = ? AND is_current = 1',
+        (artifact_id,)
+    )
+
+    conn.execute(
+        '''
+        INSERT INTO artifact_metadata_versions (
+            artifact_id, metadata_hash, parent_version_id, version_number, change_note, is_current
+        ) VALUES (?, ?, ?, ?, ?, 1)
+        ''',
+        (artifact_id, metadata_hash, parent_version_id, next_version_number, metadata.get('change_note'))
+    )
+
+    print(Fore.GREEN + f'[DEBUG] Artifact metadata version v{next_version_number} recorded for artifact {artifact_id}.')
+
+
 def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_process):
     print(Fore.CYAN + f'\n[DEBUG] Found {len(archives_to_process)} archive(s) to process for DB.')
+    artifact_ids = []
 
     for arch_data in archives_to_process:
         sha256 = arch_data.get('sha256')
@@ -1050,6 +1028,10 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
         if not sha256:
             print(Fore.RED + '[DEBUG] Skipping archive insertion - missing SHA256.')
             continue
+
+        artifact_id = upsert_artifact_record(conn, build_id, metadata, arch_data)
+        if artifact_id:
+            artifact_ids.append(artifact_id)
 
         archive_exists = conn.execute(
             'SELECT id FROM archives WHERE build_id = ? AND sha256 = ?',
@@ -1079,7 +1061,11 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
         print(Fore.MAGENTA + f'[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.')
 
     try:
-        finalize_metadata_objects(conn, metadata, vn_id, build_id)
+        if is_artifact_metadata(metadata):
+            for artifact_id in sorted(set(artifact_ids)):
+                finalize_artifact_metadata_objects(conn, metadata, artifact_id)
+        else:
+            finalize_metadata_objects(conn, metadata, vn_id, build_id)
     except Exception as e:
         print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
         raise e
@@ -1287,7 +1273,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
     # 2. Prepare metadata (Beautiful TUI Prompts)
     # -------------------------------------------------------------------
     base_template = load_metadata_template(metadata_version)
-    prompt_fields = resolve_prompt_fields(base_template)
+    prompt_fields = [field for field in resolve_prompt_fields(base_template) if field != "artifact_type"]
 
     metadata = {"metadata_version": metadata_version}
     defaults = {}
@@ -1346,30 +1332,6 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
                 metadata[field] = normalize_list(raw_val)
             elif default_items:
                 metadata[field] = default_items
-
-
-        # ==========================================
-        # ADD THIS NEW ELIF BLOCK FOR THE SHA256
-        # ==========================================
-        elif field == "base_archive_sha256":
-            print(
-                Fore.CYAN + "\n[Dependency] This links dependent archives (e.g., patches, fan-discs, mods, engine-ports) to their base game.")
-
-            # 1. Ask the user if a dependency exists
-            has_dep = input(Fore.YELLOW + "Does this archive depend on a base game/archive? [y/N]: ").strip().lower()
-
-            if has_dep in ('y', 'yes'):
-                # 2. If yes, proceed to the database lookup function
-                current_series = metadata.get("series")
-                current_title = metadata.get("title")
-
-                selected_sha = select_base_archive_from_db(current_series, current_title)
-                if selected_sha:
-                    metadata[field] = selected_sha
-            else:
-                # 3. If no, skip and proceed with insertion
-                print(Fore.MAGENTA + "Skipping dependency linking. Treating as a standalone archive.")
-        # ==========================================
 
         else:
             suggestions = FIELD_SUGGESTIONS.get(field) or []
@@ -1445,6 +1407,11 @@ def finalize_archive_creation(metadata, archives_data):
             build_id = build_row['id']
 
     metadata_version_number = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
+    if is_artifact_metadata(metadata):
+        with get_connection() as conn:
+            first_sha = archives_data[0].get("sha256") if archives_data else None
+            artifact_id = resolve_artifact_id_for_metadata(conn, build_id, metadata, fallback_sha=first_sha)
+        metadata_version_number = get_current_artifact_metadata_version_number(artifact_id)
 
     if archives_data:
         uploaded_dest_dir = os.path.join(UPLOADING_DIR)
@@ -1553,6 +1520,50 @@ def get_current_metadata_version_number(vn_id=None, build_id=None):
             ).fetchone()
 
     return int(row['version_number']) if row and row['version_number'] is not None else 1
+
+
+def get_current_artifact_metadata_version_number(artifact_id):
+    if not artifact_id:
+        return 1
+
+    with get_connection() as conn:
+        row = conn.execute(
+            'SELECT version_number FROM artifact_metadata_versions WHERE artifact_id = ? AND is_current = 1',
+            (artifact_id,)
+        ).fetchone()
+
+    return int(row['version_number']) if row and row['version_number'] is not None else 1
+
+
+def resolve_artifact_id_for_metadata(conn, build_id, metadata, fallback_sha=None):
+    if not build_id:
+        return None
+
+    sha_candidates = []
+    if fallback_sha:
+        sha_candidates.append(str(fallback_sha).strip().lower())
+
+    top_sha = str(metadata.get('sha256') or '').strip().lower()
+    if top_sha:
+        sha_candidates.append(top_sha)
+
+    archives = metadata.get('archives')
+    if isinstance(archives, list):
+        for archive in archives:
+            if isinstance(archive, dict) and archive.get('sha256'):
+                sha_candidates.append(str(archive.get('sha256')).strip().lower())
+
+    for sha in sha_candidates:
+        if not sha:
+            continue
+        row = conn.execute(
+            'SELECT artifact_id FROM artifacts WHERE build_id = ? AND sha256 = ?',
+            (build_id, sha)
+        ).fetchone()
+        if row:
+            return row['artifact_id']
+
+    return None
 
 
 def build_recommended_archive_name(metadata, sha256, ext='.zip'):
@@ -1824,9 +1835,6 @@ def upload_archive(file_path):
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
         return False
 
-    if not validate_base_archive_guardrail(file_path, metadata):
-        return False
-
     # -------------------------------------------------------------------
     # 2. Block upload if it wasn't inserted into the Database
     # -------------------------------------------------------------------
@@ -1876,6 +1884,45 @@ def upload_archive(file_path):
     # -------------------------------------------------------------------
     # 3. Validate sidecar metadata revision against DB metadata history
     # -------------------------------------------------------------------
+    with get_connection() as conn:
+        if is_artifact_metadata(metadata):
+            artifact_id = resolve_artifact_id_for_metadata(conn, build_id, metadata)
+            if not artifact_id:
+                print(Fore.RED + f"Upload Blocked: Could not resolve artifact row for build {build_id} from sidecar metadata sha256.")
+                return False
+            if requested_metadata_revision is not None:
+                metadata_row = conn.execute(
+                    "SELECT metadata_hash, version_number FROM artifact_metadata_versions WHERE artifact_id = ? AND version_number = ?",
+                    (artifact_id, requested_metadata_revision)
+                ).fetchone()
+            else:
+                metadata_row = conn.execute(
+                    "SELECT metadata_hash, version_number FROM artifact_metadata_versions WHERE artifact_id = ? AND is_current = 1",
+                    (artifact_id,)
+                ).fetchone()
+        else:
+            if requested_metadata_revision is not None:
+                metadata_row = conn.execute(
+                    "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND version_number = ?",
+                    (build_id, requested_metadata_revision)
+                ).fetchone()
+            else:
+                metadata_row = conn.execute(
+                    "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND is_current = 1",
+                    (build_id,)
+                ).fetchone()
+
+    if not metadata_row:
+        if requested_metadata_revision is not None:
+            print(Fore.RED + f"Upload Blocked: {'Artifact' if is_artifact_metadata(metadata) else 'Build'} {build_id} has no metadata version v{requested_metadata_revision} in database.")
+        else:
+            print(Fore.RED + f"Upload Blocked: {'Artifact' if is_artifact_metadata(metadata) else 'Build'} {build_id} has no current metadata version in database.")
+        print(Fore.YELLOW + "Please run '(1) Create Metadata' or update metadata before uploading.")
+        return False
+
+    db_metadata_hash = metadata_row["metadata_hash"]
+    db_version_number = metadata_row["version_number"]
+
     canonical_metadata_json = json.dumps(
         metadata,
         default=safe_json_serialize,
@@ -1884,29 +1931,6 @@ def upload_archive(file_path):
         separators=(",", ":")
     )
     sidecar_metadata_hash = hashlib.sha256(canonical_metadata_json.encode("utf-8")).hexdigest()
-
-    with get_connection() as conn:
-        if requested_metadata_revision is not None:
-            metadata_row = conn.execute(
-                "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND version_number = ?",
-                (build_id, requested_metadata_revision)
-            ).fetchone()
-        else:
-            metadata_row = conn.execute(
-                "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND is_current = 1",
-                (build_id,)
-            ).fetchone()
-
-    if not metadata_row:
-        if requested_metadata_revision is not None:
-            print(Fore.RED + f"Upload Blocked: Build {build_id} has no metadata version v{requested_metadata_revision} in database.")
-        else:
-            print(Fore.RED + f"Upload Blocked: Build {build_id} has no current metadata version in database.")
-        print(Fore.YELLOW + "Please run '(1) Create Metadata' or update metadata before uploading.")
-        return False
-
-    db_metadata_hash = metadata_row["metadata_hash"]
-    db_version_number = metadata_row["version_number"]
     if sidecar_metadata_hash != db_metadata_hash:
         print(Fore.RED + "Upload Blocked: Sidecar metadata does not match metadata stored in database for this revision.")
         print(Fore.YELLOW + f"DB metadata hash : {db_metadata_hash}")
@@ -1924,29 +1948,12 @@ def upload_archive(file_path):
     archive_sha256 = sha256_file(file_path)
 
     ext = os.path.splitext(file_path)[1].lower()
-    base_archive_sha = str(metadata.get("base_archive_sha256") or "").strip().lower()
-    parent_archive_dir = None
-
     # Standardized naming for VN archives (title + build version + hash)
     file_name = build_recommended_archive_name(metadata, archive_sha256, ext=ext)
     metadata_file_name = Path(metadata_source).name
 
-    if ext != ".zip" and base_archive_sha:
-        with get_connection() as conn:
-            parent_archive_row = conn.execute(
-                "SELECT storage_path FROM archive_objects WHERE sha256 = ?",
-                (base_archive_sha,)
-            ).fetchone()
-        if not parent_archive_row or not parent_archive_row["storage_path"]:
-            print(Fore.RED + "Upload Blocked: Could not resolve parent archive storage path for artifact.")
-            return False
-
-        parent_archive_dir = os.path.dirname(parent_archive_row["storage_path"].strip())
-        cloud_path = f"{parent_archive_dir}/{file_name}"
-        metadata_cloud_path = f"{parent_archive_dir}/{metadata_file_name}"
-    else:
-        cloud_path = f"archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{file_name}"
-        metadata_cloud_path = f"metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{metadata_file_name}"
+    cloud_path = f"archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{file_name}"
+    metadata_cloud_path = f"metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{metadata_file_name}"
 
     if db_version_number > 1:
         parent_metadata_cloud_path = re.sub(r"_meta_v\d+(\.ya?ml)$", f"_meta_v{db_version_number - 1}\\1", metadata_cloud_path)
@@ -2240,6 +2247,40 @@ def upload_metadata_sidecar(sidecar_path):
 
         build_id = build_row["id"]
 
+    with get_connection() as conn:
+        if is_artifact_metadata(metadata):
+            artifact_id = resolve_artifact_id_for_metadata(conn, build_id, metadata)
+            if not artifact_id:
+                print(Fore.RED + f"Upload Blocked: Could not resolve artifact row for build {build_id} from sidecar metadata sha256.")
+                return False
+            if requested_metadata_revision is not None:
+                metadata_row = conn.execute(
+                    "SELECT metadata_hash, version_number FROM artifact_metadata_versions WHERE artifact_id = ? AND version_number = ?",
+                    (artifact_id, requested_metadata_revision)
+                ).fetchone()
+            else:
+                metadata_row = conn.execute(
+                    "SELECT metadata_hash, version_number FROM artifact_metadata_versions WHERE artifact_id = ? AND is_current = 1",
+                    (artifact_id,)
+                ).fetchone()
+        else:
+            if requested_metadata_revision is not None:
+                metadata_row = conn.execute(
+                    "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND version_number = ?",
+                    (build_id, requested_metadata_revision)
+                ).fetchone()
+            else:
+                metadata_row = conn.execute(
+                    "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND is_current = 1",
+                    (build_id,)
+                ).fetchone()
+
+    if not metadata_row:
+        print(Fore.RED + f"Upload Blocked: No matching metadata version found in database for build {build_id}.")
+        return False
+
+    db_metadata_hash = metadata_row["metadata_hash"]
+    db_version_number = metadata_row["version_number"]
     canonical_metadata_json = json.dumps(
         metadata,
         default=safe_json_serialize,
@@ -2248,25 +2289,6 @@ def upload_metadata_sidecar(sidecar_path):
         separators=(",", ":")
     )
     sidecar_metadata_hash = hashlib.sha256(canonical_metadata_json.encode("utf-8")).hexdigest()
-
-    with get_connection() as conn:
-        if requested_metadata_revision is not None:
-            metadata_row = conn.execute(
-                "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND version_number = ?",
-                (build_id, requested_metadata_revision)
-            ).fetchone()
-        else:
-            metadata_row = conn.execute(
-                "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND is_current = 1",
-                (build_id,)
-            ).fetchone()
-
-    if not metadata_row:
-        print(Fore.RED + f"Upload Blocked: No matching metadata version found in database for build {build_id}.")
-        return False
-
-    db_metadata_hash = metadata_row["metadata_hash"]
-    db_version_number = metadata_row["version_number"]
     if sidecar_metadata_hash != db_metadata_hash:
         print(Fore.RED + "Upload Blocked: Sidecar metadata does not match metadata stored in database for this revision.")
         print(Fore.YELLOW + f"DB metadata hash : {db_metadata_hash}")
