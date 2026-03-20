@@ -242,6 +242,14 @@ CREATE TABLE IF NOT EXISTS metadata_objects (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Artifact-scoped immutable metadata blobs
+CREATE TABLE IF NOT EXISTS artifact_metadata_objects (
+    hash TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- =====================================================
 -- 12. METADATA VERSIONS (Version History Per Build)
 -- =====================================================
@@ -275,6 +283,30 @@ CREATE TABLE IF NOT EXISTS metadata_versions (
         ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS artifact_metadata_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id INTEGER NOT NULL,
+    metadata_hash TEXT NOT NULL,
+    parent_version_id INTEGER,
+    version_number INTEGER NOT NULL,
+    change_note TEXT,
+    status TEXT DEFAULT 'approved',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_current INTEGER NOT NULL DEFAULT 0,
+
+    FOREIGN KEY (artifact_id)
+        REFERENCES artifacts(artifact_id)
+        ON DELETE CASCADE,
+
+    FOREIGN KEY (metadata_hash)
+        REFERENCES artifact_metadata_objects(hash)
+        ON DELETE RESTRICT,
+
+    FOREIGN KEY (parent_version_id)
+        REFERENCES artifact_metadata_versions(id)
+        ON DELETE SET NULL
+);
+
 -- =====================================================
 -- 13. UNIQUE CONSTRAINTS
 -- =====================================================
@@ -288,6 +320,13 @@ WHERE is_current = 1;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_version_number
 ON metadata_versions(build_id, version_number);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_current_artifact_metadata
+ON artifact_metadata_versions(artifact_id)
+WHERE is_current = 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_artifact_version_number
+ON artifact_metadata_versions(artifact_id, version_number);
+
 -- =====================================================
 -- 14. INDEXES FOR PERFORMANCE
 -- =====================================================
@@ -300,6 +339,12 @@ ON metadata_versions(build_id);
 
 CREATE INDEX IF NOT EXISTS idx_metadata_versions_hash
 ON metadata_versions(metadata_hash);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_metadata_versions_artifact
+ON artifact_metadata_versions(artifact_id);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_metadata_versions_hash
+ON artifact_metadata_versions(metadata_hash);
 
 -- =====================================================
 -- 15. TRIGGERS FOR ARCHIVE-ID DRIVEN CASCADE CLEANUP

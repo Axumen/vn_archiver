@@ -1,8 +1,8 @@
 metadata_version: 1
 
 # Artifact-focused sidecar baseline for Process Artifact workflows.
-# These files are still inserted/validated through the same metadata
-# object/version pipelines as archive metadata.
+# These files are inserted/validated through artifact-scoped metadata
+# object/version pipelines.
 
 required:
   - title
