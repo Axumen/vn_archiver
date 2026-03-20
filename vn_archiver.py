@@ -988,11 +988,15 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
 
         print(Fore.MAGENTA + f'[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.')
 
-    try:
-        finalize_metadata_objects(conn, metadata, vn_id, build_id)
-    except Exception as e:
-        print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
-        raise e
+    is_artifact_content = str(metadata.get('content_type') or '').strip().lower() == "artifact"
+    if not is_artifact_content:
+        try:
+            finalize_metadata_objects(conn, metadata, vn_id, build_id)
+        except Exception as e:
+            print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
+            raise e
+    else:
+        print(Fore.MAGENTA + f'[DEBUG] Skipping metadata version increment for artifact content on build {build_id}.')
 
     try:
         conn.commit()
@@ -1215,6 +1219,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
         "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story",
                          "non_canon_special"],
+        "artifact_type": SUGGESTED_ARTIFACT_TYPE,
         "tags": [
             "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
             "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
@@ -1705,6 +1710,7 @@ def upload_archive(file_path):
     build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
+    is_artifact_content = str(metadata.get("content_type", "")).strip().lower() == "artifact"
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
@@ -2063,6 +2069,7 @@ def upload_metadata_sidecar(sidecar_path):
     build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
+    is_artifact_content = str(metadata.get("content_type", "")).strip().lower() == "artifact"
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
