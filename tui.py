@@ -367,6 +367,10 @@ def quick_process_with_metadata_yaml():
             notify("Metadata must include 'version'.", "error")
             return
 
+        if "artifact_type" in metadata:
+            metadata.pop("artifact_type", None)
+            notify("Removed 'artifact_type' from Quick Process metadata (build metadata must not include artifact_type).", "warn")
+
         selected_sha256 = [sha256_file(path) for path in selected_paths]
         yaml_sha256 = []
 
