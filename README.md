@@ -43,8 +43,7 @@ It now requires entering a title first, then selecting an existing build from th
 Artifact records are normalized in the `artifacts` table and linked to their parent `builds` row.
 Current core columns: `artifact_id`, `build_id`, `artifact_type`, `filename`, `sha256`,
 `is_primary`, `base_artifact_id`, `release_date`, `notes`, `created_at`.
-Artifact sidecars use artifact-scoped metadata object/version history
-(`artifact_metadata_objects` + `artifact_metadata_versions`) so revisions are isolated to that artifact object.
+Artifact sidecars use the same metadata object/version handling as other metadata sidecars.
 Use `metadata/metadata_artifact_v1.yaml` as a baseline template for artifact-focused sidecars.
 
 ```yaml

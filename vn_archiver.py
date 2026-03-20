@@ -390,12 +390,6 @@ def normalize_text_list_value(value):
     return fallback or None
 
 
-def is_artifact_metadata(metadata):
-    if not isinstance(metadata, dict):
-        return False
-    return bool(str(metadata.get("artifact_type") or "").strip())
-
-
 CSV_TO_TEXT_FIELDS = {
     "developer",
     "publisher",
@@ -1030,8 +1024,6 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
             continue
 
         artifact_id = upsert_artifact_record(conn, build_id, metadata, arch_data)
-        if artifact_id:
-            artifact_ids.append(artifact_id)
 
         archive_exists = conn.execute(
             'SELECT id FROM archives WHERE build_id = ? AND sha256 = ?',
