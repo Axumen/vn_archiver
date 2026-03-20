@@ -33,6 +33,7 @@ from vn_archiver import (
 init(autoreset=True)
 
 SELECTED_METADATA_TEMPLATE_VERSION = None
+METADATA_EDITOR_MODE = False
 
 # =============================
 # THEME
@@ -252,6 +253,14 @@ def configure_metadata_template_version():
         print()
 
 
+def toggle_metadata_editor_mode():
+    global METADATA_EDITOR_MODE
+    METADATA_EDITOR_MODE = not METADATA_EDITOR_MODE
+    mode_label = "Notepad/Editor mode" if METADATA_EDITOR_MODE else "Prompt mode"
+    notify(f"Create Metadata input mode set to: {mode_label}.", "ok")
+    print()
+
+
 # =============================
 # METADATA CREATION
 # =============================
@@ -292,7 +301,12 @@ def create_metadata_only():
             return
 
         active_version = get_active_metadata_template_version()
-        create_archive_only(selected_paths, metadata_version=active_version)
+        metadata_mode = "editor" if METADATA_EDITOR_MODE else "prompt"
+        create_archive_only(
+            selected_paths,
+            metadata_version=active_version,
+            metadata_input_mode=metadata_mode
+        )
 
     except ValueError:
         notify("Invalid input.", "error")
@@ -1048,10 +1062,13 @@ def main():
         print(PRIMARY + "  5) Upload Archive")
         print(PRIMARY + "  6) Delete From Uploading")
         print(PRIMARY + "  7) Config")
-        print(PRIMARY + "  8) Quit\n")
+        print(PRIMARY + "  8) Toggle Metadata Editor Mode")
+        print(PRIMARY + "  9) Quit\n")
 
         active_version = get_active_metadata_template_version()
         notify(f"Active metadata template: v{active_version}")
+        mode_label = "Notepad/Editor mode" if METADATA_EDITOR_MODE else "Prompt mode"
+        notify(f"Create Metadata mode: {mode_label}")
         print()
 
         choice = prompt("Select option: ")
@@ -1071,6 +1088,8 @@ def main():
         elif choice == "7":
             configure_metadata_template_version()
         elif choice == "8":
+            toggle_metadata_editor_mode()
+        elif choice == "9":
             print()
             panel("Goodbye", "Session closed")
             print()
