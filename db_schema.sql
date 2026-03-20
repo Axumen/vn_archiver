@@ -242,6 +242,14 @@ CREATE TABLE IF NOT EXISTS metadata_objects (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Artifact-scoped immutable metadata blobs
+CREATE TABLE IF NOT EXISTS artifact_metadata_objects (
+    hash TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- =====================================================
 -- 12. METADATA VERSIONS (Version History Per Build)
 -- =====================================================
