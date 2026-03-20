@@ -242,6 +242,14 @@ CREATE TABLE IF NOT EXISTS metadata_objects (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Artifact-scoped immutable metadata blobs
+CREATE TABLE IF NOT EXISTS artifact_metadata_objects (
+    hash TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- =====================================================
 -- 12. METADATA VERSIONS (Version History Per Build)
 -- =====================================================
@@ -275,6 +283,7 @@ CREATE TABLE IF NOT EXISTS metadata_versions (
         ON DELETE SET NULL
 );
 
+
 -- =====================================================
 -- 13. UNIQUE CONSTRAINTS
 -- =====================================================
@@ -288,6 +297,7 @@ WHERE is_current = 1;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_version_number
 ON metadata_versions(build_id, version_number);
 
+
 -- =====================================================
 -- 14. INDEXES FOR PERFORMANCE
 -- =====================================================
@@ -300,6 +310,7 @@ ON metadata_versions(build_id);
 
 CREATE INDEX IF NOT EXISTS idx_metadata_versions_hash
 ON metadata_versions(metadata_hash);
+
 
 -- =====================================================
 -- 15. TRIGGERS FOR ARCHIVE-ID DRIVEN CASCADE CLEANUP
