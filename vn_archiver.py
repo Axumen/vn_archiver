@@ -535,7 +535,7 @@ def normalize_translator_value(value):
 
 
 def get_latest_metadata_for_title(title):
-    """Fetch the current metadata blob for an existing VN title, if present."""
+    """Fetch metadata blob for the highest version build of a VN title, if present."""
     if not title:
         return {}
     normalized_title = str(title).strip()
@@ -543,25 +543,39 @@ def get_latest_metadata_for_title(title):
         return {}
 
     with get_connection() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             '''
-            SELECT mo.metadata_json
+            SELECT
+                b.version AS build_version,
+                b.id AS build_id,
+                mv.id AS metadata_version_id,
+                mo.metadata_json
             FROM visual_novels v
             JOIN builds b ON b.vn_id = v.id
             JOIN metadata_versions mv ON mv.build_id = b.id AND mv.is_current = 1
             JOIN metadata_objects mo ON mo.hash = mv.metadata_hash
             WHERE TRIM(v.title) = TRIM(?) COLLATE NOCASE
-            ORDER BY b.created_at DESC, b.id DESC, mv.created_at DESC, mv.id DESC
-            LIMIT 1
             ''',
             (normalized_title,)
-        ).fetchone()
+        ).fetchall()
 
-    if not row or not row['metadata_json']:
+    if not rows:
+        return {}
+
+    latest_row = max(
+        rows,
+        key=lambda row: (
+            normalize_version_for_sort(row["build_version"]),
+            int(row["build_id"] or 0),
+            int(row["metadata_version_id"] or 0),
+        )
+    )
+
+    if not latest_row['metadata_json']:
         return {}
 
     try:
-        parsed = json.loads(row['metadata_json'])
+        parsed = json.loads(latest_row['metadata_json'])
         return parsed if isinstance(parsed, dict) else {}
     except (json.JSONDecodeError, TypeError):
         return {}
