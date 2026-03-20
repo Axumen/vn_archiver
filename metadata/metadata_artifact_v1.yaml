@@ -14,6 +14,7 @@ optional:
   - distribution_platform
   - language
   - edition
+  - release_date
   - notes
   - change_note
 
@@ -24,5 +25,6 @@ optional:
 # distribution_platform: "steam"
 # language: "english"
 # edition: "default"
+# release_date: "2026-03-19"
 # artifact_type: "patch"
 # notes: "Standalone artifact sidecar baseline."

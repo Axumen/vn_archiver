@@ -846,6 +846,7 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     artifact_type = str(metadata.get('artifact_type') or '').strip().lower() or "game_archive"
     filename = archive_data.get('filename') or metadata.get('original_filename')
     notes = metadata.get('notes')
+    release_date = metadata.get('release_date')
     is_primary = 1 if archive_data.get('is_primary') else 0
 
     existing_row = conn.execute(
@@ -864,20 +865,21 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
             SET artifact_type = COALESCE(NULLIF(?, ''), artifact_type),
                 filename = COALESCE(?, filename),
                 is_primary = CASE WHEN ? = 1 THEN 1 ELSE is_primary END,
+                release_date = COALESCE(?, release_date),
                 notes = COALESCE(?, notes)
             WHERE artifact_id = ?
             ''',
-            (artifact_type, filename, is_primary, notes, existing_row['artifact_id'])
+            (artifact_type, filename, is_primary, release_date, notes, existing_row['artifact_id'])
         )
         return
 
     conn.execute(
         '''
         INSERT INTO artifacts (
-            build_id, artifact_type, filename, sha256, is_primary, base_artifact_id, notes
-        ) VALUES (?, ?, ?, ?, ?, NULL, ?)
+            build_id, artifact_type, filename, sha256, is_primary, base_artifact_id, release_date, notes
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
         ''',
-        (build_id, artifact_type, filename, artifact_sha256, is_primary, notes)
+        (build_id, artifact_type, filename, artifact_sha256, is_primary, release_date, notes)
     )
 
 

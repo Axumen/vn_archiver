@@ -500,6 +500,7 @@ def process_artifact_with_metadata():
 
     notify("Suggested artifact_type labels: " + ", ".join(SUGGESTED_ARTIFACT_TYPE), "info")
     artifact_type = prompt("artifact_type: ")
+    artifact_release_date = prompt("artifact_release_date (optional, YYYY-MM-DD): ")
 
     notes = prompt("notes (optional): ")
     change_note = prompt("change_note (optional): ")
@@ -513,6 +514,7 @@ def process_artifact_with_metadata():
         "language": selected_build["language"],
         "edition": selected_build_edition,
         "artifact_type": artifact_type,
+        "release_date": artifact_release_date,
         "notes": notes,
         "change_note": change_note,
     }

@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
     sha256 TEXT NOT NULL,
     is_primary INTEGER NOT NULL DEFAULT 0,
     base_artifact_id INTEGER,
+    release_date TEXT,
     notes TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
