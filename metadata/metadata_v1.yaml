@@ -55,7 +55,6 @@ optional:
   # -------------------------------------
   # MISC
   # -------------------------------------
-  - artifact_type        # Suggested: game_archive, patch, instructions, readme, manual, soundtrack, bonus, checksum
   - notes
   - change_note          # Metadata revision note
 
@@ -91,7 +90,3 @@ archives:
 # Content mode examples:
 # content_mode: "sfw"
 # content_mode: "selectable"
-
-# Artifact type examples:
-# artifact_type: "patch"
-# artifact_type: "readme"
