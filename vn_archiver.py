@@ -5,7 +5,9 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import yaml
 from tqdm import tqdm
@@ -51,6 +53,8 @@ SUGGESTED_ARTIFACT_TYPE = [
     "bonus",
     "checksum",
 ]
+
+METADATA_LIST_FIELDS = {"tags", "target_platform", "aliases", "developer", "publisher"}
 
 AUTO_METADATA_FIELDS = {
     "original_filename": lambda zip_path: os.path.basename(zip_path),
@@ -531,7 +535,7 @@ def normalize_translator_value(value):
 
 
 def get_latest_metadata_for_title(title):
-    """Fetch the current metadata blob for an existing VN title, if present."""
+    """Fetch metadata blob for the highest version build of a VN title, if present."""
     if not title:
         return {}
     normalized_title = str(title).strip()
@@ -539,25 +543,39 @@ def get_latest_metadata_for_title(title):
         return {}
 
     with get_connection() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             '''
-            SELECT mo.metadata_json
+            SELECT
+                b.version AS build_version,
+                b.id AS build_id,
+                mv.id AS metadata_version_id,
+                mo.metadata_json
             FROM visual_novels v
             JOIN builds b ON b.vn_id = v.id
             JOIN metadata_versions mv ON mv.build_id = b.id AND mv.is_current = 1
             JOIN metadata_objects mo ON mo.hash = mv.metadata_hash
             WHERE TRIM(v.title) = TRIM(?) COLLATE NOCASE
-            ORDER BY b.created_at DESC, b.id DESC, mv.created_at DESC, mv.id DESC
-            LIMIT 1
             ''',
             (normalized_title,)
-        ).fetchone()
+        ).fetchall()
 
-    if not row or not row['metadata_json']:
+    if not rows:
+        return {}
+
+    latest_row = max(
+        rows,
+        key=lambda row: (
+            normalize_version_for_sort(row["build_version"]),
+            int(row["build_id"] or 0),
+            int(row["metadata_version_id"] or 0),
+        )
+    )
+
+    if not latest_row['metadata_json']:
         return {}
 
     try:
-        parsed = json.loads(row['metadata_json'])
+        parsed = json.loads(latest_row['metadata_json'])
         return parsed if isinstance(parsed, dict) else {}
     except (json.JSONDecodeError, TypeError):
         return {}
@@ -1266,12 +1284,64 @@ def upload_to_b2(filepath, remote_folder=None):
     return True
 
 
-def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VERSION):
+def open_metadata_in_editor_with_defaults(initial_metadata):
+    """Open metadata YAML in an editor, then parse and return it."""
+    editor_candidates = []
+    configured_editor = os.environ.get("VN_ARCHIVER_EDITOR") or os.environ.get("EDITOR")
+    if configured_editor:
+        editor_candidates.append(configured_editor)
+    editor_candidates.extend(["notepad", "nano", "vi"])
+
+    with tempfile.NamedTemporaryFile("w+", suffix=".yaml", delete=False, encoding="utf-8") as tmp:
+        temp_path = tmp.name
+        yaml.safe_dump(initial_metadata, tmp, sort_keys=False, allow_unicode=True)
+
+    selected_editor = None
+    for editor in editor_candidates:
+        command_name = editor.split()[0]
+        if shutil.which(command_name):
+            selected_editor = editor
+            break
+
+    if not selected_editor:
+        os.remove(temp_path)
+        raise RuntimeError("No supported editor found. Install notepad/nano/vi or set VN_ARCHIVER_EDITOR.")
+
+    print(Fore.CYAN + f"Opening metadata in editor: {selected_editor}")
+    subprocess.run(f'{selected_editor} "{temp_path}"', shell=True, check=True)
+
+    try:
+        with open(temp_path, "r", encoding="utf-8") as f:
+            parsed = yaml.safe_load(f) or {}
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+    if not isinstance(parsed, dict):
+        raise ValueError("Edited metadata must be a YAML object.")
+
+    return parsed
+
+
+def _is_empty_metadata_value(value):
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, list):
+        return len(value) == 0
+    return False
+
+
+def create_archive_only(
+    archive_paths=None,
+    metadata_version=DEFAULT_METADATA_VERSION,
+    metadata_input_mode="prompt",
+):
     if archive_paths is None:
         archive_paths = []
     elif isinstance(archive_paths, str):
         archive_paths = [archive_paths]
-
 
     if archive_paths:
         print(f"\nProcessing {len(archive_paths)} file(s)...")
@@ -1293,7 +1363,7 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
         })
 
     # -------------------------------------------------------------------
-    # 2. Prepare metadata (Beautiful TUI Prompts)
+    # 2. Prepare metadata (Prompt or Editor)
     # -------------------------------------------------------------------
     base_template = load_metadata_template(metadata_version)
     prompt_fields = [field for field in resolve_prompt_fields(base_template) if field != "artifact_type"]
@@ -1324,68 +1394,141 @@ def create_archive_only(archive_paths=None, metadata_version=DEFAULT_METADATA_VE
     }
 
     def normalize_list(val):
-        if not val: return None
+        if not val:
+            return None
         return sorted(set([v.strip() for v in val.split(",") if v.strip()]))
 
-    print(Fore.MAGENTA + "\nFill Metadata (Press ENTER to skip fields)\n")
-    print(Fore.CYAN + "Tip: when a [default] is shown, press ENTER to keep it, or type '-' to clear it.")
+    if metadata_input_mode == "editor":
+        template_defaults = base_template.get("defaults", {}) if isinstance(base_template.get("defaults"), dict) else {}
+        metadata_editor_seed = {"metadata_version": metadata_version}
 
-    for field in prompt_fields:
-        if field in ("tags", "target_platform", "aliases", "developer", "publisher"):
-            suggestions = FIELD_SUGGESTIONS.get(field) or []
-            if suggestions:
-                print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
+        preselected_title = input(
+            Fore.YELLOW + "title (used to preload defaults before editor opens): "
+        ).strip()
+        if preselected_title:
+            defaults = get_latest_metadata_for_title(preselected_title) or {}
+            defaults.pop("archives", None)
+            defaults.pop("metadata_version", None)
+            if defaults:
+                print(Fore.GREEN + f"Loaded defaults from latest metadata for '{preselected_title}' before editor launch.")
 
-            default_val = defaults.get(field)
-            if isinstance(default_val, list):
-                default_items = [str(v).strip() for v in default_val if str(v).strip()]
-            elif field in ("developer", "publisher") and isinstance(default_val, str):
-                default_items = [v.strip() for v in default_val.split(',') if v.strip()]
+        for field in prompt_fields:
+            default_value = template_defaults.get(field)
+            if field in defaults and not _is_empty_metadata_value(defaults.get(field)):
+                default_value = defaults.get(field)
+            if default_value is None and field in METADATA_LIST_FIELDS:
+                default_value = []
+            if default_value is None:
+                default_value = ""
+            if field == "title" and preselected_title:
+                default_value = preselected_title
+            metadata_editor_seed[field] = default_value
+
+        edited_metadata = None
+        while True:
+            try:
+                edited_metadata = open_metadata_in_editor_with_defaults(metadata_editor_seed)
+            except (RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+                print(Fore.RED + f"Editor metadata mode failed: {exc}")
+                retry_choice = input(
+                    Fore.YELLOW + "Retry opening editor? [y/N]: "
+                ).strip().lower()
+                if retry_choice in ("y", "yes"):
+                    continue
+                return
+
+            confirm_choice = input(
+                Fore.YELLOW
+                + "Use edited metadata? [Y]es / [E]dit again / [C]ancel: "
+            ).strip().lower()
+            if confirm_choice in ("", "y", "yes"):
+                break
+            if confirm_choice in ("e", "edit", "edit again"):
+                continue
+            if confirm_choice in ("c", "cancel", "n", "no"):
+                print(Fore.YELLOW + "Metadata editor flow cancelled.")
+                return
+            print(Fore.YELLOW + "Invalid choice. Re-opening editor.")
+
+        title_value = str(edited_metadata.get("title", "")).strip()
+        if title_value:
+            defaults = get_latest_metadata_for_title(title_value) or {}
+            defaults.pop("archives", None)
+            defaults.pop("metadata_version", None)
+            if defaults:
+                print(Fore.GREEN + f"Loaded defaults from latest metadata for '{title_value}'.")
+
+        for field in prompt_fields:
+            default_value = metadata_editor_seed.get(field)
+            user_value = edited_metadata.get(field, default_value)
+            if _is_empty_metadata_value(user_value):
+                user_value = defaults.get(field, default_value)
+
+            if field in METADATA_LIST_FIELDS and isinstance(user_value, str):
+                user_value = normalize_list(user_value) or []
+
+            if not _is_empty_metadata_value(user_value):
+                metadata[field] = user_value
+    else:
+        print(Fore.MAGENTA + "\nFill Metadata (Press ENTER to skip fields)\n")
+        print(Fore.CYAN + "Tip: when a [default] is shown, press ENTER to keep it, or type '-' to clear it.")
+
+        for field in prompt_fields:
+            if field in METADATA_LIST_FIELDS:
+                suggestions = FIELD_SUGGESTIONS.get(field) or []
+                if suggestions:
+                    print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
+
+                default_val = defaults.get(field)
+                if isinstance(default_val, list):
+                    default_items = [str(v).strip() for v in default_val if str(v).strip()]
+                elif field in ("developer", "publisher") and isinstance(default_val, str):
+                    default_items = [v.strip() for v in default_val.split(',') if v.strip()]
+                else:
+                    default_items = []
+
+                default_display = ", ".join(default_items) if default_items else ""
+                prompt = f"{field} (comma separated)"
+                if default_display:
+                    prompt += f" [{default_display}]"
+                raw_val = input(Fore.YELLOW + f"{prompt}: ").strip()
+
+                if raw_val == "-":
+                    metadata[field] = []
+                elif raw_val:
+                    metadata[field] = normalize_list(raw_val)
+                elif default_items:
+                    metadata[field] = default_items
+
             else:
-                default_items = []
+                suggestions = FIELD_SUGGESTIONS.get(field) or []
+                if suggestions:
+                    print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
+                default_val = defaults.get(field)
+                prompt = f"{field}"
+                if default_val not in (None, ""):
+                    prompt += f" [{default_val}]"
+                raw_val = input(Fore.YELLOW + f"{prompt}: ").strip()
 
-            default_display = ", ".join(default_items) if default_items else ""
-            prompt = f"{field} (comma separated)"
-            if default_display:
-                prompt += f" [{default_display}]"
-            raw_val = input(Fore.YELLOW + f"{prompt}: ").strip()
-
-            if raw_val == "-":
-                metadata[field] = []
-            elif raw_val:
-                metadata[field] = normalize_list(raw_val)
-            elif default_items:
-                metadata[field] = default_items
-
-        else:
-            suggestions = FIELD_SUGGESTIONS.get(field) or []
-            if suggestions:
-                print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
-            default_val = defaults.get(field)
-            prompt = f"{field}"
-            if default_val not in (None, ""):
-                prompt += f" [{default_val}]"
-            raw_val = input(Fore.YELLOW + f"{prompt}: ").strip()
-
-            if raw_val == "-":
-                metadata[field] = ""
-            elif raw_val:
-                metadata[field] = raw_val
-                if field == "title":
-                    defaults = get_latest_metadata_for_title(raw_val)
-                    if defaults:
-                        print(Fore.GREEN + f"Loaded defaults from latest metadata for '{raw_val}'.")
-                        latest_known_version = defaults.get('version')
-                        if latest_known_version not in (None, ""):
-                            print(
-                                Fore.CYAN
-                                + f"Latest known version is '{latest_known_version}'. "
-                                "Press ENTER on version to reuse it, or type a new version."
-                            )
-                        defaults.pop('archives', None)
-                        defaults.pop('metadata_version', None)
-            elif default_val not in (None, ""):
-                metadata[field] = default_val
+                if raw_val == "-":
+                    metadata[field] = ""
+                elif raw_val:
+                    metadata[field] = raw_val
+                    if field == "title":
+                        defaults = get_latest_metadata_for_title(raw_val)
+                        if defaults:
+                            print(Fore.GREEN + f"Loaded defaults from latest metadata for '{raw_val}'.")
+                            latest_known_version = defaults.get('version')
+                            if latest_known_version not in (None, ""):
+                                print(
+                                    Fore.CYAN
+                                    + f"Latest known version is '{latest_known_version}'. "
+                                    "Press ENTER on version to reuse it, or type a new version."
+                                )
+                            defaults.pop('archives', None)
+                            defaults.pop('metadata_version', None)
+                elif default_val not in (None, ""):
+                    metadata[field] = default_val
 
     # -------------------------------------------------------------------
     # 3. Inject the multi-archive data
