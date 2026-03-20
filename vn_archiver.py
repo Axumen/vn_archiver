@@ -478,6 +478,14 @@ def normalize_metadata_fields(metadata):
     return normalized
 
 
+def is_artifact_metadata(metadata):
+    """Return True when metadata payload represents an artifact-sidecar record."""
+    if not isinstance(metadata, dict):
+        return False
+    content_type = str(metadata.get("content_type") or "").strip().lower()
+    return content_type == "artifact"
+
+
 def normalize_translator_value(value):
     """Normalize translator metadata into a storable TEXT value.
 
@@ -582,12 +590,11 @@ def upsert_series(conn, metadata):
 
 
 def upsert_visual_novel_record(conn, metadata, series_id):
-    aliases = normalize_metadata_list(metadata, 'aliases')
     title = metadata['title']
 
     vn_exists = conn.execute(
         '''
-        SELECT id, developer, publisher, description,
+        SELECT id, series_id, aliases, developer, publisher, description,
                release_status, content_rating, source
         FROM visual_novels
         WHERE title = ?
@@ -606,6 +613,30 @@ def upsert_visual_novel_record(conn, metadata, series_id):
             return incoming_value
         return vn_exists[field_name] if vn_exists else None
 
+    def effective_aliases():
+        if 'aliases' in metadata:
+            return normalize_metadata_list(metadata, 'aliases')
+
+        if not vn_exists:
+            return []
+
+        existing_aliases_raw = vn_exists['aliases']
+        if not existing_aliases_raw:
+            return []
+
+        try:
+            parsed = json.loads(existing_aliases_raw)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return []
+
+    def effective_series_id():
+        if 'series' in metadata:
+            return series_id
+        return vn_exists['series_id'] if vn_exists else series_id
+
     if vn_exists:
         vn_id = vn_exists['id']
         conn.execute('''
@@ -615,9 +646,9 @@ def upsert_visual_novel_record(conn, metadata, series_id):
                 content_rating = ?, source = ?
             WHERE id = ?
         ''', (
-            series_id,
+            effective_series_id(),
             slug,
-            json.dumps(aliases),
+            json.dumps(effective_aliases()),
             normalize_text_list_value(effective_vn('developer')),
             normalize_text_list_value(effective_vn('publisher')),
             effective_vn('description'),
@@ -637,7 +668,7 @@ def upsert_visual_novel_record(conn, metadata, series_id):
         series_id,
         title,
         slug,
-        json.dumps(aliases),
+        json.dumps(effective_aliases()),
         normalize_text_list_value(metadata.get('developer')),
         normalize_text_list_value(metadata.get('publisher')),
         metadata.get('description'),
@@ -819,17 +850,15 @@ def collect_archives_for_db(metadata):
             'sha256': top_level_sha,
             'file_size': metadata.get('file_size_bytes', 0),
             'filename': metadata.get('original_filename') or get_nested_value(metadata, 'archive.filename'),
-            'is_primary': 1,
         })
 
     if 'archives' in metadata and isinstance(metadata['archives'], list):
-        for idx, archive in enumerate(metadata['archives']):
+        for archive in metadata['archives']:
             if isinstance(archive, dict) and archive.get('sha256'):
                 archives_to_process.append({
                     'sha256': archive.get('sha256'),
                     'file_size': archive.get('file_size_bytes', 0),
                     'filename': archive.get('filename'),
-                    'is_primary': 1 if not top_level_sha and idx == 0 else 0,
                 })
 
     if not top_level_sha and archives_to_process:
@@ -847,7 +876,6 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     filename = archive_data.get('filename') or metadata.get('original_filename')
     notes = metadata.get('notes')
     release_date = metadata.get('release_date')
-    is_primary = 1 if archive_data.get('is_primary') else 0
 
     existing_row = conn.execute(
         '''
@@ -860,26 +888,25 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
 
     if existing_row:
         conn.execute(
-            '''
-            UPDATE artifacts
-            SET artifact_type = COALESCE(NULLIF(?, ''), artifact_type),
-                filename = COALESCE(?, filename),
-                is_primary = CASE WHEN ? = 1 THEN 1 ELSE is_primary END,
-                release_date = COALESCE(?, release_date),
-                notes = COALESCE(?, notes)
-            WHERE artifact_id = ?
-            ''',
-            (artifact_type, filename, is_primary, release_date, notes, existing_row['artifact_id'])
+                '''
+                UPDATE artifacts
+                SET artifact_type = COALESCE(NULLIF(?, ''), artifact_type),
+                    filename = COALESCE(?, filename),
+                    release_date = COALESCE(?, release_date),
+                    notes = COALESCE(?, notes)
+                WHERE artifact_id = ?
+                ''',
+            (artifact_type, filename, release_date, notes, existing_row['artifact_id'])
         )
         return existing_row['artifact_id']
 
     conn.execute(
         '''
         INSERT INTO artifacts (
-            build_id, artifact_type, filename, sha256, is_primary, base_artifact_id, release_date, notes
-        ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+            build_id, artifact_type, filename, sha256, base_artifact_id, release_date, notes
+        ) VALUES (?, ?, ?, ?, NULL, ?, ?)
         ''',
-        (build_id, artifact_type, filename, artifact_sha256, is_primary, release_date, notes)
+        (build_id, artifact_type, filename, artifact_sha256, release_date, notes)
     )
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
 
@@ -1013,6 +1040,7 @@ def finalize_artifact_metadata_objects(conn, metadata, artifact_id):
 
 def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_process):
     print(Fore.CYAN + f'\n[DEBUG] Found {len(archives_to_process)} archive(s) to process for DB.')
+    metadata_is_artifact = is_artifact_metadata(metadata)
     artifact_ids = []
 
     for arch_data in archives_to_process:
@@ -1023,7 +1051,10 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
             print(Fore.RED + '[DEBUG] Skipping archive insertion - missing SHA256.')
             continue
 
-        artifact_id = upsert_artifact_record(conn, build_id, metadata, arch_data)
+        if metadata_is_artifact:
+            artifact_id = upsert_artifact_record(conn, build_id, metadata, arch_data)
+            if artifact_id is not None:
+                artifact_ids.append(artifact_id)
 
         archive_exists = conn.execute(
             'SELECT id FROM archives WHERE build_id = ? AND sha256 = ?',
@@ -1053,7 +1084,7 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
         print(Fore.MAGENTA + f'[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.')
 
     try:
-        if is_artifact_metadata(metadata):
+        if metadata_is_artifact:
             for artifact_id in sorted(set(artifact_ids)):
                 finalize_artifact_metadata_objects(conn, metadata, artifact_id)
         else:
@@ -1584,7 +1615,16 @@ def order_metadata_for_yaml(metadata):
     except (ValueError, TypeError):
         template_version = DEFAULT_METADATA_VERSION
 
-    template = load_metadata_template(template_version)
+    try:
+        template = load_metadata_template(template_version)
+    except FileNotFoundError:
+        # Keep quick/sidecar processing resilient when a metadata file references
+        # a template version that is not currently available on disk.
+        print(
+            Fore.YELLOW
+            + f"Metadata template v{template_version} not found; preserving existing field order."
+        )
+        return dict(metadata)
     if not isinstance(template, dict):
         return dict(metadata)
 

@@ -167,7 +167,6 @@ CREATE TABLE IF NOT EXISTS artifacts (
     artifact_type TEXT NOT NULL,
     filename TEXT,
     sha256 TEXT NOT NULL,
-    is_primary INTEGER NOT NULL DEFAULT 0,
     base_artifact_id INTEGER,
     release_date TEXT,
     notes TEXT,
@@ -283,6 +282,30 @@ CREATE TABLE IF NOT EXISTS metadata_versions (
         ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS artifact_metadata_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id INTEGER NOT NULL,
+    metadata_hash TEXT NOT NULL,
+    parent_version_id INTEGER,
+    version_number INTEGER NOT NULL,
+    change_note TEXT,
+    status TEXT DEFAULT 'approved',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_current INTEGER NOT NULL DEFAULT 0,
+
+    FOREIGN KEY (artifact_id)
+        REFERENCES artifacts(artifact_id)
+        ON DELETE CASCADE,
+
+    FOREIGN KEY (metadata_hash)
+        REFERENCES artifact_metadata_objects(hash)
+        ON DELETE RESTRICT,
+
+    FOREIGN KEY (parent_version_id)
+        REFERENCES artifact_metadata_versions(id)
+        ON DELETE SET NULL
+);
+
 
 -- =====================================================
 -- 13. UNIQUE CONSTRAINTS
@@ -297,6 +320,13 @@ WHERE is_current = 1;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_version_number
 ON metadata_versions(build_id, version_number);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_current_artifact_metadata
+ON artifact_metadata_versions(artifact_id)
+WHERE is_current = 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_artifact_version_number
+ON artifact_metadata_versions(artifact_id, version_number);
+
 
 -- =====================================================
 -- 14. INDEXES FOR PERFORMANCE
@@ -310,6 +340,12 @@ ON metadata_versions(build_id);
 
 CREATE INDEX IF NOT EXISTS idx_metadata_versions_hash
 ON metadata_versions(metadata_hash);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_metadata_versions_artifact
+ON artifact_metadata_versions(artifact_id);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_metadata_versions_hash
+ON artifact_metadata_versions(metadata_hash);
 
 
 -- =====================================================
@@ -339,5 +375,19 @@ BEGIN
           SELECT 1
           FROM metadata_versions mv
           WHERE mv.metadata_hash = OLD.metadata_hash
+      );
+END;
+
+-- Remove orphan artifact_metadata_objects after artifact metadata versions are deleted.
+CREATE TRIGGER IF NOT EXISTS trg_artifact_metadata_versions_delete_prune_objects
+AFTER DELETE ON artifact_metadata_versions
+FOR EACH ROW
+BEGIN
+    DELETE FROM artifact_metadata_objects
+    WHERE hash = OLD.metadata_hash
+      AND NOT EXISTS (
+          SELECT 1
+          FROM artifact_metadata_versions amv
+          WHERE amv.metadata_hash = OLD.metadata_hash
       );
 END;
