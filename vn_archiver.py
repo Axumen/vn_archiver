@@ -1584,7 +1584,16 @@ def order_metadata_for_yaml(metadata):
     except (ValueError, TypeError):
         template_version = DEFAULT_METADATA_VERSION
 
-    template = load_metadata_template(template_version)
+    try:
+        template = load_metadata_template(template_version)
+    except FileNotFoundError:
+        # Keep quick/sidecar processing resilient when a metadata file references
+        # a template version that is not currently available on disk.
+        print(
+            Fore.YELLOW
+            + f"Metadata template v{template_version} not found; preserving existing field order."
+        )
+        return dict(metadata)
     if not isinstance(template, dict):
         return dict(metadata)
 
