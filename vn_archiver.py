@@ -1388,12 +1388,26 @@ def create_archive_only(
         template_defaults = base_template.get("defaults", {}) if isinstance(base_template.get("defaults"), dict) else {}
         metadata_editor_seed = {"metadata_version": metadata_version}
 
+        preselected_title = input(
+            Fore.YELLOW + "title (used to preload defaults before editor opens): "
+        ).strip()
+        if preselected_title:
+            defaults = get_latest_metadata_for_title(preselected_title) or {}
+            defaults.pop("archives", None)
+            defaults.pop("metadata_version", None)
+            if defaults:
+                print(Fore.GREEN + f"Loaded defaults from latest metadata for '{preselected_title}' before editor launch.")
+
         for field in prompt_fields:
             default_value = template_defaults.get(field)
+            if field in defaults and not _is_empty_metadata_value(defaults.get(field)):
+                default_value = defaults.get(field)
             if default_value is None and field in METADATA_LIST_FIELDS:
                 default_value = []
             if default_value is None:
                 default_value = ""
+            if field == "title" and preselected_title:
+                default_value = preselected_title
             metadata_editor_seed[field] = default_value
 
         try:
