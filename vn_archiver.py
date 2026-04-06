@@ -24,6 +24,7 @@ from db_manager import get_connection
 INCOMING_DIR = "incoming"
 UPLOADING_DIR = "uploading"
 VN_ARCHIVE_DIR = "vn archive"
+REBUILD_METADATA_DIR = "rebuild_metadata"
 METADATA_TEMPLATE_DIR = Path("metadata")
 DEFAULT_METADATA_VERSION = 1
 B2_CONFIG_FILE = "backblaze_config.yaml"
@@ -76,6 +77,7 @@ def ensure_directories():
     Path(INCOMING_DIR).mkdir(exist_ok=True)
     Path(UPLOADING_DIR).mkdir(exist_ok=True)
     Path(VN_ARCHIVE_DIR).mkdir(exist_ok=True)
+    Path(REBUILD_METADATA_DIR).mkdir(exist_ok=True)
 
 
 def sha256_file(filepath):
@@ -438,7 +440,6 @@ PASSTHROUGH_FIELDS = {
     "original_filename",
     "archived_at",
 }
-
 
 CATEGORY_ALL_FIELDS = CSV_TO_TEXT_FIELDS | CSV_TO_LIST_FIELDS | PASSTHROUGH_FIELDS
 
@@ -1677,6 +1678,8 @@ def finalize_archive_creation(metadata, archives_data):
             target_dir=uploaded_dest_dir
         )
         print(Fore.GREEN + f"Staged metadata for upload: {staged_meta_path}")
+        mirror_metadata_for_rebuild(staged_meta_path, archives_data, build_id)
+        run_rebuild_archive_from_mirror()
 
         latest_meta_path = stage_metadata_yaml_for_upload(metadata, metadata_version_number)
         print(Fore.GREEN + f"Staged metadata in latest upload folder: {latest_meta_path}")
@@ -1987,6 +1990,70 @@ def get_vn_archive_version_dir(metadata):
     target_version_dir = target_parent / current_version
     target_version_dir.mkdir(parents=True, exist_ok=True)
     return target_version_dir
+
+
+def mirror_metadata_for_rebuild(staged_meta_path, archives_data, build_id):
+    """Mirror staged sidecar metadata into rebuild_metadata/ with archive-id-prefixed names."""
+    metadata_dir = Path(REBUILD_METADATA_DIR)
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+
+    if not build_id:
+        print(Fore.YELLOW + "[WARN] Rebuild metadata mirror skipped: missing build ID.")
+        return []
+
+    archive_id_by_sha = {}
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, sha256 FROM archives WHERE build_id = ?",
+            (build_id,),
+        ).fetchall()
+        for row in rows:
+            archive_id_by_sha[str(row["sha256"]).strip().lower()] = int(row["id"])
+
+    staged_name = Path(staged_meta_path).name
+    mirrored_paths = []
+    for archive in archives_data or []:
+        archive_sha = str(archive.get("sha256") or "").strip().lower()
+        archive_id = archive_id_by_sha.get(archive_sha)
+        if not archive_id:
+            print(Fore.YELLOW + f"[WARN] Could not resolve archive ID for metadata mirror ({archive_sha[:8]}...).")
+            continue
+
+        mirrored_path = metadata_dir / f"{archive_id}_{staged_name}"
+        shutil.copy2(staged_meta_path, mirrored_path)
+        mirrored_paths.append(mirrored_path)
+
+    if mirrored_paths:
+        print(Fore.GREEN + f"Mirrored metadata copies for rebuild: {len(mirrored_paths)} file(s).")
+    return mirrored_paths
+
+
+def run_rebuild_archive_from_mirror():
+    """Run rebuild_archive.py against rebuild_metadata/ to rebuild from metadata collection."""
+    source_dir = Path(REBUILD_METADATA_DIR).resolve()
+    if not source_dir.exists():
+        return
+
+    rebuild_script_path = Path(__file__).resolve().with_name("rebuild_archive.py")
+    rebuilt_db_path = source_dir / "archive_rebuild.db"
+    cmd = [
+        sys.executable,
+        str(rebuild_script_path),
+        "--source-dir",
+        ".",
+        "--db-path",
+        "./archive_rebuild.db",
+        "--no-backup",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(source_dir))
+    if result.returncode == 0:
+        print(Fore.GREEN + f"Rebuild mirror DB updated at: {rebuilt_db_path}")
+    else:
+        print(Fore.YELLOW + "[WARN] rebuild_archive.py failed for rebuild metadata mirror.")
+        if result.stdout:
+            print(result.stdout.strip())
+        if result.stderr:
+            print(result.stderr.strip())
 
 
 def get_b2_bucket():
