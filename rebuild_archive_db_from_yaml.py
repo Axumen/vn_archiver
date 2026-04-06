@@ -71,7 +71,7 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
 
     db_manager.DB_PATH = str(db_path)
 
-    from vn_archiver import insert_visual_novel, sync_canon_relationship
+    from vn_archiver import insert_visual_novel, is_artifact_metadata, sync_canon_relationship
     from db_manager import get_connection
 
     if db_path.exists():
@@ -98,6 +98,8 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
     file_count = 0
     metadata_count = 0
     all_docs = []
+    build_docs = []
+    artifact_docs = []
 
     for yaml_path in yaml_files:
         docs = load_metadata_documents(yaml, yaml_path)
@@ -109,10 +111,48 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
             if not doc.get("title"):
                 print(f"[WARN] Skipping metadata without title in {yaml_path}")
                 continue
-            insert_visual_novel(doc)
+            if is_artifact_metadata(doc):
+                artifact_docs.append((yaml_path, doc))
+            else:
+                build_docs.append((yaml_path, doc))
+
+    for yaml_path, doc in build_docs:
+        insert_visual_novel(doc)
+        all_docs.append(doc)
+        metadata_count += 1
+        print(f"[OK] Processed build metadata from {yaml_path}")
+
+    pending_artifacts = list(artifact_docs)
+    max_passes = max(1, len(pending_artifacts))
+    for _ in range(max_passes):
+        if not pending_artifacts:
+            break
+        deferred = []
+        progress = False
+        for yaml_path, doc in pending_artifacts:
+            try:
+                insert_visual_novel(doc)
+            except ValueError as exc:
+                deferred.append((yaml_path, doc))
+                print(f"[WARN] Deferred artifact metadata from {yaml_path}: {exc}")
+                continue
             all_docs.append(doc)
             metadata_count += 1
-            print(f"[OK] Processed metadata from {yaml_path}")
+            progress = True
+            print(f"[OK] Processed artifact metadata from {yaml_path}")
+
+        pending_artifacts = deferred
+        if not progress:
+            break
+
+    if pending_artifacts:
+        unresolved_sources = ", ".join(str(path) for path, _ in pending_artifacts[:5])
+        if len(pending_artifacts) > 5:
+            unresolved_sources += ", ..."
+        raise RuntimeError(
+            "Artifact metadata rebuild failed: mirror should contain successfully processable build/artifact metadata, "
+            f"but {len(pending_artifacts)} artifact document(s) were unresolved. Sources: {unresolved_sources}"
+        )
 
     relationship_count = resync_canon_relationships(all_docs, get_connection, sync_canon_relationship)
     if relationship_count:
