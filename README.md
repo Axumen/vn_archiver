@@ -32,6 +32,26 @@ content_rating: "18+"
 content_mode: "selectable"
 ```
 
+## Metadata capitalization guidance
+
+Capitalization is mostly a data-quality recommendation (not a strict parser rule).
+
+- **Keep proper capitalization** for display/name fields:
+  - `title`, `series`, `developer`, `publisher`, `parent_vn_title`
+  - free-text fields like `description`, `notes`, `change_note`
+- **Prefer lowercase canonical values** for enum/status-like fields:
+  - `release_status`, `distribution_model`, `build_type`, `distribution_platform`
+  - `content_rating`, `content_mode`, `relationship_type`, `artifact_type`
+
+Example:
+
+```yaml
+title: "Fate/Stay Night"
+developer: "Type-Moon"
+relationship_type: "spinoff"
+content_mode: "selectable"
+```
+
 ## Artifact type metadata
 
 When processing a non-runnable artifact, set `artifact_type` using these suggested labels:

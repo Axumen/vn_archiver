@@ -439,7 +439,6 @@ PASSTHROUGH_FIELDS = {
     "archived_at",
 }
 
-
 CATEGORY_ALL_FIELDS = CSV_TO_TEXT_FIELDS | CSV_TO_LIST_FIELDS | PASSTHROUGH_FIELDS
 
 
@@ -751,6 +750,7 @@ def upsert_build_record(conn, vn_id, metadata):
     build_type = metadata.get('build_type')
     build_edition = metadata.get('edition')
     build_distribution_platform = metadata.get('distribution_platform')
+    metadata_is_artifact = is_artifact_metadata(metadata)
     build_exists = conn.execute(
         '''
         SELECT id, build_type, distribution_model, distribution_platform,
@@ -768,9 +768,28 @@ def upsert_build_record(conn, vn_id, metadata):
 
     existing = build_exists if build_exists else {}
 
+    missing = object()
+
+    def metadata_value_for_field(field_name):
+        if field_name not in metadata:
+            return missing
+
+        value = metadata.get(field_name)
+        if metadata_is_artifact:
+            # Artifact sidecars can include optional build-identifying keys as blank
+            # values. Treat blank values as "not provided" so they do not wipe build
+            # columns during artifact processing.
+            if value is None:
+                return missing
+            if isinstance(value, str) and not value.strip():
+                return missing
+
+        return value
+
     def effective(field_name):
-        if field_name in metadata:
-            return metadata.get(field_name)
+        field_value = metadata_value_for_field(field_name)
+        if field_value is not missing:
+            return field_value
         return existing[field_name] if build_exists else None
 
     values = (
@@ -810,6 +829,67 @@ def upsert_build_record(conn, vn_id, metadata):
         *values
     ))
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+
+def resolve_existing_build_for_artifact(conn, metadata):
+    """Resolve an existing build for artifact-sidecar processing.
+
+    Artifact workflows must link to an existing build and must not mutate
+    non-artifact tables/columns as a side effect.
+    """
+    title = str(metadata.get("title") or "").strip()
+    version = str(metadata.get("version") or "").strip()
+    if not title or not version:
+        raise ValueError("Artifact metadata must include non-empty title and version.")
+
+    def normalized_optional(field_name):
+        value = metadata.get(field_name)
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return str(value).strip() or None
+
+    language = normalize_text_list_value(metadata.get("language"))
+    build_type = normalized_optional("build_type")
+    edition = normalized_optional("edition")
+    distribution_platform = normalized_optional("distribution_platform")
+
+    rows = conn.execute(
+        """
+        SELECT b.id AS build_id, b.vn_id
+        FROM builds b
+        JOIN visual_novels v ON v.id = b.vn_id
+        WHERE TRIM(v.title) = TRIM(?) COLLATE NOCASE
+          AND b.version = ?
+          AND (? IS NULL OR COALESCE(b.language, '') = ?)
+          AND (? IS NULL OR COALESCE(b.build_type, '') = ?)
+          AND (? IS NULL OR COALESCE(b.edition, '') = ?)
+          AND (? IS NULL OR COALESCE(b.distribution_platform, '') = ?)
+        ORDER BY b.id DESC
+        """,
+        (
+            title,
+            version,
+            language, language or "",
+            build_type, build_type or "",
+            edition, edition or "",
+            distribution_platform, distribution_platform or "",
+        )
+    ).fetchall()
+
+    if not rows:
+        raise ValueError(
+            "Artifact processing requires an existing build match; no build found for the provided title/version/context."
+        )
+    if len(rows) > 1:
+        raise ValueError(
+            "Artifact processing matched multiple builds; provide build_type/language/edition/distribution_platform to disambiguate."
+        )
+
+    row = rows[0]
+    return row["vn_id"], row["build_id"]
 
 
 def sync_canon_relationship(conn, vn_id, metadata):
@@ -1129,19 +1209,23 @@ def insert_visual_novel(metadata):
     '''
 
     metadata = normalize_metadata_fields(metadata)
+    metadata_is_artifact = is_artifact_metadata(metadata)
 
     with get_connection() as conn:
         if not metadata.get('title'):
             raise ValueError('Title is required.')
 
-        series_id = upsert_series(conn, metadata)
-        vn_id = upsert_visual_novel_record(conn, metadata, series_id)
+        if metadata_is_artifact:
+            vn_id, build_id = resolve_existing_build_for_artifact(conn, metadata)
+        else:
+            series_id = upsert_series(conn, metadata)
+            vn_id = upsert_visual_novel_record(conn, metadata, series_id)
 
-        sync_vn_tags(conn, vn_id, metadata)
+            sync_vn_tags(conn, vn_id, metadata)
 
-        build_id = upsert_build_record(conn, vn_id, metadata)
-        sync_build_target_platforms(conn, build_id, metadata)
-        sync_canon_relationship(conn, vn_id, metadata)
+            build_id = upsert_build_record(conn, vn_id, metadata)
+            sync_build_target_platforms(conn, build_id, metadata)
+            sync_canon_relationship(conn, vn_id, metadata)
 
         archives_to_process, _ = collect_archives_for_db(metadata)
 
