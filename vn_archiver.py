@@ -1679,7 +1679,6 @@ def finalize_archive_creation(metadata, archives_data):
         )
         print(Fore.GREEN + f"Staged metadata for upload: {staged_meta_path}")
         mirror_metadata_for_rebuild(staged_meta_path, archives_data, build_id)
-        run_rebuild_archive_from_mirror()
 
         latest_meta_path = stage_metadata_yaml_for_upload(metadata, metadata_version_number)
         print(Fore.GREEN + f"Staged metadata in latest upload folder: {latest_meta_path}")
@@ -2026,34 +2025,6 @@ def mirror_metadata_for_rebuild(staged_meta_path, archives_data, build_id):
     if mirrored_paths:
         print(Fore.GREEN + f"Mirrored metadata copies for rebuild: {len(mirrored_paths)} file(s).")
     return mirrored_paths
-
-
-def run_rebuild_archive_from_mirror():
-    """Run rebuild_archive.py against rebuild_metadata/ to rebuild from metadata collection."""
-    source_dir = Path(REBUILD_METADATA_DIR).resolve()
-    if not source_dir.exists():
-        return
-
-    rebuild_script_path = Path(__file__).resolve().with_name("rebuild_archive.py")
-    rebuilt_db_path = source_dir / "archive_rebuild.db"
-    cmd = [
-        sys.executable,
-        str(rebuild_script_path),
-        "--source-dir",
-        ".",
-        "--db-path",
-        "./archive_rebuild.db",
-        "--no-backup",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(source_dir))
-    if result.returncode == 0:
-        print(Fore.GREEN + f"Rebuild mirror DB updated at: {rebuilt_db_path}")
-    else:
-        print(Fore.YELLOW + "[WARN] rebuild_archive.py failed for rebuild metadata mirror.")
-        if result.stdout:
-            print(result.stdout.strip())
-        if result.stderr:
-            print(result.stderr.strip())
 
 
 def get_b2_bucket():
