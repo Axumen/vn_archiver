@@ -751,6 +751,7 @@ def upsert_build_record(conn, vn_id, metadata):
     build_type = metadata.get('build_type')
     build_edition = metadata.get('edition')
     build_distribution_platform = metadata.get('distribution_platform')
+    metadata_is_artifact = is_artifact_metadata(metadata)
     build_exists = conn.execute(
         '''
         SELECT id, build_type, distribution_model, distribution_platform,
@@ -768,9 +769,28 @@ def upsert_build_record(conn, vn_id, metadata):
 
     existing = build_exists if build_exists else {}
 
+    missing = object()
+
+    def metadata_value_for_field(field_name):
+        if field_name not in metadata:
+            return missing
+
+        value = metadata.get(field_name)
+        if metadata_is_artifact:
+            # Artifact sidecars can include optional build-identifying keys as blank
+            # values. Treat blank values as "not provided" so they do not wipe build
+            # columns during artifact processing.
+            if value is None:
+                return missing
+            if isinstance(value, str) and not value.strip():
+                return missing
+
+        return value
+
     def effective(field_name):
-        if field_name in metadata:
-            return metadata.get(field_name)
+        field_value = metadata_value_for_field(field_name)
+        if field_value is not missing:
+            return field_value
         return existing[field_name] if build_exists else None
 
     values = (
