@@ -146,8 +146,12 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
             break
 
     if pending_artifacts:
-        print(
-            f"[WARN] Skipped {len(pending_artifacts)} artifact metadata file(s) because matching build rows were not available."
+        unresolved_sources = ", ".join(str(path) for path, _ in pending_artifacts[:5])
+        if len(pending_artifacts) > 5:
+            unresolved_sources += ", ..."
+        raise RuntimeError(
+            "Artifact metadata rebuild failed: mirror should contain successfully processable build/artifact metadata, "
+            f"but {len(pending_artifacts)} artifact document(s) were unresolved. Sources: {unresolved_sources}"
         )
 
     relationship_count = resync_canon_relationships(all_docs, get_connection, sync_canon_relationship)
