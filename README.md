@@ -182,10 +182,19 @@ However, this is **not** a full-fidelity rebuild of every table:
 Use `rebuild_archive_db_from_yaml.py` to recreate `archive.db` by scanning a folder tree for metadata YAML files and re-processing each document through the normal insert pipeline.
 The rebuild now performs a second canon-relationship sync pass so parent/child VN links are restored even when child metadata is processed before parent metadata in file order.
 
+When running `Create Archive` (both VN and artifact content flows), vn_archiver now also mirrors sidecar metadata into `rebuild_metadata/` using archive-id-prefixed names:
+
+- format: `<archive_id>_<same_sidecar_name_as_uploading>.yaml`
+- this mirror is intended as a rolling metadata collection for rebuild workflows
+- `rebuild_archive.py` is automatically invoked against `rebuild_metadata/` and writes `rebuild_metadata/archive_rebuild.db`
+
 ```bash
 # Rebuild archive.db from YAML files under current folder (creates backup if DB exists)
 python rebuild_archive_db_from_yaml.py --source-dir .
 
 # Rebuild a specific DB path without creating a backup
 python rebuild_archive_db_from_yaml.py --source-dir ./metadata_dump --db-path ./archive.db --no-backup
+
+# Rebuild from the metadata mirror folder used by archive creation
+python rebuild_archive.py
 ```
