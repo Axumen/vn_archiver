@@ -2031,20 +2031,21 @@ def mirror_metadata_for_rebuild(staged_meta_path, archives_data, build_id):
 def run_rebuild_archive_from_mirror():
     """Run rebuild_archive.py against rebuild_metadata/ to rebuild from metadata collection."""
     source_dir = Path(REBUILD_METADATA_DIR).resolve()
-    rebuilt_db_path = source_dir / "archive_rebuild.db"
     if not source_dir.exists():
         return
 
+    rebuild_script_path = Path(__file__).resolve().with_name("rebuild_archive.py")
+    rebuilt_db_path = source_dir / "archive_rebuild.db"
     cmd = [
         sys.executable,
-        "rebuild_archive.py",
+        str(rebuild_script_path),
         "--source-dir",
-        str(source_dir),
+        ".",
         "--db-path",
-        str(rebuilt_db_path),
+        "./archive_rebuild.db",
         "--no-backup",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(source_dir))
     if result.returncode == 0:
         print(Fore.GREEN + f"Rebuild mirror DB updated at: {rebuilt_db_path}")
     else:
