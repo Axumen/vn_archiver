@@ -167,12 +167,14 @@ CREATE TABLE IF NOT EXISTS artifacts (
     artifact_type TEXT NOT NULL,
     filename TEXT,
     sha256 TEXT NOT NULL,
+    file_object_sha256 TEXT,
     base_artifact_id INTEGER,
     release_date TEXT,
     notes TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE,
+    FOREIGN KEY (file_object_sha256) REFERENCES archive_objects(sha256) ON DELETE SET NULL,
     FOREIGN KEY (base_artifact_id) REFERENCES artifacts(artifact_id) ON DELETE SET NULL
 );
 
@@ -187,6 +189,28 @@ ON artifacts(base_artifact_id);
 
 CREATE INDEX IF NOT EXISTS idx_artifacts_type
 ON artifacts(artifact_type);
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_file_object_sha
+ON artifacts(file_object_sha256);
+
+-- Derived artifacts (patch/mod/hotfix/translation_patch) must link to a base artifact.
+CREATE TRIGGER IF NOT EXISTS trg_artifacts_require_base_insert
+BEFORE INSERT ON artifacts
+FOR EACH ROW
+WHEN LOWER(COALESCE(NEW.artifact_type, '')) IN ('patch', 'mod', 'hotfix', 'translation_patch')
+     AND NEW.base_artifact_id IS NULL
+BEGIN
+    SELECT RAISE(ABORT, 'derived artifacts require base_artifact_id');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_artifacts_require_base_update
+BEFORE UPDATE ON artifacts
+FOR EACH ROW
+WHEN LOWER(COALESCE(NEW.artifact_type, '')) IN ('patch', 'mod', 'hotfix', 'translation_patch')
+     AND NEW.base_artifact_id IS NULL
+BEGIN
+    SELECT RAISE(ABORT, 'derived artifacts require base_artifact_id');
+END;
 
 -- =====================================================
 -- 8. TAGS (Work-Level)

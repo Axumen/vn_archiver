@@ -52,22 +52,41 @@ relationship_type: "spinoff"
 content_mode: "selectable"
 ```
 
+## Metadata validation behavior
+
+Before DB insertion, vn_archiver now performs strict contract validation against metadata templates:
+- required fields from the selected template must be present and non-empty
+- unknown top-level fields are rejected
+- date fields (`original_release_date`, `release_date`) must use `YYYY-MM-DD`
+
 ## Artifact type metadata
 
 When processing a non-runnable artifact, set `artifact_type` using these suggested labels:
-`game_archive`, `patch`, `instructions`, `readme`, `manual`, `soundtrack`, `bonus`, `checksum`.
+`base_game`, `game_archive`, `patch`, `mod`, `hotfix`, `translation_patch`,
+`instructions`, `readme`, `manual`, `soundtrack`, `bonus`, `checksum`.
+
+Derived artifact types (`patch`, `mod`, `hotfix`, `translation_patch`) must point to
+their base artifact on the same build. Provide one of:
+- `base_artifact_sha256` (recommended, unique)
+- `base_artifact_filename` (allowed when unique on build)
+
+If exactly one `base_game`/`game_archive` exists for that build, vn_archiver will auto-link it.
 
 `Process Artifact` in the TUI accepts both `.zip` and non-zip artifact files (YAML files are excluded).
 It now requires entering a title first, then selecting an existing build from the database so the artifact is linked to a specific build.
 
 Artifact records are normalized in the `artifacts` table and linked to their parent `builds` row.
 Current core columns: `artifact_id`, `build_id`, `artifact_type`, `filename`, `sha256`,
-`base_artifact_id`, `release_date`, `notes`, `created_at`.
+`file_object_sha256`, `base_artifact_id`, `release_date`, `notes`, `created_at`.
 Artifact sidecars use the same metadata object/version handling as other metadata sidecars.
 Use `metadata/metadata_artifact_v1.yaml` as a baseline template for artifact-focused sidecars.
 
+Uploaded artifacts are explicitly linked to content-addressed file objects through
+`artifacts.file_object_sha256 -> archive_objects.sha256`.
+
 ```yaml
 artifact_type: "patch"
+base_artifact_sha256: "0123abcd..."
 ```
 
 ## Translator metadata for multi-language releases
