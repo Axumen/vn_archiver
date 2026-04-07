@@ -47,8 +47,12 @@ SUGGESTED_CONTENT_TYPE = [
 ]
 
 SUGGESTED_ARTIFACT_TYPE = [
+    "base_game",
     "game_archive",
     "patch",
+    "mod",
+    "hotfix",
+    "translation_patch",
     "instructions",
     "readme",
     "manual",
@@ -56,6 +60,9 @@ SUGGESTED_ARTIFACT_TYPE = [
     "bonus",
     "checksum",
 ]
+
+BASE_ARTIFACT_TYPES = {"base_game", "game_archive"}
+DERIVED_ARTIFACT_TYPES = {"patch", "mod", "hotfix", "translation_patch"}
 
 METADATA_LIST_FIELDS = {"tags", "target_platform", "aliases", "developer", "publisher"}
 
@@ -969,6 +976,65 @@ def collect_archives_for_db(metadata):
     return archives_to_process, top_level_sha
 
 
+def _resolve_base_artifact_id(conn, build_id, metadata, artifact_type):
+    base_sha256 = str(metadata.get("base_artifact_sha256") or "").strip().lower() or None
+    base_filename = str(metadata.get("base_artifact_filename") or "").strip() or None
+
+    if base_sha256:
+        row = conn.execute(
+            """
+            SELECT artifact_id
+            FROM artifacts
+            WHERE build_id = ?
+              AND LOWER(sha256) = ?
+            """,
+            (build_id, base_sha256),
+        ).fetchone()
+        if not row:
+            raise ValueError("base_artifact_sha256 does not match any artifact on the selected build.")
+        return row["artifact_id"]
+
+    if base_filename:
+        rows = conn.execute(
+            """
+            SELECT artifact_id
+            FROM artifacts
+            WHERE build_id = ?
+              AND filename = ?
+            ORDER BY artifact_id DESC
+            """,
+            (build_id, base_filename),
+        ).fetchall()
+        if not rows:
+            raise ValueError("base_artifact_filename does not match any artifact on the selected build.")
+        if len(rows) > 1:
+            raise ValueError("base_artifact_filename matched multiple artifacts; use base_artifact_sha256.")
+        return rows[0]["artifact_id"]
+
+    if artifact_type in DERIVED_ARTIFACT_TYPES:
+        base_rows = conn.execute(
+            """
+            SELECT artifact_id
+            FROM artifacts
+            WHERE build_id = ?
+              AND LOWER(artifact_type) IN ({})
+            ORDER BY artifact_id DESC
+            """.format(",".join("?" for _ in BASE_ARTIFACT_TYPES)),
+            (build_id, *sorted(BASE_ARTIFACT_TYPES)),
+        ).fetchall()
+        if len(base_rows) == 1:
+            return base_rows[0]["artifact_id"]
+        if not base_rows:
+            raise ValueError(
+                "Derived artifact types require a base artifact. Provide base_artifact_sha256 or ingest a base_game/game_archive first."
+            )
+        raise ValueError(
+            "Derived artifact type matched multiple base artifacts; provide base_artifact_sha256 to disambiguate."
+        )
+
+    return None
+
+
 def upsert_artifact_record(conn, build_id, metadata, archive_data):
     artifact_sha256 = archive_data.get('sha256')
     if not artifact_sha256:
@@ -978,10 +1044,11 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     filename = archive_data.get('filename') or metadata.get('original_filename')
     notes = metadata.get('notes')
     release_date = metadata.get('release_date')
+    base_artifact_id = _resolve_base_artifact_id(conn, build_id, metadata, artifact_type)
 
     existing_row = conn.execute(
         '''
-        SELECT artifact_id
+        SELECT artifact_id, base_artifact_id
         FROM artifacts
         WHERE build_id = ? AND sha256 = ?
         ''',
@@ -989,26 +1056,35 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     ).fetchone()
 
     if existing_row:
+        resolved_base_artifact_id = base_artifact_id if base_artifact_id is not None else existing_row["base_artifact_id"]
+        if resolved_base_artifact_id == existing_row["artifact_id"]:
+            raise ValueError("Artifact cannot reference itself as base_artifact_id.")
         conn.execute(
                 '''
                 UPDATE artifacts
                 SET artifact_type = COALESCE(NULLIF(?, ''), artifact_type),
                     filename = COALESCE(?, filename),
+                    base_artifact_id = ?,
                     release_date = COALESCE(?, release_date),
                     notes = COALESCE(?, notes)
                 WHERE artifact_id = ?
                 ''',
-            (artifact_type, filename, release_date, notes, existing_row['artifact_id'])
+            (artifact_type, filename, resolved_base_artifact_id, release_date, notes, existing_row['artifact_id'])
         )
         return existing_row['artifact_id']
+
+    if artifact_type in DERIVED_ARTIFACT_TYPES and base_artifact_id is None:
+        raise ValueError(
+            "Derived artifact types require base artifact linkage. Provide base_artifact_sha256."
+        )
 
     conn.execute(
         '''
         INSERT INTO artifacts (
             build_id, artifact_type, filename, sha256, base_artifact_id, release_date, notes
-        ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ''',
-        (build_id, artifact_type, filename, artifact_sha256, release_date, notes)
+        (build_id, artifact_type, filename, artifact_sha256, base_artifact_id, release_date, notes)
     )
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
 
