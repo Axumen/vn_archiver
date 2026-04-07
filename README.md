@@ -52,6 +52,13 @@ relationship_type: "spinoff"
 content_mode: "selectable"
 ```
 
+## Metadata validation behavior
+
+Before DB insertion, vn_archiver now performs strict contract validation against metadata templates:
+- required fields from the selected template must be present and non-empty
+- unknown top-level fields are rejected
+- date fields (`original_release_date`, `release_date`) must use `YYYY-MM-DD`
+
 ## Artifact type metadata
 
 When processing a non-runnable artifact, set `artifact_type` using these suggested labels:

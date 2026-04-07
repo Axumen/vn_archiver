@@ -18,6 +18,7 @@ from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from db_manager import get_connection
 from domain_layer import VisualNovelDomainService
 from ingestion_repository import VnIngestionRepository
+from metadata_validation import validate_metadata_contract
 
 # ==============================
 # CONFIGURATION
@@ -165,6 +166,10 @@ def get_metadata_template_path(version=DEFAULT_METADATA_VERSION):
     return METADATA_TEMPLATE_DIR / f"metadata_v{version}.yaml"
 
 
+def get_artifact_metadata_template_path(version=DEFAULT_METADATA_VERSION):
+    return METADATA_TEMPLATE_DIR / f"metadata_artifact_v{version}.yaml"
+
+
 def get_available_metadata_template_versions():
     if not METADATA_TEMPLATE_DIR.exists():
         return []
@@ -204,6 +209,20 @@ def load_metadata_template(version=None):
     if not template_path.exists():
         raise FileNotFoundError(
             f"Metadata template not found for version {version}: {template_path}"
+        )
+
+    with open(template_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def load_artifact_metadata_template(version=None):
+    if version is None:
+        version = detect_latest_metadata_template_version()
+
+    template_path = get_artifact_metadata_template_path(version)
+    if not template_path.exists():
+        raise FileNotFoundError(
+            f"Artifact metadata template not found for version {version}: {template_path}"
         )
 
     with open(template_path, "r", encoding="utf-8") as f:
@@ -441,7 +460,10 @@ PASSTHROUGH_FIELDS = {
     "relationship_type",
     "notes",
     "change_note",
+    "content_type",
     "artifact_type",
+    "base_artifact_sha256",
+    "base_artifact_filename",
     "archives",
     "archive",
     "sha256",
@@ -497,7 +519,10 @@ def is_artifact_metadata(metadata):
     if not isinstance(metadata, dict):
         return False
     content_type = str(metadata.get("content_type") or "").strip().lower()
-    return content_type == "artifact"
+    if content_type == "artifact":
+        return True
+    artifact_type = str(metadata.get("artifact_type") or "").strip().lower()
+    return bool(artifact_type)
 
 
 def normalize_translator_value(value):
@@ -1325,6 +1350,14 @@ def insert_visual_novel(metadata):
     '''
 
     metadata = normalize_metadata_fields(metadata)
+    metadata_version = int(metadata.get("metadata_version") or detect_latest_metadata_template_version())
+    metadata_is_artifact = is_artifact_metadata(metadata)
+    template = (
+        load_artifact_metadata_template(metadata_version)
+        if metadata_is_artifact
+        else load_metadata_template(metadata_version)
+    )
+    validate_metadata_contract(metadata, template, CATEGORY_ALL_FIELDS)
 
     with get_connection() as conn:
         repository = VnIngestionRepository(
