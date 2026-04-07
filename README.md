@@ -77,9 +77,12 @@ It now requires entering a title first, then selecting an existing build from th
 
 Artifact records are normalized in the `artifacts` table and linked to their parent `builds` row.
 Current core columns: `artifact_id`, `build_id`, `artifact_type`, `filename`, `sha256`,
-`base_artifact_id`, `release_date`, `notes`, `created_at`.
+`file_object_sha256`, `base_artifact_id`, `release_date`, `notes`, `created_at`.
 Artifact sidecars use the same metadata object/version handling as other metadata sidecars.
 Use `metadata/metadata_artifact_v1.yaml` as a baseline template for artifact-focused sidecars.
+
+Uploaded artifacts are explicitly linked to content-addressed file objects through
+`artifacts.file_object_sha256 -> archive_objects.sha256`.
 
 ```yaml
 artifact_type: "patch"

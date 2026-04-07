@@ -11,7 +11,7 @@ SCHEMA_PATH = "db_schema.sql"
 BACKUP_DIR = "db_backups"
 
 # Database is treated as fresh-initialized from db_schema.sql.
-TARGET_SCHEMA_VERSION = 4
+TARGET_SCHEMA_VERSION = 5
 BACKUP_DEBOUNCE_SECONDS = 1.0
 
 WRITE_SQL_PREFIXES = (
@@ -490,6 +490,8 @@ def run_migrations(conn, current_version):
         if current_version < 4:
             # v4 relies on schema re-application for artifact metadata version tables/indexes.
             pass
+        if current_version < 5:
+            _migrate_artifact_file_object_link(conn)
 
         # Stamp DB at the current supported schema version.
         conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
@@ -537,6 +539,21 @@ def _migrate_build_identity_index(conn):
             COALESCE(edition, ''),
             COALESCE(distribution_platform, '')
         );
+        """
+    )
+
+
+def _migrate_artifact_file_object_link(conn):
+    """
+    Schema migration for v5:
+    add artifacts.file_object_sha256 to explicitly link artifacts to file objects.
+    """
+    if not _column_exists(conn, "artifacts", "file_object_sha256"):
+        conn.execute("ALTER TABLE artifacts ADD COLUMN file_object_sha256 TEXT;")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_artifacts_file_object_sha
+        ON artifacts(file_object_sha256);
         """
     )
 

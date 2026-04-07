@@ -1073,7 +1073,7 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
 
     existing_row = conn.execute(
         '''
-        SELECT artifact_id, base_artifact_id
+        SELECT artifact_id, base_artifact_id, file_object_sha256
         FROM artifacts
         WHERE build_id = ? AND sha256 = ?
         ''',
@@ -1089,12 +1089,13 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
                 UPDATE artifacts
                 SET artifact_type = COALESCE(NULLIF(?, ''), artifact_type),
                     filename = COALESCE(?, filename),
+                    file_object_sha256 = COALESCE(file_object_sha256, ?),
                     base_artifact_id = ?,
                     release_date = COALESCE(?, release_date),
                     notes = COALESCE(?, notes)
                 WHERE artifact_id = ?
                 ''',
-            (artifact_type, filename, resolved_base_artifact_id, release_date, notes, existing_row['artifact_id'])
+            (artifact_type, filename, artifact_sha256, resolved_base_artifact_id, release_date, notes, existing_row['artifact_id'])
         )
         return existing_row['artifact_id']
 
@@ -1106,12 +1107,24 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     conn.execute(
         '''
         INSERT INTO artifacts (
-            build_id, artifact_type, filename, sha256, base_artifact_id, release_date, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            build_id, artifact_type, filename, sha256, file_object_sha256, base_artifact_id, release_date, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''',
-        (build_id, artifact_type, filename, artifact_sha256, base_artifact_id, release_date, notes)
+        (build_id, artifact_type, filename, artifact_sha256, None, base_artifact_id, release_date, notes)
     )
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+
+def link_artifact_to_file_object(conn, build_id, artifact_sha256):
+    conn.execute(
+        """
+        UPDATE artifacts
+        SET file_object_sha256 = ?
+        WHERE build_id = ?
+          AND LOWER(sha256) = LOWER(?)
+        """,
+        (artifact_sha256, build_id, artifact_sha256),
+    )
 
 
 def finalize_metadata_objects(conn, metadata, vn_id, build_id):
@@ -1259,32 +1272,33 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
             if artifact_id is not None:
                 artifact_ids.append(artifact_id)
 
-        archive_exists = conn.execute(
-            'SELECT id FROM archives WHERE build_id = ? AND sha256 = ?',
-            (build_id, sha256)
-        ).fetchone()
+        if not metadata_is_artifact:
+            archive_exists = conn.execute(
+                'SELECT id FROM archives WHERE build_id = ? AND sha256 = ?',
+                (build_id, sha256)
+            ).fetchone()
 
-        if not archive_exists:
-            print(Fore.YELLOW + f'[DEBUG] Executing SQL INSERT INTO archives for {sha256[:8]}...')
-            try:
-                conn.execute('''
-                    INSERT INTO archives (
-                        build_id, sha256, file_size_bytes,
-                        metadata_json, metadata_version
-                    ) VALUES (?, ?, ?, ?, ?)
-                ''', (
-                    build_id,
-                    sha256,
-                    file_size,
-                    json.dumps(metadata),
-                    metadata.get('metadata_version', 1)
-                ))
-                print(Fore.GREEN + f'[DEBUG] Successfully queued archive {sha256[:8]} for commit.')
-            except Exception as ex:
-                print(Fore.RED + f'[CRITICAL] SQL Archive Insert Failed: {ex}')
-            continue
+            if not archive_exists:
+                print(Fore.YELLOW + f'[DEBUG] Executing SQL INSERT INTO archives for {sha256[:8]}...')
+                try:
+                    conn.execute('''
+                        INSERT INTO archives (
+                            build_id, sha256, file_size_bytes,
+                            metadata_json, metadata_version
+                        ) VALUES (?, ?, ?, ?, ?)
+                    ''', (
+                        build_id,
+                        sha256,
+                        file_size,
+                        json.dumps(metadata),
+                        metadata.get('metadata_version', 1)
+                    ))
+                    print(Fore.GREEN + f'[DEBUG] Successfully queued archive {sha256[:8]} for commit.')
+                except Exception as ex:
+                    print(Fore.RED + f'[CRITICAL] SQL Archive Insert Failed: {ex}')
+                continue
 
-        print(Fore.MAGENTA + f'[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.')
+            print(Fore.MAGENTA + f'[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.')
 
     try:
         if metadata_is_artifact:
@@ -2438,6 +2452,7 @@ def upload_archive(file_path):
                 """,
                 (build_id, archive_sha256)
             )
+            link_artifact_to_file_object(conn, build_id, archive_sha256)
             conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", archive_sha256, build_id))
             sync_visual_novel_upload_status(conn, vn_id)
 
@@ -2534,6 +2549,7 @@ def upload_archive(file_path):
                     """,
                     (build_id, archive_sha256)
                 )
+                link_artifact_to_file_object(conn, build_id, archive_sha256)
 
                 conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", archive_sha256, build_id))
                 sync_visual_novel_upload_status(conn, vn_id)

@@ -21,6 +21,7 @@ def make_conn():
             artifact_type TEXT NOT NULL,
             filename TEXT,
             sha256 TEXT NOT NULL,
+            file_object_sha256 TEXT,
             base_artifact_id INTEGER,
             release_date TEXT,
             notes TEXT
@@ -44,8 +45,8 @@ def test_patch_requires_base_when_none_exists():
 def test_patch_auto_links_single_base_artifact():
     conn = make_conn()
     conn.execute(
-        "INSERT INTO artifacts (build_id, artifact_type, filename, sha256, base_artifact_id) VALUES (?, ?, ?, ?, ?)",
-        (1, "game_archive", "base.zip", "base-sha", None),
+        "INSERT INTO artifacts (build_id, artifact_type, filename, sha256, file_object_sha256, base_artifact_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (1, "game_archive", "base.zip", "base-sha", None, None),
     )
 
     artifact_id = upsert_artifact_record(
@@ -62,10 +63,10 @@ def test_patch_auto_links_single_base_artifact():
 def test_patch_requires_disambiguation_with_multiple_bases():
     conn = make_conn()
     conn.executemany(
-        "INSERT INTO artifacts (build_id, artifact_type, filename, sha256, base_artifact_id) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO artifacts (build_id, artifact_type, filename, sha256, file_object_sha256, base_artifact_id) VALUES (?, ?, ?, ?, ?, ?)",
         [
-            (1, "game_archive", "baseA.zip", "base-sha-a", None),
-            (1, "base_game", "baseB.zip", "base-sha-b", None),
+            (1, "game_archive", "baseA.zip", "base-sha-a", None, None),
+            (1, "base_game", "baseB.zip", "base-sha-b", None, None),
         ],
     )
 
