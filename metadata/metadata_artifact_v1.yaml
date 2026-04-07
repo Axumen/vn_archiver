@@ -14,6 +14,8 @@ optional:
   - distribution_platform
   - language
   - edition
+  - base_artifact_sha256
+  - base_artifact_filename
   - release_date
   - notes
   - change_note
@@ -25,6 +27,7 @@ optional:
 # distribution_platform: "steam"
 # language: "english"
 # edition: "default"
+# base_artifact_sha256: "0123abcd..."
 # release_date: "2026-03-19"
 # artifact_type: "patch"
 # notes: "Standalone artifact sidecar baseline."
