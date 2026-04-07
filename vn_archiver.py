@@ -1322,6 +1322,42 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
     return None
 
 
+class VNService:
+    """Title-level service for VN identity and work-level metadata."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def upsert_vn(self, metadata):
+        series_id = upsert_series(self.conn, metadata)
+        vn_id = upsert_visual_novel_record(self.conn, metadata, series_id)
+        sync_vn_tags(self.conn, vn_id, metadata)
+        sync_canon_relationship(self.conn, vn_id, metadata)
+        return vn_id
+
+
+class VersionService:
+    """Version/build-level service for release records and build metadata."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def upsert_build(self, vn_id, metadata):
+        build_id = upsert_build_record(self.conn, vn_id, metadata)
+        sync_build_target_platforms(self.conn, build_id, metadata)
+        return build_id
+
+
+class ArtifactService:
+    """Artifact-level service for linking file artifacts to existing builds."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def resolve_target_build(self, metadata):
+        return resolve_existing_build_for_artifact(self.conn, metadata)
+
+
 def insert_visual_novel(metadata):
     '''
     Inserts or updates the normalized metadata into the SQLite database.
