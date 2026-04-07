@@ -16,6 +16,7 @@ from datetime import date, datetime
 from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from db_manager import get_connection
+from domain_layer import VisualNovelDomainService
 
 # ==============================
 # CONFIGURATION
@@ -1247,42 +1248,24 @@ def insert_visual_novel(metadata):
     '''
 
     metadata = normalize_metadata_fields(metadata)
-    metadata_is_artifact = is_artifact_metadata(metadata)
 
     with get_connection() as conn:
-        vn_service = VNService(conn)
-        version_service = VersionService(conn)
-        artifact_service = ArtifactService(conn)
-
-        if not metadata.get('title'):
-            raise ValueError('Title is required.')
-
-        if metadata_is_artifact:
-            vn_id, build_id = artifact_service.resolve_target_build(metadata)
-        else:
-            vn_id = vn_service.upsert_vn(metadata)
-            build_id = version_service.upsert_build(vn_id, metadata)
-
-        archives_to_process, _ = collect_archives_for_db(metadata)
-
-        early_return_vn_id = process_archives_for_build(
+        domain_service = VisualNovelDomainService(
             conn,
-            build_id,
-            metadata,
-            vn_id,
-            archives_to_process
+            is_artifact_metadata=is_artifact_metadata,
+            upsert_series=upsert_series,
+            upsert_visual_novel_record=upsert_visual_novel_record,
+            sync_vn_tags=sync_vn_tags,
+            sync_canon_relationship=sync_canon_relationship,
+            upsert_build_record=upsert_build_record,
+            sync_build_target_platforms=sync_build_target_platforms,
+            resolve_existing_build_for_artifact=resolve_existing_build_for_artifact,
+            collect_archives_for_db=collect_archives_for_db,
+            process_archives_for_build=process_archives_for_build,
         )
-        if early_return_vn_id:
-            return early_return_vn_id
+        result = domain_service.ingest(metadata)
 
-        return vn_id
-
-        # ==========================================================
-        # RETURN VALUE (For new inserts and metadata-only operations)
-        # ==========================================================
-        # If we reached this point, the VN/build metadata was inserted or
-        # updated successfully even when no archive row existed yet.
-        return vn_id
+        return result.vn_id
 
 
 # ==============================
