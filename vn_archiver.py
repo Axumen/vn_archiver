@@ -16,6 +16,9 @@ from datetime import date, datetime
 from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from db_manager import get_connection
+from domain_layer import VisualNovelDomainService
+from ingestion_repository import VnIngestionRepository
+from metadata_validation import validate_metadata_contract
 
 # ==============================
 # CONFIGURATION
@@ -45,8 +48,12 @@ SUGGESTED_CONTENT_TYPE = [
 ]
 
 SUGGESTED_ARTIFACT_TYPE = [
+    "base_game",
     "game_archive",
     "patch",
+    "mod",
+    "hotfix",
+    "translation_patch",
     "instructions",
     "readme",
     "manual",
@@ -54,6 +61,9 @@ SUGGESTED_ARTIFACT_TYPE = [
     "bonus",
     "checksum",
 ]
+
+BASE_ARTIFACT_TYPES = {"base_game", "game_archive"}
+DERIVED_ARTIFACT_TYPES = {"patch", "mod", "hotfix", "translation_patch"}
 
 METADATA_LIST_FIELDS = {"tags", "target_platform", "aliases", "developer", "publisher"}
 
@@ -156,6 +166,10 @@ def get_metadata_template_path(version=DEFAULT_METADATA_VERSION):
     return METADATA_TEMPLATE_DIR / f"metadata_v{version}.yaml"
 
 
+def get_artifact_metadata_template_path(version=DEFAULT_METADATA_VERSION):
+    return METADATA_TEMPLATE_DIR / f"metadata_artifact_v{version}.yaml"
+
+
 def get_available_metadata_template_versions():
     if not METADATA_TEMPLATE_DIR.exists():
         return []
@@ -195,6 +209,20 @@ def load_metadata_template(version=None):
     if not template_path.exists():
         raise FileNotFoundError(
             f"Metadata template not found for version {version}: {template_path}"
+        )
+
+    with open(template_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def load_artifact_metadata_template(version=None):
+    if version is None:
+        version = detect_latest_metadata_template_version()
+
+    template_path = get_artifact_metadata_template_path(version)
+    if not template_path.exists():
+        raise FileNotFoundError(
+            f"Artifact metadata template not found for version {version}: {template_path}"
         )
 
     with open(template_path, "r", encoding="utf-8") as f:
@@ -432,7 +460,10 @@ PASSTHROUGH_FIELDS = {
     "relationship_type",
     "notes",
     "change_note",
+    "content_type",
     "artifact_type",
+    "base_artifact_sha256",
+    "base_artifact_filename",
     "archives",
     "archive",
     "sha256",
@@ -488,7 +519,10 @@ def is_artifact_metadata(metadata):
     if not isinstance(metadata, dict):
         return False
     content_type = str(metadata.get("content_type") or "").strip().lower()
-    return content_type == "artifact"
+    if content_type == "artifact":
+        return True
+    artifact_type = str(metadata.get("artifact_type") or "").strip().lower()
+    return bool(artifact_type)
 
 
 def normalize_translator_value(value):
@@ -967,6 +1001,65 @@ def collect_archives_for_db(metadata):
     return archives_to_process, top_level_sha
 
 
+def _resolve_base_artifact_id(conn, build_id, metadata, artifact_type):
+    base_sha256 = str(metadata.get("base_artifact_sha256") or "").strip().lower() or None
+    base_filename = str(metadata.get("base_artifact_filename") or "").strip() or None
+
+    if base_sha256:
+        row = conn.execute(
+            """
+            SELECT artifact_id
+            FROM artifacts
+            WHERE build_id = ?
+              AND LOWER(sha256) = ?
+            """,
+            (build_id, base_sha256),
+        ).fetchone()
+        if not row:
+            raise ValueError("base_artifact_sha256 does not match any artifact on the selected build.")
+        return row["artifact_id"]
+
+    if base_filename:
+        rows = conn.execute(
+            """
+            SELECT artifact_id
+            FROM artifacts
+            WHERE build_id = ?
+              AND filename = ?
+            ORDER BY artifact_id DESC
+            """,
+            (build_id, base_filename),
+        ).fetchall()
+        if not rows:
+            raise ValueError("base_artifact_filename does not match any artifact on the selected build.")
+        if len(rows) > 1:
+            raise ValueError("base_artifact_filename matched multiple artifacts; use base_artifact_sha256.")
+        return rows[0]["artifact_id"]
+
+    if artifact_type in DERIVED_ARTIFACT_TYPES:
+        base_rows = conn.execute(
+            """
+            SELECT artifact_id
+            FROM artifacts
+            WHERE build_id = ?
+              AND LOWER(artifact_type) IN ({})
+            ORDER BY artifact_id DESC
+            """.format(",".join("?" for _ in BASE_ARTIFACT_TYPES)),
+            (build_id, *sorted(BASE_ARTIFACT_TYPES)),
+        ).fetchall()
+        if len(base_rows) == 1:
+            return base_rows[0]["artifact_id"]
+        if not base_rows:
+            raise ValueError(
+                "Derived artifact types require a base artifact. Provide base_artifact_sha256 or ingest a base_game/game_archive first."
+            )
+        raise ValueError(
+            "Derived artifact type matched multiple base artifacts; provide base_artifact_sha256 to disambiguate."
+        )
+
+    return None
+
+
 def upsert_artifact_record(conn, build_id, metadata, archive_data):
     artifact_sha256 = archive_data.get('sha256')
     if not artifact_sha256:
@@ -976,10 +1069,11 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     filename = archive_data.get('filename') or metadata.get('original_filename')
     notes = metadata.get('notes')
     release_date = metadata.get('release_date')
+    base_artifact_id = _resolve_base_artifact_id(conn, build_id, metadata, artifact_type)
 
     existing_row = conn.execute(
         '''
-        SELECT artifact_id
+        SELECT artifact_id, base_artifact_id
         FROM artifacts
         WHERE build_id = ? AND sha256 = ?
         ''',
@@ -987,26 +1081,35 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     ).fetchone()
 
     if existing_row:
+        resolved_base_artifact_id = base_artifact_id if base_artifact_id is not None else existing_row["base_artifact_id"]
+        if resolved_base_artifact_id == existing_row["artifact_id"]:
+            raise ValueError("Artifact cannot reference itself as base_artifact_id.")
         conn.execute(
                 '''
                 UPDATE artifacts
                 SET artifact_type = COALESCE(NULLIF(?, ''), artifact_type),
                     filename = COALESCE(?, filename),
+                    base_artifact_id = ?,
                     release_date = COALESCE(?, release_date),
                     notes = COALESCE(?, notes)
                 WHERE artifact_id = ?
                 ''',
-            (artifact_type, filename, release_date, notes, existing_row['artifact_id'])
+            (artifact_type, filename, resolved_base_artifact_id, release_date, notes, existing_row['artifact_id'])
         )
         return existing_row['artifact_id']
+
+    if artifact_type in DERIVED_ARTIFACT_TYPES and base_artifact_id is None:
+        raise ValueError(
+            "Derived artifact types require base artifact linkage. Provide base_artifact_sha256."
+        )
 
     conn.execute(
         '''
         INSERT INTO artifacts (
             build_id, artifact_type, filename, sha256, base_artifact_id, release_date, notes
-        ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ''',
-        (build_id, artifact_type, filename, artifact_sha256, release_date, notes)
+        (build_id, artifact_type, filename, artifact_sha256, base_artifact_id, release_date, notes)
     )
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
 
@@ -1211,44 +1314,36 @@ def insert_visual_novel(metadata):
     '''
 
     metadata = normalize_metadata_fields(metadata)
+    metadata_version = int(metadata.get("metadata_version") or detect_latest_metadata_template_version())
     metadata_is_artifact = is_artifact_metadata(metadata)
+    template = (
+        load_artifact_metadata_template(metadata_version)
+        if metadata_is_artifact
+        else load_metadata_template(metadata_version)
+    )
+    validate_metadata_contract(metadata, template, CATEGORY_ALL_FIELDS)
 
     with get_connection() as conn:
-        if not metadata.get('title'):
-            raise ValueError('Title is required.')
-
-        if metadata_is_artifact:
-            vn_id, build_id = resolve_existing_build_for_artifact(conn, metadata)
-        else:
-            series_id = upsert_series(conn, metadata)
-            vn_id = upsert_visual_novel_record(conn, metadata, series_id)
-
-            sync_vn_tags(conn, vn_id, metadata)
-
-            build_id = upsert_build_record(conn, vn_id, metadata)
-            sync_build_target_platforms(conn, build_id, metadata)
-            sync_canon_relationship(conn, vn_id, metadata)
-
-        archives_to_process, _ = collect_archives_for_db(metadata)
-
-        early_return_vn_id = process_archives_for_build(
+        repository = VnIngestionRepository(
             conn,
-            build_id,
-            metadata,
-            vn_id,
-            archives_to_process
+            upsert_series=upsert_series,
+            upsert_visual_novel_record=upsert_visual_novel_record,
+            sync_vn_tags=sync_vn_tags,
+            sync_canon_relationship=sync_canon_relationship,
+            upsert_build_record=upsert_build_record,
+            sync_build_target_platforms=sync_build_target_platforms,
+            resolve_existing_build_for_artifact=resolve_existing_build_for_artifact,
         )
-        if early_return_vn_id:
-            return early_return_vn_id
+        domain_service = VisualNovelDomainService(
+            conn,
+            repository=repository,
+            is_artifact_metadata=is_artifact_metadata,
+            collect_archives_for_db=collect_archives_for_db,
+            process_archives_for_build=process_archives_for_build,
+        )
+        result = domain_service.ingest(metadata)
 
-        return vn_id
-
-        # ==========================================================
-        # RETURN VALUE (For new inserts and metadata-only operations)
-        # ==========================================================
-        # If we reached this point, the VN/build metadata was inserted or
-        # updated successfully even when no archive row existed yet.
-        return vn_id
+        return result.vn_id
 
 
 # ==============================

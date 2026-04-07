@@ -52,10 +52,25 @@ relationship_type: "spinoff"
 content_mode: "selectable"
 ```
 
+## Metadata validation behavior
+
+Before DB insertion, vn_archiver now performs strict contract validation against metadata templates:
+- required fields from the selected template must be present and non-empty
+- unknown top-level fields are rejected
+- date fields (`original_release_date`, `release_date`) must use `YYYY-MM-DD`
+
 ## Artifact type metadata
 
 When processing a non-runnable artifact, set `artifact_type` using these suggested labels:
-`game_archive`, `patch`, `instructions`, `readme`, `manual`, `soundtrack`, `bonus`, `checksum`.
+`base_game`, `game_archive`, `patch`, `mod`, `hotfix`, `translation_patch`,
+`instructions`, `readme`, `manual`, `soundtrack`, `bonus`, `checksum`.
+
+Derived artifact types (`patch`, `mod`, `hotfix`, `translation_patch`) must point to
+their base artifact on the same build. Provide one of:
+- `base_artifact_sha256` (recommended, unique)
+- `base_artifact_filename` (allowed when unique on build)
+
+If exactly one `base_game`/`game_archive` exists for that build, vn_archiver will auto-link it.
 
 `Process Artifact` in the TUI accepts both `.zip` and non-zip artifact files (YAML files are excluded).
 It now requires entering a title first, then selecting an existing build from the database so the artifact is linked to a specific build.
@@ -68,6 +83,7 @@ Use `metadata/metadata_artifact_v1.yaml` as a baseline template for artifact-foc
 
 ```yaml
 artifact_type: "patch"
+base_artifact_sha256: "0123abcd..."
 ```
 
 ## Translator metadata for multi-language releases
