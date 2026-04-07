@@ -1205,6 +1205,42 @@ def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_proc
     return None
 
 
+class VNService:
+    """Title-level service for VN identity and work-level metadata."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def upsert_vn(self, metadata):
+        series_id = upsert_series(self.conn, metadata)
+        vn_id = upsert_visual_novel_record(self.conn, metadata, series_id)
+        sync_vn_tags(self.conn, vn_id, metadata)
+        sync_canon_relationship(self.conn, vn_id, metadata)
+        return vn_id
+
+
+class VersionService:
+    """Version/build-level service for release records and build metadata."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def upsert_build(self, vn_id, metadata):
+        build_id = upsert_build_record(self.conn, vn_id, metadata)
+        sync_build_target_platforms(self.conn, build_id, metadata)
+        return build_id
+
+
+class ArtifactService:
+    """Artifact-level service for linking file artifacts to existing builds."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def resolve_target_build(self, metadata):
+        return resolve_existing_build_for_artifact(self.conn, metadata)
+
+
 def insert_visual_novel(metadata):
     '''
     Inserts or updates the normalized metadata into the SQLite database.
@@ -1214,20 +1250,18 @@ def insert_visual_novel(metadata):
     metadata_is_artifact = is_artifact_metadata(metadata)
 
     with get_connection() as conn:
+        vn_service = VNService(conn)
+        version_service = VersionService(conn)
+        artifact_service = ArtifactService(conn)
+
         if not metadata.get('title'):
             raise ValueError('Title is required.')
 
         if metadata_is_artifact:
-            vn_id, build_id = resolve_existing_build_for_artifact(conn, metadata)
+            vn_id, build_id = artifact_service.resolve_target_build(metadata)
         else:
-            series_id = upsert_series(conn, metadata)
-            vn_id = upsert_visual_novel_record(conn, metadata, series_id)
-
-            sync_vn_tags(conn, vn_id, metadata)
-
-            build_id = upsert_build_record(conn, vn_id, metadata)
-            sync_build_target_platforms(conn, build_id, metadata)
-            sync_canon_relationship(conn, vn_id, metadata)
+            vn_id = vn_service.upsert_vn(metadata)
+            build_id = version_service.upsert_build(vn_id, metadata)
 
         archives_to_process, _ = collect_archives_for_db(metadata)
 
