@@ -17,6 +17,7 @@ from pathlib import Path
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from db_manager import get_connection
 from domain_layer import VisualNovelDomainService
+from ingestion_repository import VnIngestionRepository
 
 # ==============================
 # CONFIGURATION
@@ -1250,9 +1251,8 @@ def insert_visual_novel(metadata):
     metadata = normalize_metadata_fields(metadata)
 
     with get_connection() as conn:
-        domain_service = VisualNovelDomainService(
+        repository = VnIngestionRepository(
             conn,
-            is_artifact_metadata=is_artifact_metadata,
             upsert_series=upsert_series,
             upsert_visual_novel_record=upsert_visual_novel_record,
             sync_vn_tags=sync_vn_tags,
@@ -1260,6 +1260,11 @@ def insert_visual_novel(metadata):
             upsert_build_record=upsert_build_record,
             sync_build_target_platforms=sync_build_target_platforms,
             resolve_existing_build_for_artifact=resolve_existing_build_for_artifact,
+        )
+        domain_service = VisualNovelDomainService(
+            conn,
+            repository=repository,
+            is_artifact_metadata=is_artifact_metadata,
             collect_archives_for_db=collect_archives_for_db,
             process_archives_for_build=process_archives_for_build,
         )
