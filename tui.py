@@ -310,7 +310,7 @@ def create_metadata_only():
 
 def quick_process_with_metadata_yaml():
     print()
-    panel("Quick Process (Archive/Artifact + Metadata YAML)")
+    panel("Quick Process from Metadata YAML (Archive/Artifact)")
 
     if not os.path.exists(INCOMING_DIR):
         os.makedirs(INCOMING_DIR)
@@ -429,7 +429,7 @@ def quick_process_with_metadata_yaml():
 
 def process_artifact_with_metadata():
     print()
-    panel("Process Artifact (Domain-Matched Metadata)")
+    panel("Guided Artifact Process (No YAML)")
 
     if not os.path.exists(INCOMING_DIR):
         os.makedirs(INCOMING_DIR)
@@ -1150,6 +1150,8 @@ def main():
         notify(f"Active metadata template: v{active_version}")
         mode_label = "Notepad/Editor mode" if METADATA_EDITOR_MODE else "Prompt mode"
         notify(f"Create Metadata mode: {mode_label}")
+        notify("Option 2: Use when metadata YAML already exists in incoming/.", "info")
+        notify("Option 3: Use guided prompts to build artifact metadata without YAML.", "info")
         print()
 
         choice = prompt("Select option: ")
