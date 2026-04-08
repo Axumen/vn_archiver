@@ -308,6 +308,62 @@ def create_metadata_only():
         notify("Invalid input.", "error")
 
 
+def upsert_build_from_metadata_yaml():
+    print()
+    panel("Upsert Build/VN From Metadata YAML (No File Required)")
+
+    if not os.path.exists(INCOMING_DIR):
+        os.makedirs(INCOMING_DIR)
+
+    yaml_files = sorted([f for f in os.listdir(INCOMING_DIR) if f.lower().endswith((".yaml", ".yml"))])
+    if not yaml_files:
+        notify(f"No metadata yaml files found in '{INCOMING_DIR}'.", "error")
+        return
+
+    for i, filename in enumerate(yaml_files, 1):
+        print(TEXT + f"[{i}] {filename}")
+
+    yaml_choice = prompt("Select metadata yaml number, or 0 to cancel: ")
+    if yaml_choice in ("", "0"):
+        return
+
+    try:
+        y_idx = int(yaml_choice) - 1
+        if not (0 <= y_idx < len(yaml_files)):
+            notify("Invalid metadata yaml selection.", "error")
+            return
+    except ValueError:
+        notify("Invalid input.", "error")
+        return
+
+    metadata_path = os.path.join(INCOMING_DIR, yaml_files[y_idx])
+    with open(metadata_path, "r", encoding="utf-8") as f:
+        metadata = yaml.safe_load(f) or {}
+
+    if not isinstance(metadata, dict):
+        notify("Selected metadata yaml is not a valid object.", "error")
+        return
+
+    if not metadata.get("title") or not metadata.get("version"):
+        notify("Metadata must include non-empty title and version.", "error")
+        return
+
+    if str(metadata.get("artifact_type") or "").strip():
+        notify(
+            "Artifact-focused YAML selected. This mode is build/VN only; remove artifact_type or use artifact processing flow.",
+            "error",
+        )
+        return
+
+    metadata = order_metadata_for_yaml(metadata)
+    try:
+        vn_id = insert_visual_novel(metadata)
+        notify(f"Build/VN metadata upserted successfully (vn_id={vn_id}).", "ok")
+    except Exception as exc:
+        notify(f"Build/VN upsert failed: {exc}", "error")
+        return
+
+
 def quick_process_with_metadata_yaml():
     print()
     panel("Quick Process from Metadata YAML (Archive/Artifact)")
@@ -1136,15 +1192,16 @@ def main():
         header()
 
         panel("Main Menu")
-        print(PRIMARY + "  1) Create Metadata")
-        print(PRIMARY + "  2) Quick Process (File + Metadata YAML, Domain Flow)")
-        print(PRIMARY + "  3) Process Artifact (Auto Build Resolution)")
-        print(PRIMARY + "  4) Edit Metadata")
-        print(PRIMARY + "  5) Upload Archive")
-        print(PRIMARY + "  6) Delete From Uploading")
-        print(PRIMARY + "  7) Config")
-        print(PRIMARY + "  8) Toggle Metadata Editor Mode")
-        print(PRIMARY + "  9) Quit\n")
+        print(PRIMARY + "  1) Create Metadata (From File Selection)")
+        print(PRIMARY + "  2) Upsert Build/VN Metadata (YAML Only, No File)")
+        print(PRIMARY + "  3) Quick Process (File + Metadata YAML, Domain Flow)")
+        print(PRIMARY + "  4) Process Artifact (Auto Build Resolution)")
+        print(PRIMARY + "  5) Edit Metadata")
+        print(PRIMARY + "  6) Upload Archive")
+        print(PRIMARY + "  7) Delete From Uploading")
+        print(PRIMARY + "  8) Config")
+        print(PRIMARY + "  9) Toggle Metadata Editor Mode")
+        print(PRIMARY + " 10) Quit\n")
 
         active_version = get_active_metadata_template_version()
         notify(f"Active metadata template: v{active_version}")
@@ -1159,20 +1216,22 @@ def main():
         if choice == "1":
             create_metadata_only()
         elif choice == "2":
-            quick_process_with_metadata_yaml()
+            upsert_build_from_metadata_yaml()
         elif choice == "3":
-            process_artifact_with_metadata()
+            quick_process_with_metadata_yaml()
         elif choice == "4":
-            edit_metadata_only()
+            process_artifact_with_metadata()
         elif choice == "5":
-            upload_archives()
+            edit_metadata_only()
         elif choice == "6":
-            delete_uploading_files()
+            upload_archives()
         elif choice == "7":
-            configure_metadata_template_version()
+            delete_uploading_files()
         elif choice == "8":
-            toggle_metadata_editor_mode()
+            configure_metadata_template_version()
         elif choice == "9":
+            toggle_metadata_editor_mode()
+        elif choice == "10":
             print()
             panel("Goodbye", "Session closed")
             print()
