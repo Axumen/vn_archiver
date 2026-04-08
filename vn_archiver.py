@@ -278,34 +278,37 @@ def resolve_prompt_fields(template):
     3) {fields: {a: ..., b: ...}}
     """
 
-    fields = []
+    required_fields, optional_fields = resolve_prompt_field_groups(template)
+    return required_fields + optional_fields
 
+
+def resolve_prompt_field_groups(template):
     required_fields = template.get("required") or []
     optional_fields = template.get("optional") or []
 
-    if required_fields or optional_fields:
-        fields.extend(required_fields)
-        fields.extend(optional_fields)
-
     structured_fields = template.get("fields")
     if isinstance(structured_fields, list):
-        fields.extend(structured_fields)
+        optional_fields = [*optional_fields, *structured_fields]
     elif isinstance(structured_fields, dict):
-        fields.extend(structured_fields.keys())
+        optional_fields = [*optional_fields, *structured_fields.keys()]
 
-    deduplicated = []
+    def deduplicate(fields, seen):
+        output = []
+        for field in fields:
+            if not isinstance(field, str):
+                continue
+            if field in seen:
+                continue
+            if field in AUTO_METADATA_FIELDS:
+                continue
+            seen.add(field)
+            output.append(field)
+        return output
+
     seen = set()
-    for field in fields:
-        if not isinstance(field, str):
-            continue
-        if field in seen:
-            continue
-        if field in AUTO_METADATA_FIELDS:
-            continue
-        seen.add(field)
-        deduplicated.append(field)
-
-    return deduplicated
+    dedup_required = deduplicate(required_fields, seen)
+    dedup_optional = deduplicate(optional_fields, seen)
+    return dedup_required, dedup_optional
 
 
 def load_b2_config(config_path=B2_CONFIG_FILE):
@@ -364,13 +367,22 @@ def create_metadata(zip_path):
         "metadata_version",
         detect_latest_metadata_template_version()
     )
-    prompt_fields = [field for field in resolve_prompt_fields(template) if field != "artifact_type"]
+    required_fields, optional_fields = resolve_prompt_field_groups(template)
+    required_fields = [field for field in required_fields if field != "artifact_type"]
+    optional_fields = [field for field in optional_fields if field != "artifact_type"]
 
     metadata = {"metadata_version": metadata_version}
 
-    print("\nFill Metadata (Press ENTER to leave blank):\n")
+    print("\nFill Metadata\n")
+    print("Required fields (for valid builds):")
+    for key in required_fields:
+        if key == "tags":
+            metadata[key] = prompt_tags()
+        else:
+            metadata[key] = prompt_field(key, "")
 
-    for key in prompt_fields:
+    print("\nOptional fields:")
+    for key in optional_fields:
         if key == "tags":
             metadata[key] = prompt_tags()
         else:
@@ -1727,7 +1739,10 @@ def create_archive_only(
     # 2. Prepare metadata (Prompt or Editor)
     # -------------------------------------------------------------------
     base_template = load_metadata_template(metadata_version)
-    prompt_fields = [field for field in resolve_prompt_fields(base_template) if field != "artifact_type"]
+    required_fields, optional_fields = resolve_prompt_field_groups(base_template)
+    required_fields = [field for field in required_fields if field != "artifact_type"]
+    optional_fields = [field for field in optional_fields if field != "artifact_type"]
+    prompt_fields = required_fields + optional_fields
 
     metadata = {"metadata_version": metadata_version}
     defaults = {}
@@ -1809,10 +1824,23 @@ def create_archive_only(
             if not _is_empty_metadata_value(user_value):
                 metadata[field] = user_value
     else:
-        print(Fore.MAGENTA + "\nFill Metadata (Press ENTER to skip fields)\n")
+        print(Fore.MAGENTA + "\nFill Metadata (Press ENTER to skip optional fields)\n")
         print(Fore.CYAN + "Tip: when a [default] is shown, press ENTER to keep it, or type '-' to clear it.")
 
-        for field in prompt_fields:
+        print(Fore.GREEN + "\nRequired fields for a valid build:")
+        for field in required_fields:
+            default_val = defaults.get(field)
+            prompt = f"{field} (required)"
+            if default_val not in (None, ""):
+                prompt += f" [{default_val}]"
+            raw_val = input(Fore.YELLOW + f"{prompt}: ").strip()
+            if raw_val:
+                metadata[field] = raw_val
+            elif default_val not in (None, ""):
+                metadata[field] = default_val
+
+        print(Fore.CYAN + "\nOptional fields and suggestions:")
+        for field in optional_fields:
             if field in METADATA_LIST_FIELDS:
                 suggestions = FIELD_SUGGESTIONS.get(field) or []
                 if suggestions:
