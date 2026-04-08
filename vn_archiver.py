@@ -76,7 +76,6 @@ FIELD_SUGGESTIONS = {
     "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story", "non_canon_special"],
     "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
     "artifact_type": SUGGESTED_ARTIFACT_TYPE,
-    "trust_level": ["verified", "unverified", "unknown"],
     "tags": [
         "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
         "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
@@ -90,10 +89,6 @@ AUTO_METADATA_FIELDS = {
     "file_size_bytes": lambda zip_path: os.path.getsize(zip_path),
     "sha256": lambda zip_path: sha256_file(zip_path),
     "archived_at": lambda _: datetime.utcnow().isoformat() + "Z",
-    # Legacy identification fields maintained in nested archive metadata.
-    "archive.filename": lambda zip_path: os.path.basename(zip_path),
-    "archive.sha256": lambda zip_path: sha256_file(zip_path),
-    "archive.file_size": lambda zip_path: os.path.getsize(zip_path),
 }
 
 
@@ -259,15 +254,6 @@ def set_nested_value(target, dotted_key, value):
     current[parts[-1]] = value
 
 
-def get_nested_value(target, dotted_key):
-    current = target
-    for part in dotted_key.split("."):
-        if not isinstance(current, dict) or part not in current:
-            return None
-        current = current[part]
-    return current
-
-
 def resolve_prompt_fields(template):
     """
     Returns metadata keys that should be prompted from the template format.
@@ -416,10 +402,6 @@ def get_metadata_value(metadata, key, fallback=None):
     if value is not None:
         return value
 
-    nested = get_nested_value(metadata, key)
-    if nested is not None:
-        return nested
-
     return fallback
 
 
@@ -484,9 +466,6 @@ PASSTHROUGH_FIELDS = {
     "edition",
     "original_release_date",
     "release_date",
-    "acquired_at",
-    "acquisition_method",
-    "trust_level",
     "engine",
     "engine_version",
     "parent_vn_title",
@@ -499,7 +478,6 @@ PASSTHROUGH_FIELDS = {
     "base_artifact_sha256",
     "base_artifact_filename",
     "archives",
-    "archive",
     "sha256",
     "file_size_bytes",
     "original_filename",
@@ -1057,14 +1035,12 @@ def collect_archives_for_db(metadata):
     archives_to_process = []
 
     top_level_sha = metadata.get('sha256')
-    if not top_level_sha and 'archive' in metadata and isinstance(metadata['archive'], dict):
-        top_level_sha = metadata['archive'].get('sha256')
 
     if top_level_sha:
         archives_to_process.append({
             'sha256': top_level_sha,
             'file_size': metadata.get('file_size_bytes', 0),
-            'filename': metadata.get('original_filename') or get_nested_value(metadata, 'archive.filename'),
+            'filename': metadata.get('original_filename'),
         })
 
     if 'archives' in metadata and isinstance(metadata['archives'], list):
@@ -1152,9 +1128,6 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     release_date = metadata.get('release_date')
     platform = metadata.get("platform") or metadata.get("distribution_platform")
     source_url = metadata.get("source_url") or metadata.get("source")
-    acquired_at = metadata.get("acquired_at") or metadata.get("archived_at")
-    acquisition_method = metadata.get("acquisition_method")
-    trust_level = metadata.get("trust_level")
     base_artifact_id = _resolve_base_artifact_id(conn, build_id, metadata, artifact_type)
     file_size = int(archive_data.get("file_size") or metadata.get("file_size_bytes") or 0)
     file_row = conn.execute(
@@ -1187,9 +1160,6 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
                 SET artifact_type = COALESCE(NULLIF(?, ''), artifact_type),
                     platform = COALESCE(?, platform),
                     source_url = COALESCE(?, source_url),
-                    acquired_at = COALESCE(?, acquired_at),
-                    acquisition_method = COALESCE(?, acquisition_method),
-                    trust_level = COALESCE(?, trust_level),
                     filename = COALESCE(?, filename),
                     file_id = COALESCE(?, file_id),
                     file_object_sha256 = COALESCE(file_object_sha256, ?),
@@ -1202,9 +1172,6 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
                 artifact_type,
                 platform,
                 source_url,
-                acquired_at,
-                acquisition_method,
-                trust_level,
                 filename,
                 file_id,
                 artifact_sha256,
@@ -1231,18 +1198,15 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     conn.execute(
         '''
         INSERT INTO artifacts (
-            build_id, artifact_type, platform, source_url, acquired_at, acquisition_method, trust_level,
+            build_id, artifact_type, platform, source_url,
             filename, sha256, file_id, file_object_sha256, base_artifact_id, release_date, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''',
         (
             build_id,
             artifact_type,
             platform,
             source_url,
-            acquired_at,
-            acquisition_method,
-            trust_level,
             filename,
             artifact_sha256,
             file_id,
@@ -2179,7 +2143,7 @@ def order_metadata_for_yaml(metadata):
 
 def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None):
     """Create a metadata.yaml copy and stage it in uploading/ with recommended naming."""
-    meta_sha = metadata.get('sha256') or get_nested_value(metadata, 'archive.sha256')
+    meta_sha = metadata.get('sha256')
     if not meta_sha and isinstance(metadata.get('archives'), list) and metadata['archives']:
         first_arch = metadata['archives'][0]
         if isinstance(first_arch, dict):

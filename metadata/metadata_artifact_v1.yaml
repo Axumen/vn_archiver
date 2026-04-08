@@ -20,9 +20,6 @@ optional:
   - base_artifact_sha256
   - base_artifact_filename
   - source_url
-  - acquired_at
-  - acquisition_method
-  - trust_level
   - release_date
   - notes
   - change_note
