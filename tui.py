@@ -457,42 +457,92 @@ def process_artifact_with_metadata():
     artifact_path = os.path.join(INCOMING_DIR, artifact_filename)
     show_file_info(artifact_filename)
 
-    metadata = _prompt_artifact_linkage_metadata()
-    if not metadata:
+    selected_build = _select_build_for_artifact_link()
+    if not selected_build:
         return
 
-    with get_connection() as conn:
-        try:
-            _, resolved_build_id = resolve_existing_build_for_artifact(conn, metadata)
-            notify(f"Resolved existing build_id={resolved_build_id} for artifact linkage.", "ok")
-        except ValueError as exc:
-            notify(str(exc), "error")
-            notify(
-                "Tip: provide build_type/release_type/language/edition/distribution_platform when multiple builds match.",
-                "warn",
-            )
-            return
+    metadata = _prompt_artifact_linkage_metadata(selected_build)
+    if metadata is None:
+        return
+
+    notify(f"Using selected build_id={selected_build['build_id']} for artifact linkage context.", "ok")
 
     create_archive_from_metadata_file([artifact_path], metadata)
 
 
-def _prompt_artifact_linkage_metadata():
-    title_input = prompt("title (must exactly match existing VN title): ")
+def _select_build_for_artifact_link():
+    title_input = prompt("title (search existing VN title): ")
     if not title_input:
-        notify("title is required to resolve an existing build.", "error")
+        notify("title is required to list existing builds.", "error")
         return None
 
-    version_input = prompt("version (required): ")
-    if not version_input:
-        notify("version is required to resolve an existing build.", "error")
+    with get_connection() as conn:
+        build_rows = conn.execute(
+            """
+            SELECT
+                b.id AS build_id,
+                v.title AS vn_title,
+                b.version,
+                b.release_type,
+                b.build_type,
+                b.language,
+                b.edition,
+                b.distribution_platform
+            FROM builds b
+            JOIN visual_novels v ON v.id = b.vn_id
+            WHERE TRIM(v.title) LIKE TRIM(?) COLLATE NOCASE
+            ORDER BY v.title, b.version COLLATE NOCASE, b.id
+            """,
+            (f"%{title_input}%",)
+        ).fetchall()
+
+    if not build_rows:
+        notify("No builds found for that title. Create metadata/build first, then add artifact.", "error")
         return None
+
+    panel("Select Build For Artifact Link")
+    for i, row in enumerate(build_rows, 1):
+        lang = row["language"] or "default"
+        release_type = row["release_type"] or row["build_type"] or "default"
+        edition = row["edition"] or "default"
+        platform = row["distribution_platform"] or "default"
+        print(TEXT + f"[{i}] {row['vn_title']} | v{row['version']} | release_type={release_type} | lang={lang} | edition={edition} | platform={platform} | build_id={row['build_id']}")
+
+    selection = prompt("Select build number, or 0 to cancel: ")
+    if selection in ("", "0"):
+        return None
+    try:
+        idx = int(selection) - 1
+    except ValueError:
+        notify("Invalid build selection.", "error")
+        return None
+    if idx < 0 or idx >= len(build_rows):
+        notify("Invalid build selection.", "error")
+        return None
+
+    return build_rows[idx]
+
+
+def _prompt_artifact_linkage_metadata(selected_build):
+    title_input = selected_build["vn_title"]
+    version_input = selected_build["version"]
+    notify(f"Selected title/version: {title_input} v{version_input}", "info")
 
     panel("Optional Build-Context Fields (Template-Aligned)")
-    build_type = prompt("build_type (optional, e.g. full/demo/patch): ")
-    release_type = prompt("release_type (optional; if omitted, build_type is used): ")
-    language = prompt("language (optional): ")
-    edition = prompt("edition (optional): ")
-    distribution_platform = prompt("distribution_platform (optional): ")
+    default_build_type = selected_build["build_type"] or ""
+    default_release_type = selected_build["release_type"] or default_build_type
+    default_language = selected_build["language"] or ""
+    default_edition = selected_build["edition"] or ""
+    default_distribution_platform = selected_build["distribution_platform"] or ""
+
+    build_type = prompt(f"build_type (optional, default: {default_build_type or 'empty'}): ") or default_build_type
+    release_type = prompt(f"release_type (optional, default: {default_release_type or 'empty'}): ") or default_release_type
+    language = prompt(f"language (optional, default: {default_language or 'empty'}): ") or default_language
+    edition = prompt(f"edition (optional, default: {default_edition or 'empty'}): ") or default_edition
+    distribution_platform = (
+        prompt(f"distribution_platform (optional, default: {default_distribution_platform or 'empty'}): ")
+        or default_distribution_platform
+    )
 
     notify("Suggested artifact_type labels: " + ", ".join(SUGGESTED_ARTIFACT_TYPE), "info")
     artifact_type = prompt("artifact_type: ")
@@ -526,8 +576,24 @@ def _prompt_artifact_linkage_metadata():
     }
     metadata = {k: v for k, v in metadata.items() if v not in ("", None)}
 
-    if not _validate_derived_artifact_base_reference(metadata):
+    _validate_derived_artifact_base_reference(metadata)
+
+    try:
+        with get_connection() as conn:
+            _, resolved_build_id = resolve_existing_build_for_artifact(conn, metadata)
+        if int(resolved_build_id) != int(selected_build["build_id"]):
+            notify(
+                f"Metadata resolved to build_id={resolved_build_id}, not selected build_id={selected_build['build_id']}. "
+                "Using selected build context fields is recommended.",
+                "warn",
+            )
+        else:
+            notify(f"Confirmed metadata resolves selected build_id={resolved_build_id}.", "ok")
+    except ValueError as exc:
+        notify(str(exc), "error")
+        notify("Adjust optional build context fields to match the selected build.", "warn")
         return None
+
     return metadata
 
 
@@ -537,10 +603,11 @@ def _validate_derived_artifact_base_reference(metadata):
     base_filename = str(metadata.get("base_artifact_filename") or "").strip()
     if artifact_type_normalized in DERIVED_ARTIFACT_TYPES and not (base_sha or base_filename):
         notify(
-            "Derived artifact types require a base artifact reference. Provide base_artifact_sha256 (preferred) or base_artifact_filename.",
-            "error",
+            "Derived artifact type detected. base_artifact_sha256/base_artifact_filename not provided; "
+            "if multiple base archives exist on this build, ingestion may fail and ask for explicit base reference.",
+            "warn",
         )
-        return False
+        return True
     return True
 
 
