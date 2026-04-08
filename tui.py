@@ -27,7 +27,9 @@ from vn_archiver import (
     get_current_metadata_version_number,
     stage_metadata_yaml_for_upload,
     order_metadata_for_yaml,
-    SUGGESTED_ARTIFACT_TYPE
+    SUGGESTED_ARTIFACT_TYPE,
+    DERIVED_ARTIFACT_TYPES,
+    resolve_existing_build_for_artifact,
 )
 
 init(autoreset=True)
@@ -418,7 +420,7 @@ def quick_process_with_metadata_yaml():
 
 def process_artifact_with_metadata():
     print()
-    panel("Process Artifact (Minimal Metadata)")
+    panel("Process Artifact (Domain-Matched Metadata)")
 
     if not os.path.exists(INCOMING_DIR):
         os.makedirs(INCOMING_DIR)
@@ -455,10 +457,24 @@ def process_artifact_with_metadata():
     artifact_path = os.path.join(INCOMING_DIR, artifact_filename)
     show_file_info(artifact_filename)
 
-    title_input = prompt("title: ")
-    if not title_input:
-        notify("title is required to locate existing builds.", "error")
+    selected_build = _select_build_for_artifact_link()
+    if not selected_build:
         return
+
+    metadata = _prompt_artifact_linkage_metadata(selected_build)
+    if metadata is None:
+        return
+
+    notify(f"Using selected build_id={selected_build['build_id']} for artifact linkage context.", "ok")
+
+    create_archive_from_metadata_file([artifact_path], metadata)
+
+
+def _select_build_for_artifact_link():
+    title_input = prompt("title (search existing VN title): ")
+    if not title_input:
+        notify("title is required to list existing builds.", "error")
+        return None
 
     with get_connection() as conn:
         build_rows = conn.execute(
@@ -467,6 +483,7 @@ def process_artifact_with_metadata():
                 b.id AS build_id,
                 v.title AS vn_title,
                 b.version,
+                b.release_type,
                 b.build_type,
                 b.language,
                 b.edition,
@@ -481,40 +498,61 @@ def process_artifact_with_metadata():
 
     if not build_rows:
         notify("No builds found for that title. Create metadata/build first, then add artifact.", "error")
-        return
+        return None
 
     panel("Select Build For Artifact Link")
     for i, row in enumerate(build_rows, 1):
         lang = row["language"] or "default"
-        btype = row["build_type"] or "default"
+        release_type = row["release_type"] or row["build_type"] or "default"
         edition = row["edition"] or "default"
         platform = row["distribution_platform"] or "default"
-        print(TEXT + f"[{i}] {row['vn_title']} | v{row['version']} | lang={lang} | type={btype} | edition={edition} | platform={platform} | build_id={row['build_id']}")
+        print(TEXT + f"[{i}] {row['vn_title']} | v{row['version']} | release_type={release_type} | lang={lang} | edition={edition} | platform={platform} | build_id={row['build_id']}")
 
-    build_choice = prompt("Select build number, or 0 to cancel: ")
-    if build_choice in ("", "0"):
-        return
-
+    selection = prompt("Select build number, or 0 to cancel: ")
+    if selection in ("", "0"):
+        return None
     try:
-        build_idx = int(build_choice) - 1
+        idx = int(selection) - 1
     except ValueError:
         notify("Invalid build selection.", "error")
-        return
-
-    if build_idx < 0 or build_idx >= len(build_rows):
+        return None
+    if idx < 0 or idx >= len(build_rows):
         notify("Invalid build selection.", "error")
-        return
+        return None
 
-    selected_build = build_rows[build_idx]
-    title = selected_build["vn_title"]
-    version = selected_build["version"]
-    selected_build_edition = selected_build["edition"]
+    return build_rows[idx]
+
+
+def _prompt_artifact_linkage_metadata(selected_build):
+    title_input = selected_build["vn_title"]
+    version_input = selected_build["version"]
+    notify(f"Selected title/version: {title_input} v{version_input}", "info")
+
+    panel("Optional Build-Context Fields (Template-Aligned)")
+    default_build_type = selected_build["build_type"] or ""
+    default_release_type = selected_build["release_type"] or default_build_type
+    default_language = selected_build["language"] or ""
+    default_edition = selected_build["edition"] or ""
+    default_distribution_platform = selected_build["distribution_platform"] or ""
+
+    build_type = prompt(f"build_type (optional, default: {default_build_type or 'empty'}): ") or default_build_type
+    release_type = prompt(f"release_type (optional, default: {default_release_type or 'empty'}): ") or default_release_type
+    language = prompt(f"language (optional, default: {default_language or 'empty'}): ") or default_language
+    edition = prompt(f"edition (optional, default: {default_edition or 'empty'}): ") or default_edition
+    distribution_platform = (
+        prompt(f"distribution_platform (optional, default: {default_distribution_platform or 'empty'}): ")
+        or default_distribution_platform
+    )
 
     notify("Suggested artifact_type labels: " + ", ".join(SUGGESTED_ARTIFACT_TYPE), "info")
     artifact_type = prompt("artifact_type: ")
     if not artifact_type:
         artifact_type = "game_archive"
         notify("artifact_type not provided; defaulting to 'game_archive'.", "warn")
+
+    base_artifact_sha256 = prompt("base_artifact_sha256 (optional, recommended for patch/mod/hotfix): ")
+    base_artifact_filename = prompt("base_artifact_filename (optional fallback): ")
+
     artifact_release_date = prompt("artifact_release_date (optional, YYYY-MM-DD): ")
 
     notes = prompt("notes (optional): ")
@@ -522,19 +560,55 @@ def process_artifact_with_metadata():
 
     metadata = {
         "metadata_version": get_active_metadata_template_version(),
-        "title": title,
-        "version": version,
-        "build_type": selected_build["build_type"],
-        "distribution_platform": selected_build["distribution_platform"],
-        "language": selected_build["language"],
-        "edition": selected_build_edition,
+        "title": title_input,
+        "version": version_input,
+        "build_type": build_type,
+        "release_type": release_type,
+        "distribution_platform": distribution_platform,
+        "language": language,
+        "edition": edition,
         "artifact_type": artifact_type,
+        "base_artifact_sha256": base_artifact_sha256,
+        "base_artifact_filename": base_artifact_filename,
         "release_date": artifact_release_date,
         "notes": notes,
         "change_note": change_note,
     }
+    metadata = {k: v for k, v in metadata.items() if v not in ("", None)}
 
-    create_archive_from_metadata_file([artifact_path], metadata)
+    _validate_derived_artifact_base_reference(metadata)
+
+    try:
+        with get_connection() as conn:
+            _, resolved_build_id = resolve_existing_build_for_artifact(conn, metadata)
+        if int(resolved_build_id) != int(selected_build["build_id"]):
+            notify(
+                f"Metadata resolved to build_id={resolved_build_id}, not selected build_id={selected_build['build_id']}. "
+                "Using selected build context fields is recommended.",
+                "warn",
+            )
+        else:
+            notify(f"Confirmed metadata resolves selected build_id={resolved_build_id}.", "ok")
+    except ValueError as exc:
+        notify(str(exc), "error")
+        notify("Adjust optional build context fields to match the selected build.", "warn")
+        return None
+
+    return metadata
+
+
+def _validate_derived_artifact_base_reference(metadata):
+    artifact_type_normalized = str(metadata.get("artifact_type") or "").strip().lower()
+    base_sha = str(metadata.get("base_artifact_sha256") or "").strip()
+    base_filename = str(metadata.get("base_artifact_filename") or "").strip()
+    if artifact_type_normalized in DERIVED_ARTIFACT_TYPES and not (base_sha or base_filename):
+        notify(
+            "Derived artifact type detected. base_artifact_sha256/base_artifact_filename not provided; "
+            "if multiple base archives exist on this build, ingestion may fail and ask for explicit base reference.",
+            "warn",
+        )
+        return True
+    return True
 
 
 # =============================
