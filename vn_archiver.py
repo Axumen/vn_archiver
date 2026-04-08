@@ -89,10 +89,6 @@ AUTO_METADATA_FIELDS = {
     "file_size_bytes": lambda zip_path: os.path.getsize(zip_path),
     "sha256": lambda zip_path: sha256_file(zip_path),
     "archived_at": lambda _: datetime.utcnow().isoformat() + "Z",
-    # Legacy identification fields maintained in nested archive metadata.
-    "archive.filename": lambda zip_path: os.path.basename(zip_path),
-    "archive.sha256": lambda zip_path: sha256_file(zip_path),
-    "archive.file_size": lambda zip_path: os.path.getsize(zip_path),
 }
 
 
@@ -258,15 +254,6 @@ def set_nested_value(target, dotted_key, value):
     current[parts[-1]] = value
 
 
-def get_nested_value(target, dotted_key):
-    current = target
-    for part in dotted_key.split("."):
-        if not isinstance(current, dict) or part not in current:
-            return None
-        current = current[part]
-    return current
-
-
 def resolve_prompt_fields(template):
     """
     Returns metadata keys that should be prompted from the template format.
@@ -415,10 +402,6 @@ def get_metadata_value(metadata, key, fallback=None):
     if value is not None:
         return value
 
-    nested = get_nested_value(metadata, key)
-    if nested is not None:
-        return nested
-
     return fallback
 
 
@@ -495,7 +478,6 @@ PASSTHROUGH_FIELDS = {
     "base_artifact_sha256",
     "base_artifact_filename",
     "archives",
-    "archive",
     "sha256",
     "file_size_bytes",
     "original_filename",
@@ -1053,14 +1035,12 @@ def collect_archives_for_db(metadata):
     archives_to_process = []
 
     top_level_sha = metadata.get('sha256')
-    if not top_level_sha and 'archive' in metadata and isinstance(metadata['archive'], dict):
-        top_level_sha = metadata['archive'].get('sha256')
 
     if top_level_sha:
         archives_to_process.append({
             'sha256': top_level_sha,
             'file_size': metadata.get('file_size_bytes', 0),
-            'filename': metadata.get('original_filename') or get_nested_value(metadata, 'archive.filename'),
+            'filename': metadata.get('original_filename'),
         })
 
     if 'archives' in metadata and isinstance(metadata['archives'], list):
@@ -2163,7 +2143,7 @@ def order_metadata_for_yaml(metadata):
 
 def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None):
     """Create a metadata.yaml copy and stage it in uploading/ with recommended naming."""
-    meta_sha = metadata.get('sha256') or get_nested_value(metadata, 'archive.sha256')
+    meta_sha = metadata.get('sha256')
     if not meta_sha and isinstance(metadata.get('archives'), list) and metadata['archives']:
         first_arch = metadata['archives'][0]
         if isinstance(first_arch, dict):
