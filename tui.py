@@ -28,6 +28,7 @@ from vn_archiver import (
     stage_metadata_yaml_for_upload,
     order_metadata_for_yaml,
     SUGGESTED_ARTIFACT_TYPE,
+    DERIVED_ARTIFACT_TYPES,
     resolve_existing_build_for_artifact,
 )
 
@@ -478,6 +479,17 @@ def process_artifact_with_metadata():
     if not artifact_type:
         artifact_type = "game_archive"
         notify("artifact_type not provided; defaulting to 'game_archive'.", "warn")
+    artifact_type_normalized = artifact_type.strip().lower()
+
+    base_artifact_sha256 = prompt("base_artifact_sha256 (optional, recommended for patch/mod/hotfix): ")
+    base_artifact_filename = prompt("base_artifact_filename (optional fallback): ")
+    if artifact_type_normalized in DERIVED_ARTIFACT_TYPES and not (base_artifact_sha256 or base_artifact_filename):
+        notify(
+            "Derived artifact types require a base artifact reference. Provide base_artifact_sha256 (preferred) or base_artifact_filename.",
+            "error",
+        )
+        return
+
     artifact_release_date = prompt("artifact_release_date (optional, YYYY-MM-DD): ")
 
     notes = prompt("notes (optional): ")
@@ -493,6 +505,8 @@ def process_artifact_with_metadata():
         "language": language,
         "edition": edition,
         "artifact_type": artifact_type,
+        "base_artifact_sha256": base_artifact_sha256,
+        "base_artifact_filename": base_artifact_filename,
         "release_date": artifact_release_date,
         "notes": notes,
         "change_note": change_note,
