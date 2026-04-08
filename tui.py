@@ -116,12 +116,6 @@ SUGGESTED_TARGET_PLATFORM = [
     "windows", "linux", "mac", "android", "web", "ios", "switch"
 ]
 
-SUGGESTED_CONTENT_TYPE = [
-    "main_story", "story_expansion", "seasonal_event",
-    "april_fools", "side_story", "non_canon_special"
-]
-
-
 # =============================
 # HELPERS
 # =============================
@@ -385,10 +379,6 @@ def quick_process_with_metadata_yaml():
             metadata.pop("artifact_type", None)
             notify("Removed 'artifact_type' from Quick Process metadata (build metadata must not include artifact_type).", "warn")
 
-        if str(metadata.get("content_type", "")).strip().lower() == "artifact":
-            metadata.pop("content_type", None)
-            notify("Removed artifact 'content_type' from Quick Process metadata (use Process Artifact for artifacts).", "warn")
-
         selected_sha256 = [sha256_file(path) for path in selected_paths]
         yaml_sha256 = []
 
@@ -538,7 +528,6 @@ def process_artifact_with_metadata():
         "distribution_platform": selected_build["distribution_platform"],
         "language": selected_build["language"],
         "edition": selected_build_edition,
-        "content_type": "artifact",
         "artifact_type": artifact_type,
         "release_date": artifact_release_date,
         "notes": notes,

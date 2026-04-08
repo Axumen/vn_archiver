@@ -27,6 +27,7 @@ optional:
   - release_status
   - content_rating
   - content_mode         # Suggested: sfw, nsfw, selectable, patchable, mixed, unknown
+  - content_type         # Suggested: main_story, story_expansion, seasonal_event, april_fools, side_story, non_canon_special
   - description          # Work-level synopsis/description
   - source               # Source/store/origin URL
   - tags
