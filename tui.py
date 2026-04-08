@@ -310,7 +310,7 @@ def create_metadata_only():
 
 def quick_process_with_metadata_yaml():
     print()
-    panel("Quick Process (Archive + Metadata YAML)")
+    panel("Quick Process (ZIP Archive + Metadata YAML)")
 
     if not os.path.exists(INCOMING_DIR):
         os.makedirs(INCOMING_DIR)
@@ -377,9 +377,13 @@ def quick_process_with_metadata_yaml():
             notify("Metadata must include 'version'.", "error")
             return
 
-        if "artifact_type" in metadata:
-            metadata.pop("artifact_type", None)
-            notify("Removed 'artifact_type' from Quick Process metadata (build metadata must not include artifact_type).", "warn")
+        metadata_is_artifact = bool(str(metadata.get("artifact_type") or "").strip())
+        if metadata_is_artifact:
+            notify(
+                "Artifact metadata detected in Quick Process YAML; preserving artifact_type and artifact linkage fields.",
+                "info",
+            )
+            _validate_derived_artifact_base_reference(metadata)
 
         selected_sha256 = [sha256_file(path) for path in selected_paths]
         yaml_sha256 = []
@@ -1119,7 +1123,7 @@ def main():
 
         panel("Main Menu")
         print(PRIMARY + "  1) Create Metadata")
-        print(PRIMARY + "  2) Quick Process (Zip + Metadata YAML)")
+        print(PRIMARY + "  2) Quick Process (ZIP + Metadata YAML)")
         print(PRIMARY + "  3) Process Artifact (Minimal Metadata)")
         print(PRIMARY + "  4) Edit Metadata")
         print(PRIMARY + "  5) Upload Archive")
