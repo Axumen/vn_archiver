@@ -69,7 +69,9 @@ CREATE TABLE IF NOT EXISTS builds (
     vn_id INTEGER NOT NULL,
 
     version TEXT NOT NULL,
+    normalized_version TEXT NOT NULL,
     build_type TEXT,
+    release_type TEXT,
     distribution_model TEXT,
     distribution_platform TEXT,
     
@@ -95,12 +97,30 @@ CREATE TABLE IF NOT EXISTS builds (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_build_release
 ON builds(
     vn_id,
-    version,
+    normalized_version,
     COALESCE(language, ''),
-    COALESCE(build_type, ''),
+    COALESCE(release_type, COALESCE(build_type, '')),
     COALESCE(edition, ''),
     COALESCE(distribution_platform, '')
 );
+
+CREATE TABLE IF NOT EXISTS build_relations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_build_id INTEGER NOT NULL,
+    to_build_id INTEGER NOT NULL,
+    relation_type TEXT NOT NULL,
+    confidence REAL,
+    source TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (from_build_id) REFERENCES builds(id) ON DELETE CASCADE,
+    FOREIGN KEY (to_build_id) REFERENCES builds(id) ON DELETE CASCADE,
+    UNIQUE(from_build_id, to_build_id, relation_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_build_relations_from ON build_relations(from_build_id);
+CREATE INDEX IF NOT EXISTS idx_build_relations_to ON build_relations(to_build_id);
+CREATE INDEX IF NOT EXISTS idx_build_relations_type ON build_relations(relation_type);
 
 -- =====================================================
 -- 5. TARGET PLATFORMS (Normalized)
@@ -165,8 +185,14 @@ CREATE TABLE IF NOT EXISTS artifacts (
     artifact_id INTEGER PRIMARY KEY AUTOINCREMENT,
     build_id INTEGER NOT NULL,
     artifact_type TEXT NOT NULL,
+    platform TEXT,
+    source_url TEXT,
+    acquired_at TEXT,
+    acquisition_method TEXT,
+    trust_level TEXT,
     filename TEXT,
     sha256 TEXT NOT NULL,
+    file_id INTEGER,
     file_object_sha256 TEXT,
     base_artifact_id INTEGER,
     release_date TEXT,
@@ -174,6 +200,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL,
     FOREIGN KEY (file_object_sha256) REFERENCES archive_objects(sha256) ON DELETE SET NULL,
     FOREIGN KEY (base_artifact_id) REFERENCES artifacts(artifact_id) ON DELETE SET NULL
 );
@@ -192,6 +219,9 @@ ON artifacts(artifact_type);
 
 CREATE INDEX IF NOT EXISTS idx_artifacts_file_object_sha
 ON artifacts(file_object_sha256);
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_file_id
+ON artifacts(file_id);
 
 -- Derived artifacts (patch/mod/hotfix/translation_patch) must link to a base artifact.
 CREATE TRIGGER IF NOT EXISTS trg_artifacts_require_base_insert
@@ -242,6 +272,29 @@ CREATE TABLE IF NOT EXISTS archive_objects (
     storage_path TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sha256 TEXT NOT NULL UNIQUE,
+    size_bytes INTEGER NOT NULL,
+    mime_type TEXT,
+    first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS artifact_files (
+    artifact_id INTEGER NOT NULL,
+    file_id INTEGER NOT NULL,
+    path_in_artifact TEXT NOT NULL DEFAULT '',
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (artifact_id, file_id, path_in_artifact),
+    FOREIGN KEY (artifact_id) REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_files_artifact ON artifact_files(artifact_id);
+CREATE INDEX IF NOT EXISTS idx_artifact_files_file ON artifact_files(file_id);
 
 -- =====================================================
 -- 10. METADATA FILE OBJECTS (Content-Addressed Storage)
