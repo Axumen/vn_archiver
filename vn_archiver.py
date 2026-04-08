@@ -42,11 +42,6 @@ SUGGESTED_TAGS = [
     "school", "adult", "nakige", "utsuge"
 ]
 
-SUGGESTED_CONTENT_TYPE = [
-    "main_story", "story_expansion", "seasonal_event",
-    "april_fools", "side_story", "non_canon_special"
-]
-
 SUGGESTED_ARTIFACT_TYPE = [
     "base_game",
     "game_archive",
@@ -66,6 +61,29 @@ BASE_ARTIFACT_TYPES = {"base_game", "game_archive"}
 DERIVED_ARTIFACT_TYPES = {"patch", "mod", "hotfix", "translation_patch"}
 
 METADATA_LIST_FIELDS = {"tags", "target_platform", "aliases", "developer", "publisher"}
+
+FIELD_SUGGESTIONS = {
+    "release_status": ["ongoing", "completed", "hiatus", "cancelled", "abandoned"],
+    "distribution_model": ["free", "paid", "freemium", "donationware", "subscription", "patron_only"],
+    "build_type": ["full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "standalone"],
+    "release_type": ["full", "patch", "demo", "trial", "fandisc", "hotfix", "april_fools"],
+    "language": ["japanese", "english", "chinese-simplified", "chinese-traditional", "korean", "spanish", "german",
+                 "french", "russian", "multi-language"],
+    "distribution_platform": ["steam", "itch.io", "dlsite", "fanza", "gumroad", "patreon", "booth",
+                              "self-distributed", "other"],
+    "content_rating": ["all-ages", "teen", "mature", "18+", "unrated"],
+    "content_mode": ["sfw", "nsfw", "selectable", "patchable", "mixed", "unknown"],
+    "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story", "non_canon_special"],
+    "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
+    "artifact_type": SUGGESTED_ARTIFACT_TYPE,
+    "trust_level": ["verified", "unverified", "unknown"],
+    "tags": [
+        "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
+        "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
+        "nakige", "utsuge", "nukige", "moege", "dark", "wholesome", "tragic", "bittersweet",
+        "school", "modern", "adult"
+    ],
+}
 
 AUTO_METADATA_FIELDS = {
     "original_filename": lambda zip_path: os.path.basename(zip_path),
@@ -323,11 +341,7 @@ def load_b2_config(config_path=B2_CONFIG_FILE):
 
 
 def prompt_field(field_name, current_value):
-    # Existing content_type suggestion logic...
-    if field_name == "content_type":
-        print("\nSuggested content_type:")
-        print(", ".join(SUGGESTED_CONTENT_TYPE))
-    elif field_name == "artifact_type":
+    if field_name == "artifact_type":
         print("\nSuggested artifact_type:")
         print(", ".join(SUGGESTED_ARTIFACT_TYPE))
 
@@ -518,9 +532,6 @@ def is_artifact_metadata(metadata):
     """Return True when metadata payload represents an artifact-sidecar record."""
     if not isinstance(metadata, dict):
         return False
-    content_type = str(metadata.get("content_type") or "").strip().lower()
-    if content_type == "artifact":
-        return True
     artifact_type = str(metadata.get("artifact_type") or "").strip().lower()
     return bool(artifact_type)
 
@@ -781,25 +792,27 @@ def sync_visual_novel_upload_status(conn, vn_id):
 
 
 def upsert_build_record(conn, vn_id, metadata):
-    build_version = metadata.get('version', '1.0')
+    build_version = metadata.get('version') or metadata.get('version_string') or '1.0'
+    normalized_version = str(metadata.get('normalized_version') or build_version).strip().lower()
     build_language = normalize_text_list_value(metadata.get('language'))
-    build_type = metadata.get('build_type')
+    release_type = metadata.get('release_type') or metadata.get('build_type')
+    build_type = metadata.get('build_type') or release_type
     build_edition = metadata.get('edition')
     build_distribution_platform = metadata.get('distribution_platform')
     metadata_is_artifact = is_artifact_metadata(metadata)
     build_exists = conn.execute(
         '''
-        SELECT id, build_type, distribution_model, distribution_platform,
+        SELECT id, build_type, release_type, distribution_model, distribution_platform,
                language, translator, edition, original_release_date, release_date, engine,
                engine_version, source
         FROM builds
-        WHERE vn_id = ? AND version = ?
+        WHERE vn_id = ? AND normalized_version = ?
           AND COALESCE(language, '') = COALESCE(?, '')
-          AND COALESCE(build_type, '') = COALESCE(?, '')
+          AND COALESCE(release_type, COALESCE(build_type, '')) = COALESCE(?, '')
           AND COALESCE(edition, '') = COALESCE(?, '')
           AND COALESCE(distribution_platform, '') = COALESCE(?, '')
         ''',
-        (vn_id, build_version, build_language, build_type, build_edition, build_distribution_platform)
+        (vn_id, normalized_version, build_language, release_type, build_edition, build_distribution_platform)
     ).fetchone()
 
     existing = build_exists if build_exists else {}
@@ -829,7 +842,10 @@ def upsert_build_record(conn, vn_id, metadata):
         return existing[field_name] if build_exists else None
 
     values = (
+        build_version,
+        normalized_version,
         effective('build_type'),
+        effective('release_type') if metadata.get('release_type') is not None else release_type,
         effective('distribution_model'),
         effective('distribution_platform'),
         normalize_text_list_value(effective('language')),
@@ -846,7 +862,7 @@ def upsert_build_record(conn, vn_id, metadata):
         build_id = build_exists['id']
         conn.execute('''
             UPDATE builds SET
-                build_type = ?, distribution_model = ?, distribution_platform = ?,
+                version = ?, normalized_version = ?, build_type = ?, release_type = ?, distribution_model = ?, distribution_platform = ?,
                 language = ?, translator = ?, edition = ?, original_release_date = ?, release_date = ?,
                 engine = ?, engine_version = ?, source = ?
             WHERE id = ?
@@ -855,13 +871,12 @@ def upsert_build_record(conn, vn_id, metadata):
 
     conn.execute('''
         INSERT INTO builds (
-            vn_id, version, build_type, distribution_model,
+            vn_id, version, normalized_version, build_type, release_type, distribution_model,
             distribution_platform, language, translator, edition,
             original_release_date, release_date, engine, engine_version, source
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         vn_id,
-        build_version,
         *values
     ))
     return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
@@ -874,7 +889,7 @@ def resolve_existing_build_for_artifact(conn, metadata):
     non-artifact tables/columns as a side effect.
     """
     title = str(metadata.get("title") or "").strip()
-    version = str(metadata.get("version") or "").strip()
+    version = str(metadata.get("version") or metadata.get("version_string") or "").strip()
     if not title or not version:
         raise ValueError("Artifact metadata must include non-empty title and version.")
 
@@ -888,9 +903,10 @@ def resolve_existing_build_for_artifact(conn, metadata):
         return str(value).strip() or None
 
     language = normalize_text_list_value(metadata.get("language"))
-    build_type = normalized_optional("build_type")
+    release_type = normalized_optional("release_type") or normalized_optional("build_type")
     edition = normalized_optional("edition")
     distribution_platform = normalized_optional("distribution_platform")
+    normalized_version = str(metadata.get("normalized_version") or version).strip().lower()
 
     rows = conn.execute(
         """
@@ -898,18 +914,18 @@ def resolve_existing_build_for_artifact(conn, metadata):
         FROM builds b
         JOIN visual_novels v ON v.id = b.vn_id
         WHERE TRIM(v.title) = TRIM(?) COLLATE NOCASE
-          AND b.version = ?
+          AND b.normalized_version = ?
           AND (? IS NULL OR COALESCE(b.language, '') = ?)
-          AND (? IS NULL OR COALESCE(b.build_type, '') = ?)
+          AND (? IS NULL OR COALESCE(b.release_type, COALESCE(b.build_type, '')) = ?)
           AND (? IS NULL OR COALESCE(b.edition, '') = ?)
           AND (? IS NULL OR COALESCE(b.distribution_platform, '') = ?)
         ORDER BY b.id DESC
         """,
         (
             title,
-            version,
+            normalized_version,
             language, language or "",
-            build_type, build_type or "",
+            release_type, release_type or "",
             edition, edition or "",
             distribution_platform, distribution_platform or "",
         )
@@ -921,7 +937,7 @@ def resolve_existing_build_for_artifact(conn, metadata):
         )
     if len(rows) > 1:
         raise ValueError(
-            "Artifact processing matched multiple builds; provide build_type/language/edition/distribution_platform to disambiguate."
+            "Artifact processing matched multiple builds; provide release_type/language/edition/distribution_platform to disambiguate."
         )
 
     row = rows[0]
@@ -969,6 +985,51 @@ def sync_build_target_platforms(conn, build_id, metadata):
         conn.execute(
             'INSERT INTO build_target_platforms (build_id, platform_id) VALUES (?, ?)',
             (build_id, platform_id['id'])
+        )
+
+
+def sync_build_relations(conn, build_id, metadata):
+    relations = metadata.get("build_relations") or []
+    if not isinstance(relations, list):
+        return
+
+    conn.execute("DELETE FROM build_relations WHERE from_build_id = ?", (build_id,))
+
+    for rel in relations:
+        if not isinstance(rel, dict):
+            continue
+        relation_type = str(rel.get("relation_type") or "").strip().lower()
+        to_version = str(rel.get("to_version") or "").strip()
+        if not relation_type or not to_version:
+            continue
+
+        target_normalized_version = str(rel.get("to_normalized_version") or to_version).strip().lower()
+        target_build = conn.execute(
+            """
+            SELECT id
+            FROM builds
+            WHERE vn_id = (SELECT vn_id FROM builds WHERE id = ?)
+              AND normalized_version = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (build_id, target_normalized_version),
+        ).fetchone()
+        if not target_build:
+            continue
+
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO build_relations (from_build_id, to_build_id, relation_type, confidence, source)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                build_id,
+                target_build["id"],
+                relation_type,
+                rel.get("confidence"),
+                rel.get("source") or "metadata",
+            ),
         )
 
 
@@ -1069,7 +1130,23 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     filename = archive_data.get('filename') or metadata.get('original_filename')
     notes = metadata.get('notes')
     release_date = metadata.get('release_date')
+    platform = metadata.get("platform") or metadata.get("distribution_platform")
+    source_url = metadata.get("source_url") or metadata.get("source")
+    acquired_at = metadata.get("acquired_at") or metadata.get("archived_at")
+    acquisition_method = metadata.get("acquisition_method")
+    trust_level = metadata.get("trust_level")
     base_artifact_id = _resolve_base_artifact_id(conn, build_id, metadata, artifact_type)
+    file_size = int(archive_data.get("file_size") or metadata.get("file_size_bytes") or 0)
+    file_row = conn.execute(
+        """
+        INSERT INTO files (sha256, size_bytes)
+        VALUES (?, ?)
+        ON CONFLICT(sha256) DO UPDATE SET size_bytes = excluded.size_bytes
+        RETURNING id
+        """,
+        (artifact_sha256, file_size),
+    ).fetchone()
+    file_id = file_row["id"]
 
     existing_row = conn.execute(
         '''
@@ -1088,14 +1165,41 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
                 '''
                 UPDATE artifacts
                 SET artifact_type = COALESCE(NULLIF(?, ''), artifact_type),
+                    platform = COALESCE(?, platform),
+                    source_url = COALESCE(?, source_url),
+                    acquired_at = COALESCE(?, acquired_at),
+                    acquisition_method = COALESCE(?, acquisition_method),
+                    trust_level = COALESCE(?, trust_level),
                     filename = COALESCE(?, filename),
+                    file_id = COALESCE(?, file_id),
                     file_object_sha256 = COALESCE(file_object_sha256, ?),
                     base_artifact_id = ?,
                     release_date = COALESCE(?, release_date),
                     notes = COALESCE(?, notes)
                 WHERE artifact_id = ?
                 ''',
-            (artifact_type, filename, artifact_sha256, resolved_base_artifact_id, release_date, notes, existing_row['artifact_id'])
+            (
+                artifact_type,
+                platform,
+                source_url,
+                acquired_at,
+                acquisition_method,
+                trust_level,
+                filename,
+                file_id,
+                artifact_sha256,
+                resolved_base_artifact_id,
+                release_date,
+                notes,
+                existing_row['artifact_id'],
+            )
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO artifact_files (artifact_id, file_id, path_in_artifact, is_primary)
+            VALUES (?, ?, '', 1)
+            """,
+            (existing_row["artifact_id"], file_id),
         )
         return existing_row['artifact_id']
 
@@ -1107,12 +1211,36 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     conn.execute(
         '''
         INSERT INTO artifacts (
-            build_id, artifact_type, filename, sha256, file_object_sha256, base_artifact_id, release_date, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            build_id, artifact_type, platform, source_url, acquired_at, acquisition_method, trust_level,
+            filename, sha256, file_id, file_object_sha256, base_artifact_id, release_date, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''',
-        (build_id, artifact_type, filename, artifact_sha256, None, base_artifact_id, release_date, notes)
+        (
+            build_id,
+            artifact_type,
+            platform,
+            source_url,
+            acquired_at,
+            acquisition_method,
+            trust_level,
+            filename,
+            artifact_sha256,
+            file_id,
+            None,
+            base_artifact_id,
+            release_date,
+            notes,
+        )
     )
-    return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+    artifact_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO artifact_files (artifact_id, file_id, path_in_artifact, is_primary)
+        VALUES (?, ?, '', 1)
+        """,
+        (artifact_id, file_id),
+    )
+    return artifact_id
 
 
 def link_artifact_to_file_object(conn, build_id, artifact_sha256):
@@ -1345,6 +1473,7 @@ class VersionService:
     def upsert_build(self, vn_id, metadata):
         build_id = upsert_build_record(self.conn, vn_id, metadata)
         sync_build_target_platforms(self.conn, build_id, metadata)
+        sync_build_relations(self.conn, build_id, metadata)
         return build_id
 
 
@@ -1382,6 +1511,7 @@ def insert_visual_novel(metadata):
             sync_canon_relationship=sync_canon_relationship,
             upsert_build_record=upsert_build_record,
             sync_build_target_platforms=sync_build_target_platforms,
+            sync_build_relations=sync_build_relations,
             resolve_existing_build_for_artifact=resolve_existing_build_for_artifact,
         )
         domain_service = VisualNovelDomainService(
@@ -1601,28 +1731,6 @@ def create_archive_only(
 
     metadata = {"metadata_version": metadata_version}
     defaults = {}
-
-    FIELD_SUGGESTIONS = {
-        "release_status": ["ongoing", "completed", "hiatus", "cancelled", "abandoned"],
-        "distribution_model": ["free", "paid", "freemium", "donationware", "subscription", "patron_only"],
-        "build_type": ["full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "standalone"],
-        "language": ["japanese", "english", "chinese-simplified", "chinese-traditional", "korean", "spanish", "german",
-                     "french", "russian", "multi-language"],
-        "distribution_platform": ["steam", "itch.io", "dlsite", "fanza", "gumroad", "patreon", "booth",
-                                  "self-distributed", "other"],
-        "content_rating": ["all-ages", "teen", "mature", "18+", "unrated"],
-        "content_mode": ["sfw", "nsfw", "selectable", "patchable", "mixed", "unknown"],
-        "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
-        "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story",
-                         "non_canon_special"],
-        "artifact_type": SUGGESTED_ARTIFACT_TYPE,
-        "tags": [
-            "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
-            "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
-            "nakige", "utsuge", "nukige", "moege", "dark", "wholesome", "tragic", "bittersweet",
-            "school", "modern", "adult"
-        ]
-    }
 
     def normalize_list(val):
         if not val:
@@ -2274,7 +2382,7 @@ def upload_archive(file_path):
     build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
-    is_artifact_content = str(metadata.get("content_type", "")).strip().lower() == "artifact"
+    is_artifact_content = is_artifact_metadata(metadata)
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
@@ -2651,7 +2759,7 @@ def upload_metadata_sidecar(sidecar_path):
     build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
-    is_artifact_content = str(metadata.get("content_type", "")).strip().lower() == "artifact"
+    is_artifact_content = is_artifact_metadata(metadata)
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
