@@ -1,129 +1,214 @@
-# VN Archiver -- Domain Logic Explanation (Project Context)
+# VN Archiver — Domain Logic (Canonical Architecture)
 
-## 📌 Purpose
+## Purpose
 
-This document explains **why domain logic is necessary** in the VN
-Archiver project, using concrete examples from the system.
+This document defines the **target domain model** for VN Archiver.
 
-The goal is to move from:
+It is intentionally **greenfield-first**: architecture correctness is prioritized over backward compatibility or incremental migration concerns.
 
-file → hash → stored
+The system must model releases as domain entities, not as hash-only blobs.
 
-To:
+---
 
-VN → Build → Artifact → File
+## Core Principle
 
-------------------------------------------------------------------------
+Do **not** design around:
 
-## 🧠 What is Domain Logic?
+`file → hash → stored`
 
-Domain logic represents the **real-world meaning and rules** of your
-system.
+Design around:
 
-In your case: - Visual Novels (VN) - Releases (Builds) - Distributions
-(Artifacts) - Files (binary data)
+`VN → Build → Artifact → File`
 
-------------------------------------------------------------------------
+Where:
 
-## 🔥 The Core Problem (Current System)
+- **Files** are binary facts (content identity).
+- **Artifacts** are distributable packages or installable units.
+- **Builds** are release semantics and lineage.
+- **VN** is the product identity boundary.
 
-Your current ingestion logic:
+---
 
-SELECT id FROM versions WHERE sha256=?
+## Domain Entities (Required)
 
-This only answers:
+### 1) VN
 
-"Have I seen this file before?"
+Represents the title-level identity.
 
-But your real questions are:
+Required fields:
 
--   Is this file part of an existing build?
--   Is this a patch or full game?
--   Is this an April Fools version?
--   Which VN does this belong to?
+- `vn_id`
+- `canonical_title`
+- `developer`
+- `publisher` (optional)
+- `aliases` (optional)
 
-------------------------------------------------------------------------
+### 2) Build
 
-## 🧱 Key Insight
+Represents a release of a VN.
 
-Your project is NOT:
+Required fields:
 
-A collection of files
+- `build_id`
+- `vn_id`
+- `version_string`
+- `normalized_version` (for deterministic ordering/matching)
+- `release_type` (controlled vocabulary)
+- `release_status` (controlled vocabulary)
+- `release_date` (optional, but strongly recommended)
 
-It is:
+Build is the **semantic unit** users query when asking “which version/release is this?”
 
-A structured archive of VN releases and relationships
+### 3) BuildRelation
 
-------------------------------------------------------------------------
+Represents directed relationships between builds.
 
-## 🧩 Domain Model (Required Structure)
+Required fields:
 
-### VN
+- `from_build_id`
+- `to_build_id`
+- `relation_type` (controlled vocabulary)
 
-vn_id\
-title\
-developer
+Minimum relation types:
 
-### Build
+- `depends_on`
+- `supersedes`
+- `branch_of`
+- `equivalent_to`
 
-build_id\
-vn_id\
-version_string\
-release_type\
-release_status
+This is mandatory to model patch chains, forks, and release lineage.
 
-### Artifact
+### 4) Artifact
 
-artifact_id\
-build_id\
-type\
-platform
+Represents a concrete distribution of a build (zip, installer, patch package, etc.).
 
-### File
+Required fields:
 
-file_id\
-sha256\
-filename\
-size
+- `artifact_id`
+- `build_id`
+- `artifact_type` (controlled vocabulary)
+- `platform` (controlled vocabulary)
+- `source_url` (if known)
+- `acquired_at` (timestamp)
+- `acquisition_method`
+- `trust_level`
 
-------------------------------------------------------------------------
+An artifact is **not** a file. It is a packaging/provenance object.
 
-## ⚠️ Critical Distinction
+### 5) File
 
-Build ≠ File\
-Artifact ≠ File\
-File = raw data only
+Represents deduplicated binary identity.
 
-------------------------------------------------------------------------
+Required fields:
 
-## 🧪 Example
+- `file_id`
+- `sha256`
+- `size_bytes`
+- `mime_type` (optional)
+- `first_seen_at`
 
-Input:
+File identity must be reusable across any number of artifacts/builds.
 
-MyVN_v1.zip\
-MyVN_v2_patch.zip\
-MyVN_aprilfools.zip
+### 6) ArtifactFile
 
-With domain logic:
+Represents artifact composition (many-to-many between artifacts and files).
 
-VN: MyVN
+Required fields:
 
-Builds: - v1 → full\
-- v2 → patch → depends on v1\
-- april_fools → parody
+- `artifact_id`
+- `file_id`
+- `path_in_artifact` (optional but recommended)
+- `is_primary`
 
-------------------------------------------------------------------------
+This table is required for unpacked/multi-file distributions and for cross-artifact file reuse.
 
-## 🧠 Final Mental Model
+---
 
-Files → facts\
-Artifacts → packaging\
-Builds → meaning\
-VN → identity
+## Required Cardinality Rules
 
-------------------------------------------------------------------------
+- One `VN` has many `Build`s.
+- One `Build` has many `Artifact`s.
+- One `Artifact` has many `File`s (via `ArtifactFile`).
+- One `File` can appear in many `Artifact`s.
+- `BuildRelation` is many-to-many self-reference over `Build`.
 
-## 📌 Conclusion
+If these cardinalities are not present, the model is incomplete.
 
-Without domain logic → flat hash database\
-With domain logic → structured VN archive
+---
+
+## Controlled Vocabulary Requirements
+
+Free-text should not be the long-term source of truth for critical classification.
+
+At minimum, define controlled vocabularies for:
+
+- `release_type`
+- `release_status`
+- `artifact_type`
+- `platform`
+- `build_relation_type`
+
+Examples (non-exhaustive):
+
+- `release_type`: full, patch, demo, trial, fandisc, hotfix, april_fools
+- `release_status`: stable, prerelease, discontinued, unknown
+- `artifact_type`: archive, installer, patch_bundle, executable
+- `platform`: windows, linux, macos, android, web
+
+---
+
+## Ingestion Decision Model
+
+Ingestion must follow this sequence:
+
+1. **File identity:** compute hash and resolve/create `File`.
+2. **Artifact identity:** resolve/create `Artifact` with provenance.
+3. **Composition mapping:** write `ArtifactFile` rows.
+4. **Build resolution:** resolve/create `Build` with normalized version + taxonomy.
+5. **Lineage resolution:** resolve/create `BuildRelation` links.
+6. **VN resolution:** resolve/create canonical VN identity.
+
+Hash equality is only step 1. It must not decide release semantics by itself.
+
+---
+
+## Non-Negotiable Distinctions
+
+- `Build ≠ Artifact`
+- `Artifact ≠ File`
+- `BuildRelation` is first-class, not inferred ad hoc.
+- Domain queries must traverse VN/build/artifact relationships, not only hashes.
+
+---
+
+## Example
+
+Input artifacts:
+
+- `MyVN_v1.zip`
+- `MyVN_v2_patch.zip`
+- `MyVN_aprilfools.zip`
+
+Canonical interpretation:
+
+- `VN`: MyVN
+- `Build`: v1 (release_type=full)
+- `Build`: v2 (release_type=patch)
+- `Build`: april_fools (release_type=april_fools)
+- `BuildRelation`: v2 `depends_on` v1
+- `Artifact`s: one per acquired package with provenance
+- `File`s: deduplicated binaries linked through `ArtifactFile`
+
+---
+
+## Success Criteria
+
+The architecture is correct when the system can answer all of these directly:
+
+- “Which build does this artifact represent?”
+- “What does this patch depend on?”
+- “Which builds supersede this one?”
+- “Where has this exact file appeared across releases?”
+- “Which artifacts belong to VN X on platform Y?”
+
+If a query requires bypassing domain entities and relying only on file hashes, the model is underspecified.
