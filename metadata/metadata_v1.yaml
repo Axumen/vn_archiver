@@ -60,9 +60,6 @@ optional:
   # MISC
   # -------------------------------------
   - source_url
-  - acquired_at
-  - acquisition_method
-  - trust_level
   - notes
   - change_note          # Metadata revision note
 

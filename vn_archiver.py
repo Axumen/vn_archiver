@@ -76,7 +76,6 @@ FIELD_SUGGESTIONS = {
     "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story", "non_canon_special"],
     "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
     "artifact_type": SUGGESTED_ARTIFACT_TYPE,
-    "trust_level": ["verified", "unverified", "unknown"],
     "tags": [
         "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
         "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
@@ -484,9 +483,6 @@ PASSTHROUGH_FIELDS = {
     "edition",
     "original_release_date",
     "release_date",
-    "acquired_at",
-    "acquisition_method",
-    "trust_level",
     "engine",
     "engine_version",
     "parent_vn_title",
@@ -1152,9 +1148,6 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     release_date = metadata.get('release_date')
     platform = metadata.get("platform") or metadata.get("distribution_platform")
     source_url = metadata.get("source_url") or metadata.get("source")
-    acquired_at = metadata.get("acquired_at") or metadata.get("archived_at")
-    acquisition_method = metadata.get("acquisition_method")
-    trust_level = metadata.get("trust_level")
     base_artifact_id = _resolve_base_artifact_id(conn, build_id, metadata, artifact_type)
     file_size = int(archive_data.get("file_size") or metadata.get("file_size_bytes") or 0)
     file_row = conn.execute(
@@ -1187,9 +1180,6 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
                 SET artifact_type = COALESCE(NULLIF(?, ''), artifact_type),
                     platform = COALESCE(?, platform),
                     source_url = COALESCE(?, source_url),
-                    acquired_at = COALESCE(?, acquired_at),
-                    acquisition_method = COALESCE(?, acquisition_method),
-                    trust_level = COALESCE(?, trust_level),
                     filename = COALESCE(?, filename),
                     file_id = COALESCE(?, file_id),
                     file_object_sha256 = COALESCE(file_object_sha256, ?),
@@ -1202,9 +1192,6 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
                 artifact_type,
                 platform,
                 source_url,
-                acquired_at,
-                acquisition_method,
-                trust_level,
                 filename,
                 file_id,
                 artifact_sha256,
@@ -1231,18 +1218,15 @@ def upsert_artifact_record(conn, build_id, metadata, archive_data):
     conn.execute(
         '''
         INSERT INTO artifacts (
-            build_id, artifact_type, platform, source_url, acquired_at, acquisition_method, trust_level,
+            build_id, artifact_type, platform, source_url,
             filename, sha256, file_id, file_object_sha256, base_artifact_id, release_date, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''',
         (
             build_id,
             artifact_type,
             platform,
             source_url,
-            acquired_at,
-            acquisition_method,
-            trust_level,
             filename,
             artifact_sha256,
             file_id,
