@@ -310,27 +310,31 @@ def create_metadata_only():
 
 def quick_process_with_metadata_yaml():
     print()
-    panel("Quick Process (ZIP Archive + Metadata YAML)")
+    panel("Quick Process (Archive/Artifact + Metadata YAML)")
 
     if not os.path.exists(INCOMING_DIR):
         os.makedirs(INCOMING_DIR)
 
-    zip_files = [f for f in os.listdir(INCOMING_DIR) if f.lower().endswith(".zip")]
+    candidate_files = sorted([
+        f for f in os.listdir(INCOMING_DIR)
+        if os.path.isfile(os.path.join(INCOMING_DIR, f))
+        and not f.lower().endswith((".yaml", ".yml"))
+    ])
     yaml_files = [f for f in os.listdir(INCOMING_DIR) if f.lower().endswith((".yaml", ".yml"))]
 
-    if not zip_files:
-        notify(f"No zip files found in '{INCOMING_DIR}'.", "error")
+    if not candidate_files:
+        notify(f"No archive/artifact files found in '{INCOMING_DIR}' (excluding yaml).", "error")
         return
     if not yaml_files:
         notify(f"No metadata yaml files found in '{INCOMING_DIR}'.", "error")
         return
 
-    panel("Select ZIP file(s)")
-    for i, filename in enumerate(zip_files, 1):
+    panel("Select Archive/Artifact file(s)")
+    for i, filename in enumerate(candidate_files, 1):
         print(TEXT + f"[{i}] {filename}")
 
-    zip_choice = prompt("Select zip file numbers (comma-separated), or 0 to cancel: ")
-    if zip_choice in ("", "0"):
+    file_choice = prompt("Select file numbers (comma-separated), or 0 to cancel: ")
+    if file_choice in ("", "0"):
         return
 
     panel("Select Metadata YAML")
@@ -343,18 +347,18 @@ def quick_process_with_metadata_yaml():
 
     try:
         selected_paths = []
-        indices = [int(idx.strip()) - 1 for idx in zip_choice.split(",") if idx.strip().isdigit()]
+        indices = [int(idx.strip()) - 1 for idx in file_choice.split(",") if idx.strip().isdigit()]
         for idx in indices:
-            if 0 <= idx < len(zip_files):
-                selected_filename = zip_files[idx]
+            if 0 <= idx < len(candidate_files):
+                selected_filename = candidate_files[idx]
                 show_file_info(selected_filename)
                 selected_paths.append(os.path.join(INCOMING_DIR, selected_filename))
             else:
-                notify(f"Invalid zip selection: {idx + 1}", "error")
+                notify(f"Invalid file selection: {idx + 1}", "error")
                 return
 
         if not selected_paths:
-            notify("No valid zip files selected.", "error")
+            notify("No valid files selected.", "error")
             return
 
         y_idx = int(yaml_choice) - 1
@@ -401,11 +405,11 @@ def quick_process_with_metadata_yaml():
             selected_sha_set = set(s.lower() for s in selected_sha256)
             yaml_sha_set = set(yaml_sha256)
             if selected_sha_set != yaml_sha_set:
-                notify("Quick Process blocked: YAML sha256 does not match selected zip file(s).", "error")
-                notify(f"ZIP sha256: {', '.join(sorted(selected_sha_set))}", "error")
+                notify("Quick Process blocked: YAML sha256 does not match selected file(s).", "error")
+                notify(f"Selected file sha256: {', '.join(sorted(selected_sha_set))}", "error")
                 notify(f"YAML sha256: {', '.join(sorted(yaml_sha_set))}", "error")
                 return
-            notify("Confirmed: metadata YAML sha256 matches selected zip file(s).", "ok")
+            notify("Confirmed: metadata YAML sha256 matches selected file(s).", "ok")
         else:
             notify("No sha256 found in metadata YAML; skipping sha256 confirmation.", "warn")
 
@@ -1123,7 +1127,7 @@ def main():
 
         panel("Main Menu")
         print(PRIMARY + "  1) Create Metadata")
-        print(PRIMARY + "  2) Quick Process (ZIP + Metadata YAML)")
+        print(PRIMARY + "  2) Quick Process (Archive/Artifact + Metadata YAML)")
         print(PRIMARY + "  3) Process Artifact (Minimal Metadata)")
         print(PRIMARY + "  4) Edit Metadata")
         print(PRIMARY + "  5) Upload Archive")
