@@ -89,9 +89,6 @@ Required fields:
 - `artifact_type` (controlled vocabulary)
 - `platform` (controlled vocabulary)
 - `source_url` (if known)
-- `acquired_at` (timestamp)
-- `acquisition_method`
-- `trust_level`
 
 An artifact is **not** a file. It is a packaging/provenance object.
 
