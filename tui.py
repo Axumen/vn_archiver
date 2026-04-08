@@ -457,15 +457,35 @@ def process_artifact_with_metadata():
     artifact_path = os.path.join(INCOMING_DIR, artifact_filename)
     show_file_info(artifact_filename)
 
+    metadata = _prompt_artifact_linkage_metadata()
+    if not metadata:
+        return
+
+    with get_connection() as conn:
+        try:
+            _, resolved_build_id = resolve_existing_build_for_artifact(conn, metadata)
+            notify(f"Resolved existing build_id={resolved_build_id} for artifact linkage.", "ok")
+        except ValueError as exc:
+            notify(str(exc), "error")
+            notify(
+                "Tip: provide build_type/release_type/language/edition/distribution_platform when multiple builds match.",
+                "warn",
+            )
+            return
+
+    create_archive_from_metadata_file([artifact_path], metadata)
+
+
+def _prompt_artifact_linkage_metadata():
     title_input = prompt("title (must exactly match existing VN title): ")
     if not title_input:
         notify("title is required to resolve an existing build.", "error")
-        return
+        return None
 
     version_input = prompt("version (required): ")
     if not version_input:
         notify("version is required to resolve an existing build.", "error")
-        return
+        return None
 
     panel("Optional Build-Context Fields (Template-Aligned)")
     build_type = prompt("build_type (optional, e.g. full/demo/patch): ")
@@ -479,16 +499,9 @@ def process_artifact_with_metadata():
     if not artifact_type:
         artifact_type = "game_archive"
         notify("artifact_type not provided; defaulting to 'game_archive'.", "warn")
-    artifact_type_normalized = artifact_type.strip().lower()
 
     base_artifact_sha256 = prompt("base_artifact_sha256 (optional, recommended for patch/mod/hotfix): ")
     base_artifact_filename = prompt("base_artifact_filename (optional fallback): ")
-    if artifact_type_normalized in DERIVED_ARTIFACT_TYPES and not (base_artifact_sha256 or base_artifact_filename):
-        notify(
-            "Derived artifact types require a base artifact reference. Provide base_artifact_sha256 (preferred) or base_artifact_filename.",
-            "error",
-        )
-        return
 
     artifact_release_date = prompt("artifact_release_date (optional, YYYY-MM-DD): ")
 
@@ -511,22 +524,24 @@ def process_artifact_with_metadata():
         "notes": notes,
         "change_note": change_note,
     }
-
     metadata = {k: v for k, v in metadata.items() if v not in ("", None)}
 
-    with get_connection() as conn:
-        try:
-            _, resolved_build_id = resolve_existing_build_for_artifact(conn, metadata)
-            notify(f"Resolved existing build_id={resolved_build_id} for artifact linkage.", "ok")
-        except ValueError as exc:
-            notify(str(exc), "error")
-            notify(
-                "Tip: provide build_type/release_type/language/edition/distribution_platform when multiple builds match.",
-                "warn",
-            )
-            return
+    if not _validate_derived_artifact_base_reference(metadata):
+        return None
+    return metadata
 
-    create_archive_from_metadata_file([artifact_path], metadata)
+
+def _validate_derived_artifact_base_reference(metadata):
+    artifact_type_normalized = str(metadata.get("artifact_type") or "").strip().lower()
+    base_sha = str(metadata.get("base_artifact_sha256") or "").strip()
+    base_filename = str(metadata.get("base_artifact_filename") or "").strip()
+    if artifact_type_normalized in DERIVED_ARTIFACT_TYPES and not (base_sha or base_filename):
+        notify(
+            "Derived artifact types require a base artifact reference. Provide base_artifact_sha256 (preferred) or base_artifact_filename.",
+            "error",
+        )
+        return False
+    return True
 
 
 # =============================
