@@ -42,11 +42,6 @@ SUGGESTED_TAGS = [
     "school", "adult", "nakige", "utsuge"
 ]
 
-SUGGESTED_CONTENT_TYPE = [
-    "main_story", "story_expansion", "seasonal_event",
-    "april_fools", "side_story", "non_canon_special"
-]
-
 SUGGESTED_ARTIFACT_TYPE = [
     "base_game",
     "game_archive",
@@ -66,6 +61,27 @@ BASE_ARTIFACT_TYPES = {"base_game", "game_archive"}
 DERIVED_ARTIFACT_TYPES = {"patch", "mod", "hotfix", "translation_patch"}
 
 METADATA_LIST_FIELDS = {"tags", "target_platform", "aliases", "developer", "publisher"}
+
+FIELD_SUGGESTIONS = {
+    "release_status": ["ongoing", "completed", "hiatus", "cancelled", "abandoned"],
+    "distribution_model": ["free", "paid", "freemium", "donationware", "subscription", "patron_only"],
+    "build_type": ["full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "standalone"],
+    "language": ["japanese", "english", "chinese-simplified", "chinese-traditional", "korean", "spanish", "german",
+                 "french", "russian", "multi-language"],
+    "distribution_platform": ["steam", "itch.io", "dlsite", "fanza", "gumroad", "patreon", "booth",
+                              "self-distributed", "other"],
+    "content_rating": ["all-ages", "teen", "mature", "18+", "unrated"],
+    "content_mode": ["sfw", "nsfw", "selectable", "patchable", "mixed", "unknown"],
+    "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story", "non_canon_special"],
+    "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
+    "artifact_type": SUGGESTED_ARTIFACT_TYPE,
+    "tags": [
+        "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
+        "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
+        "nakige", "utsuge", "nukige", "moege", "dark", "wholesome", "tragic", "bittersweet",
+        "school", "modern", "adult"
+    ],
+}
 
 AUTO_METADATA_FIELDS = {
     "original_filename": lambda zip_path: os.path.basename(zip_path),
@@ -323,11 +339,7 @@ def load_b2_config(config_path=B2_CONFIG_FILE):
 
 
 def prompt_field(field_name, current_value):
-    # Existing content_type suggestion logic...
-    if field_name == "content_type":
-        print("\nSuggested content_type:")
-        print(", ".join(SUGGESTED_CONTENT_TYPE))
-    elif field_name == "artifact_type":
+    if field_name == "artifact_type":
         print("\nSuggested artifact_type:")
         print(", ".join(SUGGESTED_ARTIFACT_TYPE))
 
@@ -518,9 +530,6 @@ def is_artifact_metadata(metadata):
     """Return True when metadata payload represents an artifact-sidecar record."""
     if not isinstance(metadata, dict):
         return False
-    content_type = str(metadata.get("content_type") or "").strip().lower()
-    if content_type == "artifact":
-        return True
     artifact_type = str(metadata.get("artifact_type") or "").strip().lower()
     return bool(artifact_type)
 
@@ -1602,28 +1611,6 @@ def create_archive_only(
     metadata = {"metadata_version": metadata_version}
     defaults = {}
 
-    FIELD_SUGGESTIONS = {
-        "release_status": ["ongoing", "completed", "hiatus", "cancelled", "abandoned"],
-        "distribution_model": ["free", "paid", "freemium", "donationware", "subscription", "patron_only"],
-        "build_type": ["full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "standalone"],
-        "language": ["japanese", "english", "chinese-simplified", "chinese-traditional", "korean", "spanish", "german",
-                     "french", "russian", "multi-language"],
-        "distribution_platform": ["steam", "itch.io", "dlsite", "fanza", "gumroad", "patreon", "booth",
-                                  "self-distributed", "other"],
-        "content_rating": ["all-ages", "teen", "mature", "18+", "unrated"],
-        "content_mode": ["sfw", "nsfw", "selectable", "patchable", "mixed", "unknown"],
-        "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
-        "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story",
-                         "non_canon_special"],
-        "artifact_type": SUGGESTED_ARTIFACT_TYPE,
-        "tags": [
-            "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
-            "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
-            "nakige", "utsuge", "nukige", "moege", "dark", "wholesome", "tragic", "bittersweet",
-            "school", "modern", "adult"
-        ]
-    }
-
     def normalize_list(val):
         if not val:
             return None
@@ -2274,7 +2261,7 @@ def upload_archive(file_path):
     build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
-    is_artifact_content = str(metadata.get("content_type", "")).strip().lower() == "artifact"
+    is_artifact_content = is_artifact_metadata(metadata)
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
@@ -2651,7 +2638,7 @@ def upload_metadata_sidecar(sidecar_path):
     build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
-    is_artifact_content = str(metadata.get("content_type", "")).strip().lower() == "artifact"
+    is_artifact_content = is_artifact_metadata(metadata)
 
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")

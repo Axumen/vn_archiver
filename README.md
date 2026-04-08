@@ -32,6 +32,15 @@ content_rating: "18+"
 content_mode: "selectable"
 ```
 
+## Content type metadata (VN release flavor)
+
+Use `content_type` to describe the release/story flavor for VN metadata.
+Suggested values: `main_story`, `story_expansion`, `seasonal_event`, `april_fools`, `side_story`, `non_canon_special`.
+
+```yaml
+content_type: "seasonal_event"
+```
+
 ## Metadata capitalization guidance
 
 Capitalization is mostly a data-quality recommendation (not a strict parser rule).
