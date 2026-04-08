@@ -27,7 +27,8 @@ from vn_archiver import (
     get_current_metadata_version_number,
     stage_metadata_yaml_for_upload,
     order_metadata_for_yaml,
-    SUGGESTED_ARTIFACT_TYPE
+    SUGGESTED_ARTIFACT_TYPE,
+    resolve_existing_build_for_artifact,
 )
 
 init(autoreset=True)
@@ -418,7 +419,7 @@ def quick_process_with_metadata_yaml():
 
 def process_artifact_with_metadata():
     print()
-    panel("Process Artifact (Minimal Metadata)")
+    panel("Process Artifact (Domain-Matched Metadata)")
 
     if not os.path.exists(INCOMING_DIR):
         os.makedirs(INCOMING_DIR)
@@ -455,60 +456,21 @@ def process_artifact_with_metadata():
     artifact_path = os.path.join(INCOMING_DIR, artifact_filename)
     show_file_info(artifact_filename)
 
-    title_input = prompt("title: ")
+    title_input = prompt("title (must exactly match existing VN title): ")
     if not title_input:
-        notify("title is required to locate existing builds.", "error")
+        notify("title is required to resolve an existing build.", "error")
         return
 
-    with get_connection() as conn:
-        build_rows = conn.execute(
-            """
-            SELECT
-                b.id AS build_id,
-                v.title AS vn_title,
-                b.version,
-                b.build_type,
-                b.language,
-                b.edition,
-                b.distribution_platform
-            FROM builds b
-            JOIN visual_novels v ON v.id = b.vn_id
-            WHERE TRIM(v.title) LIKE TRIM(?) COLLATE NOCASE
-            ORDER BY v.title, b.version COLLATE NOCASE, b.id
-            """,
-            (f"%{title_input}%",)
-        ).fetchall()
-
-    if not build_rows:
-        notify("No builds found for that title. Create metadata/build first, then add artifact.", "error")
+    version_input = prompt("version (required): ")
+    if not version_input:
+        notify("version is required to resolve an existing build.", "error")
         return
 
-    panel("Select Build For Artifact Link")
-    for i, row in enumerate(build_rows, 1):
-        lang = row["language"] or "default"
-        btype = row["build_type"] or "default"
-        edition = row["edition"] or "default"
-        platform = row["distribution_platform"] or "default"
-        print(TEXT + f"[{i}] {row['vn_title']} | v{row['version']} | lang={lang} | type={btype} | edition={edition} | platform={platform} | build_id={row['build_id']}")
-
-    build_choice = prompt("Select build number, or 0 to cancel: ")
-    if build_choice in ("", "0"):
-        return
-
-    try:
-        build_idx = int(build_choice) - 1
-    except ValueError:
-        notify("Invalid build selection.", "error")
-        return
-
-    if build_idx < 0 or build_idx >= len(build_rows):
-        notify("Invalid build selection.", "error")
-        return
-
-    selected_build = build_rows[build_idx]
-    title = selected_build["vn_title"]
-    version = selected_build["version"]
-    selected_build_edition = selected_build["edition"]
+    panel("Optional Build-Context Fields (Use to disambiguate)")
+    release_type = prompt("release_type (optional, e.g. full/demo/patch): ")
+    language = prompt("language (optional): ")
+    edition = prompt("edition (optional): ")
+    distribution_platform = prompt("distribution_platform (optional): ")
 
     notify("Suggested artifact_type labels: " + ", ".join(SUGGESTED_ARTIFACT_TYPE), "info")
     artifact_type = prompt("artifact_type: ")
@@ -522,17 +484,31 @@ def process_artifact_with_metadata():
 
     metadata = {
         "metadata_version": get_active_metadata_template_version(),
-        "title": title,
-        "version": version,
-        "build_type": selected_build["build_type"],
-        "distribution_platform": selected_build["distribution_platform"],
-        "language": selected_build["language"],
-        "edition": selected_build_edition,
+        "title": title_input,
+        "version": version_input,
+        "release_type": release_type,
+        "distribution_platform": distribution_platform,
+        "language": language,
+        "edition": edition,
         "artifact_type": artifact_type,
         "release_date": artifact_release_date,
         "notes": notes,
         "change_note": change_note,
     }
+
+    metadata = {k: v for k, v in metadata.items() if v not in ("", None)}
+
+    with get_connection() as conn:
+        try:
+            _, resolved_build_id = resolve_existing_build_for_artifact(conn, metadata)
+            notify(f"Resolved existing build_id={resolved_build_id} for artifact linkage.", "ok")
+        except ValueError as exc:
+            notify(str(exc), "error")
+            notify(
+                "Tip: provide release_type/language/edition/distribution_platform when multiple builds match.",
+                "warn",
+            )
+            return
 
     create_archive_from_metadata_file([artifact_path], metadata)
 
