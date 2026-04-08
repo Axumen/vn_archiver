@@ -36,6 +36,8 @@ optional:
   # BUILD (version-level)
   # -------------------------------------
   - build_type
+  - release_type
+  - normalized_version
   - distribution_model
   - distribution_platform
   - language
@@ -46,6 +48,7 @@ optional:
   - engine
   - engine_version
   - target_platform
+  - build_relations      # [{relation_type, to_version}] for dependency/lineage modeling
 
   # -------------------------------------
   # RELATIONSHIPS
@@ -56,6 +59,10 @@ optional:
   # -------------------------------------
   # MISC
   # -------------------------------------
+  - source_url
+  - acquired_at
+  - acquisition_method
+  - trust_level
   - notes
   - change_note          # Metadata revision note
 
