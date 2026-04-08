@@ -466,8 +466,9 @@ def process_artifact_with_metadata():
         notify("version is required to resolve an existing build.", "error")
         return
 
-    panel("Optional Build-Context Fields (Use to disambiguate)")
-    release_type = prompt("release_type (optional, e.g. full/demo/patch): ")
+    panel("Optional Build-Context Fields (Template-Aligned)")
+    build_type = prompt("build_type (optional, e.g. full/demo/patch): ")
+    release_type = prompt("release_type (optional; if omitted, build_type is used): ")
     language = prompt("language (optional): ")
     edition = prompt("edition (optional): ")
     distribution_platform = prompt("distribution_platform (optional): ")
@@ -486,6 +487,7 @@ def process_artifact_with_metadata():
         "metadata_version": get_active_metadata_template_version(),
         "title": title_input,
         "version": version_input,
+        "build_type": build_type,
         "release_type": release_type,
         "distribution_platform": distribution_platform,
         "language": language,
@@ -505,7 +507,7 @@ def process_artifact_with_metadata():
         except ValueError as exc:
             notify(str(exc), "error")
             notify(
-                "Tip: provide release_type/language/edition/distribution_platform when multiple builds match.",
+                "Tip: provide build_type/release_type/language/edition/distribution_platform when multiple builds match.",
                 "warn",
             )
             return
