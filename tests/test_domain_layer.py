@@ -13,13 +13,13 @@ class FakeRepository:
         self.created_artifacts = []
         self.raw_metadata_records = []
 
-    def resolve_existing_build_for_artifact(self, metadata):
-        self.calls.append(("artifact", metadata["title"]))
-        return 55, 77
+    def get_or_create_vn(self, metadata):
+        self.calls.append(("vn", metadata["title"]))
+        return 11
 
-    def upsert_vn_and_build(self, metadata):
-        self.calls.append(("build", metadata["title"]))
-        return 11, 22
+    def get_or_create_build(self, vn_id, metadata):
+        self.calls.append(("build", vn_id, metadata["title"]))
+        return 22
 
     def create_artifact(self, build_id, metadata, archive_data):
         self.created_artifacts.append(
@@ -68,7 +68,7 @@ def test_ingest_uses_build_branch_for_non_artifact():
 
     assert result.vn_id == 11
     assert result.build_id == 22
-    assert repo.calls == [("build", "Sample VN")]
+    assert repo.calls == [("vn", "Sample VN"), ("build", 11, "Sample VN")]
     assert captured["args"] == (22, "Sample VN", 11, [{"sha256": "abc", "filename": "sample.zip"}])
     assert repo.created_artifacts == [(22, "abc", "sample.zip")]
     assert result.artifact is not None
@@ -80,7 +80,7 @@ def test_ingest_uses_build_branch_for_non_artifact():
     assert result.artifact_status == "classified"
 
 
-def test_ingest_uses_artifact_branch():
+def test_ingest_routes_all_ingests_through_get_or_create_vn_and_build():
     repo = FakeRepository()
     called = {"processed": False}
 
@@ -94,9 +94,9 @@ def test_ingest_uses_artifact_branch():
 
     result = service.ingest({"title": "Sample Patch", "sha256": "patch-sha"})
 
-    assert result.vn_id == 55
-    assert result.build_id == 77
-    assert repo.calls == [("artifact", "Sample Patch")]
+    assert result.vn_id == 11
+    assert result.build_id == 22
+    assert repo.calls == [("vn", "Sample Patch"), ("build", 11, "Sample Patch")]
     assert called["processed"] is True
     assert repo.created_artifacts == []
     assert result.artifact is not None
@@ -109,11 +109,15 @@ def test_ingest_normalizes_version_language_and_creator_before_resolution():
     repo = FakeRepository()
     captured = {}
 
-    def upsert_vn_and_build(metadata):
+    def get_or_create_vn(metadata):
         captured["metadata"] = metadata
-        return 1, 2
+        return 1
 
-    repo.upsert_vn_and_build = upsert_vn_and_build
+    def get_or_create_build(vn_id, metadata):
+        return 2
+
+    repo.get_or_create_vn = get_or_create_vn
+    repo.get_or_create_build = get_or_create_build
 
     service = VisualNovelDomainService(
         conn=object(),

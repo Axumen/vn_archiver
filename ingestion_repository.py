@@ -34,15 +34,70 @@ class VnIngestionRepository:
     def resolve_existing_build_for_artifact(self, metadata):
         return self._resolve_existing_build_for_artifact(self.conn, metadata)
 
-    def upsert_vn_and_build(self, metadata):
+    def get_or_create_vn(self, metadata):
         series_id = self._upsert_series(self.conn, metadata)
         vn_id = self._upsert_visual_novel_record(self.conn, metadata, series_id)
         self._sync_vn_tags(self.conn, vn_id, metadata)
         self._sync_canon_relationship(self.conn, vn_id, metadata)
+        return vn_id
 
+    def _build_lookup_filters(self, metadata):
+        version_value = (metadata.get("normalized_version") or metadata.get("version") or "").strip()
+        language = metadata.get("language")
+        release_type = metadata.get("release_type") or metadata.get("build_type")
+        platform = metadata.get("platform")
+        return version_value, language, release_type, platform
+
+    def find_build(self, vn_id, metadata):
+        version_value, language, release_type, platform = self._build_lookup_filters(metadata)
+        if not version_value:
+            return None
+
+        build_columns = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(builds)").fetchall()
+        }
+        version_column = "normalized_version" if "normalized_version" in build_columns else (
+            "version" if "version" in build_columns else "version_string"
+        )
+
+        where_clauses = ["vn_id = ?", f"{version_column} = ?"]
+        params = [vn_id, version_value]
+
+        if "language" in build_columns:
+            where_clauses.append("COALESCE(language, '') = COALESCE(?, '')")
+            params.append(language)
+        if "release_type" in build_columns:
+            where_clauses.append("COALESCE(release_type, '') = COALESCE(?, '')")
+            params.append(release_type)
+        elif "build_type" in build_columns:
+            where_clauses.append("COALESCE(build_type, '') = COALESCE(?, '')")
+            params.append(release_type)
+        if "platform" in build_columns:
+            where_clauses.append("COALESCE(platform, '') = COALESCE(?, '')")
+            params.append(platform)
+
+        row = self.conn.execute(
+            f"SELECT id FROM builds WHERE {' AND '.join(where_clauses)} ORDER BY id DESC LIMIT 1",
+            tuple(params),
+        ).fetchone()
+        return row["id"] if row else None
+
+    def create_build(self, vn_id, metadata):
         build_id = self._upsert_build_record(self.conn, vn_id, metadata)
         self._sync_build_target_platforms(self.conn, build_id, metadata)
         self._sync_build_relations(self.conn, build_id, metadata)
+        return build_id
+
+    def get_or_create_build(self, vn_id, metadata):
+        existing = self.find_build(vn_id, metadata)
+        if existing:
+            return existing
+        return self.create_build(vn_id, metadata)
+
+    def upsert_vn_and_build(self, metadata):
+        vn_id = self.get_or_create_vn(metadata)
+        build_id = self.get_or_create_build(vn_id, metadata)
         return vn_id, build_id
 
     def create_artifact(self, build_id, metadata, archive_data):
