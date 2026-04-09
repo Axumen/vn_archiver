@@ -2052,40 +2052,12 @@ def format_uploaded_component(value, fallback):
 
 
 def get_current_metadata_version_number(vn_id=None, build_id=None):
-    """Return active metadata_versions.version_number for a build (or fallback VN scope)."""
-    if not build_id and not vn_id:
-        return 1
-
-    with get_connection() as conn:
-        if not _table_exists(conn, "metadata_versions"):
-            return 1
-        if build_id:
-            row = conn.execute(
-                'SELECT version_number FROM metadata_versions WHERE build_id = ? AND is_current = 1',
-                (build_id,)
-            ).fetchone()
-        else:
-            row = conn.execute(
-                'SELECT version_number FROM metadata_versions WHERE vn_id = ? AND is_current = 1 ORDER BY created_at DESC, id DESC LIMIT 1',
-                (vn_id,)
-            ).fetchone()
-
-    return int(row['version_number']) if row and row['version_number'] is not None else 1
+    """Minimal-schema flow uses a single active metadata payload per ingest run."""
+    return 1
 
 
 def get_current_artifact_metadata_version_number(artifact_id):
-    if not artifact_id:
-        return 1
-
-    with get_connection() as conn:
-        if not _table_exists(conn, "artifact_metadata_versions"):
-            return 1
-        row = conn.execute(
-            'SELECT version_number FROM artifact_metadata_versions WHERE artifact_id = ? AND is_current = 1',
-            (artifact_id,)
-        ).fetchone()
-
-    return int(row['version_number']) if row and row['version_number'] is not None else 1
+    return 1
 
 
 def resolve_artifact_id_for_metadata(conn, build_id, metadata, fallback_sha=None):
@@ -2111,11 +2083,11 @@ def resolve_artifact_id_for_metadata(conn, build_id, metadata, fallback_sha=None
         if not sha:
             continue
         row = conn.execute(
-            f'SELECT {artifact_id_column} FROM artifacts WHERE build_id = ? AND sha256 = ?',
+            'SELECT id FROM artifacts WHERE build_id = ? AND sha256 = ?',
             (build_id, sha)
         ).fetchone()
         if row:
-            return row[artifact_id_column]
+            return row['id']
 
     return None
 
@@ -2302,19 +2274,10 @@ def mirror_metadata_for_rebuild(staged_meta_path, archives_data, build_id):
 
     archive_id_by_sha = {}
     with get_connection() as conn:
-        if _table_exists(conn, "archives"):
-            rows = conn.execute(
-                "SELECT id, sha256 FROM archives WHERE build_id = ?",
-                (build_id,),
-            ).fetchall()
-        elif _table_exists(conn, "artifacts"):
-            artifact_id_column = "artifact_id" if _column_exists(conn, "artifacts", "artifact_id") else "id"
-            rows = conn.execute(
-                f"SELECT {artifact_id_column} AS id, sha256 FROM artifacts WHERE build_id = ?",
-                (build_id,),
-            ).fetchall()
-        else:
-            rows = []
+        rows = conn.execute(
+            "SELECT id, sha256 FROM artifacts WHERE build_id = ?",
+            (build_id,),
+        ).fetchall()
         for row in rows:
             archive_id_by_sha[str(row["sha256"]).strip().lower()] = int(row["id"])
 
