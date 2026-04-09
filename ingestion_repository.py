@@ -34,16 +34,108 @@ class VnIngestionRepository:
     def resolve_existing_build_for_artifact(self, metadata):
         return self._resolve_existing_build_for_artifact(self.conn, metadata)
 
-    def upsert_vn_and_build(self, metadata):
-        series_id = self._upsert_series(self.conn, metadata)
-        vn_id = self._upsert_visual_novel_record(self.conn, metadata, series_id)
-        self._sync_vn_tags(self.conn, vn_id, metadata)
-        self._sync_canon_relationship(self.conn, vn_id, metadata)
+    def get_or_create_vn(self, metadata):
+        title = str(metadata.get("title") or "").strip()
+        if not title:
+            raise ValueError("Title is required for VN resolution.")
 
-        build_id = self._upsert_build_record(self.conn, vn_id, metadata)
-        self._sync_build_target_platforms(self.conn, build_id, metadata)
-        self._sync_build_relations(self.conn, build_id, metadata)
+        existing = self.conn.execute(
+            "SELECT id FROM vn WHERE TRIM(title) = TRIM(?) COLLATE NOCASE LIMIT 1",
+            (title,),
+        ).fetchone()
+        if existing:
+            return existing["id"]
+
+        self.conn.execute(
+            "INSERT INTO vn (title) VALUES (?)",
+            (title,),
+        )
+        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def _build_lookup_filters(self, metadata):
+        version_value = str(metadata.get("version") or "").strip()
+        language = metadata.get("language")
+        release_type = metadata.get("release_type")
+        platform = metadata.get("platform")
+        return version_value, language, release_type, platform
+
+    def find_build(self, vn_id, metadata):
+        version_value, language, release_type, platform = self._build_lookup_filters(metadata)
+        if not version_value:
+            return None
+
+        where_clauses = ["vn_id = ?", "version_string = ?"]
+        params = [vn_id, version_value]
+        where_clauses.append("COALESCE(language, '') = COALESCE(?, '')")
+        params.append(language)
+        where_clauses.append("COALESCE(release_type, '') = COALESCE(?, '')")
+        params.append(release_type)
+        where_clauses.append("COALESCE(platform, '') = COALESCE(?, '')")
+        params.append(platform)
+
+        row = self.conn.execute(
+            f"SELECT id FROM builds WHERE {' AND '.join(where_clauses)} ORDER BY id DESC LIMIT 1",
+            tuple(params),
+        ).fetchone()
+        return row["id"] if row else None
+
+    def create_build(self, vn_id, metadata):
+        version_value, language, release_type, platform = self._build_lookup_filters(metadata)
+        if not version_value:
+            version_value = "1.0"
+
+        columns = ["vn_id", "version_string", "language", "release_type", "platform"]
+        values = [vn_id, version_value, language, release_type, platform]
+        placeholders = ", ".join(["?"] * len(columns))
+        self.conn.execute(
+            f"INSERT INTO builds ({', '.join(columns)}) VALUES ({placeholders})",
+            tuple(values),
+        )
+        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_or_create_build(self, vn_id, metadata):
+        existing = self.find_build(vn_id, metadata)
+        if existing:
+            return existing
+        return self.create_build(vn_id, metadata)
+
+    def upsert_vn_and_build(self, metadata):
+        vn_id = self.get_or_create_vn(metadata)
+        build_id = self.get_or_create_build(vn_id, metadata)
         return vn_id, build_id
 
     def create_artifact(self, build_id, metadata, archive_data):
-        return self._create_artifact_record(self.conn, build_id, metadata, archive_data)
+        artifact_sha = archive_data.get("sha256")
+        if not artifact_sha:
+            return None
+
+        artifact_path = archive_data.get("filepath") or archive_data.get("filename") or metadata.get("original_filename")
+        artifact_type = str(metadata.get("artifact_type") or "game_archive").strip().lower() or "game_archive"
+
+        existing = self.conn.execute(
+            "SELECT id, build_id FROM artifacts WHERE sha256 = ? LIMIT 1",
+            (artifact_sha,),
+        ).fetchone()
+        if existing:
+            if build_id is not None:
+                self.conn.execute(
+                    "UPDATE artifacts SET build_id = COALESCE(build_id, ?) WHERE id = ?",
+                    (build_id, existing["id"]),
+                )
+            return existing["id"]
+
+        insert_columns = ["build_id", "sha256", "path", "type"]
+        insert_values = [build_id, artifact_sha, artifact_path or artifact_sha, artifact_type]
+
+        placeholders = ", ".join(["?"] * len(insert_columns))
+        self.conn.execute(
+            f"INSERT INTO artifacts ({', '.join(insert_columns)}) VALUES ({placeholders})",
+            tuple(insert_values),
+        )
+        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def create_metadata_raw(self, raw_text, source_file, artifact_id):
+        self.conn.execute(
+            "INSERT INTO metadata_raw (raw_text, source_file, artifact_id) VALUES (?, ?, ?)",
+            (raw_text, source_file, artifact_id),
+        )

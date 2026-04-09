@@ -84,6 +84,10 @@ def notify(message, level="info"):
 def prompt(label):
     return input(WARNING + f"➤ {label}").strip()
 
+
+def notify_pipeline(stage, message, level="info"):
+    notify(f"Stage {stage}: {message}", level)
+
 # =============================
 # SUGGESTED VALUES (Normalized)
 # =============================
@@ -261,6 +265,69 @@ def toggle_metadata_editor_mode():
 # METADATA CREATION
 # =============================
 
+
+def process_incoming_pairs():
+    """Minimal processing workflow: pair incoming file + YAML by stem and ingest."""
+    print()
+    panel("Process Incoming Pairs (Minimal Workflow)")
+
+    if not os.path.exists(INCOMING_DIR):
+        os.makedirs(INCOMING_DIR)
+
+    files = [
+        f for f in os.listdir(INCOMING_DIR)
+        if os.path.isfile(os.path.join(INCOMING_DIR, f))
+    ]
+    archive_files = [f for f in files if not f.lower().endswith((".yaml", ".yml"))]
+    yaml_files = [f for f in files if f.lower().endswith((".yaml", ".yml"))]
+
+    if not archive_files or not yaml_files:
+        notify("No pairable incoming files found.", "error")
+        notify("Required: place both archive file and YAML sidecar in incoming/.", "info")
+        notify("Recommended pairing rule: same filename stem, different extension.", "info")
+        return
+
+    yaml_by_stem = {Path(name).stem: name for name in yaml_files}
+    pairs = []
+    for archive_name in sorted(archive_files):
+        stem = Path(archive_name).stem
+        matched_yaml = yaml_by_stem.get(stem)
+        if matched_yaml:
+            pairs.append((archive_name, matched_yaml))
+
+    if not pairs:
+        notify("No pairable files matched by filename stem.", "error")
+        notify("Example: clannad_v1.0.zip + clannad_v1.0.yaml", "info")
+        return
+
+    notify(f"Found {len(pairs)} pair(s). Starting pipeline.", "ok")
+
+    for archive_name, yaml_name in pairs:
+        archive_path = os.path.join(INCOMING_DIR, archive_name)
+        metadata_path = os.path.join(INCOMING_DIR, yaml_name)
+        notify_pipeline("1", f"Ingest file: {archive_name}")
+
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            raw_metadata_text = f.read()
+        parsed = yaml.safe_load(raw_metadata_text) or {}
+        if not isinstance(parsed, dict):
+            notify(f"Skipping pair '{archive_name}': metadata is not a YAML object.", "error")
+            continue
+        notify_pipeline("2", f"Parsed metadata: {yaml_name}")
+
+        ordered_metadata = order_metadata_for_yaml(parsed)
+        create_archive_from_metadata_file(
+            [archive_path],
+            ordered_metadata,
+            raw_text=raw_metadata_text,
+            source_file=metadata_path,
+        )
+        notify_pipeline("3-7", f"Paired/resolved/classified: {archive_name}", "ok")
+
+        if os.path.exists(metadata_path):
+            os.remove(metadata_path)
+            notify(f"Removed processed metadata yaml: {yaml_name}", "info")
+
 def create_metadata_only():
     print()
     panel("Create Metadata")
@@ -338,7 +405,8 @@ def upsert_build_from_metadata_yaml():
 
     metadata_path = os.path.join(INCOMING_DIR, yaml_files[y_idx])
     with open(metadata_path, "r", encoding="utf-8") as f:
-        metadata = yaml.safe_load(f) or {}
+        raw_metadata_text = f.read()
+    metadata = yaml.safe_load(raw_metadata_text) or {}
 
     if not isinstance(metadata, dict):
         notify("Selected metadata yaml is not a valid object.", "error")
@@ -417,6 +485,8 @@ def quick_process_with_metadata_yaml():
             notify("No valid files selected.", "error")
             return
 
+        notify_pipeline("1", "Files ingested independently.")
+
         y_idx = int(yaml_choice) - 1
         if not (0 <= y_idx < len(yaml_files)):
             notify("Invalid metadata yaml selection.", "error")
@@ -424,7 +494,10 @@ def quick_process_with_metadata_yaml():
 
         metadata_path = os.path.join(INCOMING_DIR, yaml_files[y_idx])
         with open(metadata_path, "r", encoding="utf-8") as f:
-            metadata = yaml.safe_load(f) or {}
+            raw_metadata_text = f.read()
+        metadata = yaml.safe_load(raw_metadata_text) or {}
+
+        notify_pipeline("2", "Metadata parsed independently.")
 
         if not isinstance(metadata, dict):
             notify("Selected metadata yaml is not a valid object.", "error")
@@ -439,12 +512,15 @@ def quick_process_with_metadata_yaml():
 
         metadata_is_artifact = bool(str(metadata.get("artifact_type") or "").strip())
         if metadata_is_artifact:
-            notify(
-                "Artifact metadata detected in Quick Process YAML; resolving/creating build context before artifact link.",
-                "info",
-            )
+            notify_pipeline("3", "Pairing artifact ↔ metadata.")
             _validate_derived_artifact_base_reference(metadata)
-            _ensure_build_context_for_artifact(metadata)
+            try:
+                _, resolved_build_id = _ensure_build_context_for_artifact(metadata)
+            except ValueError as exc:
+                notify(f"Artifact status: unresolved ({exc})", "error")
+                return
+            notify_pipeline("4", "VN resolved from metadata title.", "ok")
+            notify_pipeline(f"5", f"Build resolved (build_id={resolved_build_id}).", "ok")
 
         selected_sha256 = [sha256_file(path) for path in selected_paths]
         yaml_sha256 = []
@@ -474,13 +550,20 @@ def quick_process_with_metadata_yaml():
         if list(ordered_metadata.keys()) != list(metadata.keys()):
             notify("Corrected metadata YAML field order based on template before processing.", "info")
 
-        create_archive_from_metadata_file(selected_paths, ordered_metadata)
+        create_archive_from_metadata_file(
+            selected_paths,
+            ordered_metadata,
+            raw_text=raw_metadata_text,
+            source_file=metadata_path,
+        )
+        notify_pipeline("6", "Artifact linked and metadata routed to VN/Build fields.", "ok")
+        notify_pipeline("7", "Artifact workflow marked classified.", "ok")
 
         if os.path.exists(metadata_path):
             os.remove(metadata_path)
             notify(f"Removed processed metadata yaml: {os.path.basename(metadata_path)}", "info")
-    except ValueError:
-        notify("Invalid input.", "error")
+    except ValueError as exc:
+        notify(f"Invalid input: {exc}", "error")
 
 
 def process_artifact_with_metadata():
@@ -522,19 +605,27 @@ def process_artifact_with_metadata():
     artifact_path = os.path.join(INCOMING_DIR, artifact_filename)
     show_file_info(artifact_filename)
 
+    notify_pipeline("1", "Artifact file ingested independently.")
+
     metadata = _prompt_artifact_metadata()
     if metadata is None:
         return
 
+    notify_pipeline("2", "Metadata parsed independently (not resolved to VN/Build yet).")
+
     try:
+        notify_pipeline("3", "Pairing artifact ↔ metadata.")
         _, resolved_build_id = _ensure_build_context_for_artifact(metadata)
     except ValueError as exc:
-        notify(str(exc), "error")
+        notify(f"Artifact status: unresolved ({exc})", "error")
         return
 
-    notify(f"Artifact metadata resolved to build_id={resolved_build_id}.", "ok")
+    notify_pipeline("4", "VN resolved from metadata title.", "ok")
+    notify_pipeline("5", f"Build resolved (build_id={resolved_build_id}).", "ok")
 
     create_archive_from_metadata_file([artifact_path], metadata)
+    notify_pipeline("6", "Artifact linked and metadata routed to VN/Build fields.", "ok")
+    notify_pipeline("7", "Artifact workflow marked classified.", "ok")
 
 
 def _derive_build_metadata_from_artifact_metadata(metadata):
@@ -661,13 +752,7 @@ def _prompt_artifact_metadata():
 
     _validate_derived_artifact_base_reference(metadata)
 
-    try:
-        _, resolved_build_id = _ensure_build_context_for_artifact(metadata)
-        notify(f"Resolved artifact metadata to build_id={resolved_build_id}.", "ok")
-    except ValueError as exc:
-        notify(str(exc), "error")
-        return None
-
+    notify("Metadata captured. Build/VN resolution happens in the next stage.", "info")
     return metadata
 
 
@@ -1192,46 +1277,33 @@ def main():
         header()
 
         panel("Main Menu")
-        print(PRIMARY + "  1) Create Metadata (From File Selection)")
-        print(PRIMARY + "  2) Upsert Build/VN Metadata (YAML Only, No File)")
-        print(PRIMARY + "  3) Quick Process (File + Metadata YAML, Domain Flow)")
-        print(PRIMARY + "  4) Process Artifact (Auto Build Resolution)")
-        print(PRIMARY + "  5) Edit Metadata")
-        print(PRIMARY + "  6) Upload Archive")
-        print(PRIMARY + "  7) Delete From Uploading")
-        print(PRIMARY + "  8) Config")
-        print(PRIMARY + "  9) Toggle Metadata Editor Mode")
-        print(PRIMARY + " 10) Quit\n")
+        print(PRIMARY + "  1) Process Incoming Pairs (File + YAML)")
+        print(PRIMARY + "  2) Edit Metadata")
+        print(PRIMARY + "  3) Upload Archive")
+        print(PRIMARY + "  4) Delete From Uploading")
+        print(PRIMARY + "  5) Config")
+        print(PRIMARY + "  6) Quit\n")
 
         active_version = get_active_metadata_template_version()
         notify(f"Active metadata template: v{active_version}")
         mode_label = "Notepad/Editor mode" if METADATA_EDITOR_MODE else "Prompt mode"
         notify(f"Create Metadata mode: {mode_label}")
-        notify("Option 2: Use when metadata YAML already exists in incoming/.", "info")
-        notify("Option 3: Use guided prompts to build artifact metadata without YAML.", "info")
+        notify("Minimal processing workflow: place matching file+yaml pairs in incoming/, then run option 1.", "info")
         print()
 
         choice = prompt("Select option: ")
 
         if choice == "1":
-            create_metadata_only()
+            process_incoming_pairs()
         elif choice == "2":
-            upsert_build_from_metadata_yaml()
-        elif choice == "3":
-            quick_process_with_metadata_yaml()
-        elif choice == "4":
-            process_artifact_with_metadata()
-        elif choice == "5":
             edit_metadata_only()
-        elif choice == "6":
+        elif choice == "3":
             upload_archives()
-        elif choice == "7":
+        elif choice == "4":
             delete_uploading_files()
-        elif choice == "8":
+        elif choice == "5":
             configure_metadata_template_version()
-        elif choice == "9":
-            toggle_metadata_editor_mode()
-        elif choice == "10":
+        elif choice == "6":
             print()
             panel("Goodbye", "Session closed")
             print()

@@ -1,4 +1,3 @@
-import sqlite3
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -69,6 +68,7 @@ class IngestionResult:
     artifact: Artifact | None = None
     build: Build | None = None
     vn: VN | None = None
+    artifact_status: str | None = None
 
     def __post_init__(self):
         if self.build is not None and self.artifact is not None:
@@ -82,11 +82,13 @@ class IngestionResult:
 
 
 class IngestionRepository(Protocol):
-    def resolve_existing_build_for_artifact(self, metadata): ...
+    def get_or_create_vn(self, metadata): ...
 
-    def upsert_vn_and_build(self, metadata): ...
+    def get_or_create_build(self, vn_id, metadata): ...
 
     def create_artifact(self, build_id, metadata, archive_data): ...
+
+    def create_metadata_raw(self, raw_text, source_file, artifact_id): ...
 
 
 class VisualNovelDomainService:
@@ -146,16 +148,68 @@ class VisualNovelDomainService:
         )
         return artifact, build, vn
 
+    @staticmethod
+    def normalize_version(version_value):
+        """Normalize user-provided version labels (e.g. v1.0 -> 1.0)."""
+        version_text = str(version_value or "").strip()
+        if not version_text:
+            return ""
+        if version_text.lower().startswith("v") and len(version_text) > 1:
+            return version_text[1:].strip()
+        return version_text
+
+    @staticmethod
+    def normalize_language(language_value):
+        """Normalize language labels to stable ingest keys."""
+        language_text = str(language_value or "").strip()
+        if not language_text:
+            return ""
+        if language_text.isalpha() and len(language_text) <= 3:
+            return language_text.upper()
+        return language_text.lower()
+
+    def _prepare_resolution_metadata(self, metadata):
+        """Stage 6 split: route VN vs Build metadata to the correct columns/entities."""
+        resolved = dict(metadata)
+
+        creator = resolved.get("creator")
+        if creator and not resolved.get("developer"):
+            resolved["developer"] = creator
+
+        normalized_version = self.normalize_version(resolved.get("version") or resolved.get("version_string"))
+        if normalized_version:
+            resolved["version"] = normalized_version
+            resolved["normalized_version"] = normalized_version.lower()
+
+        normalized_language = self.normalize_language(resolved.get("language"))
+        if normalized_language:
+            resolved["language"] = normalized_language
+
+        return resolved
+
+    def _supports_legacy_archive_processing(self):
+        """Legacy archive processing needs tables outside current architecture (e.g. files)."""
+        if self.conn is None:
+            return False
+        if not hasattr(self.conn, "execute"):
+            return True
+        try:
+            row = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'files'"
+            ).fetchone()
+        except Exception:
+            return False
+        return row is not None
+
     def ingest(self, metadata):
         if not metadata.get("title"):
             raise ValueError("Title is required.")
 
         archives_to_process, _ = self.collect_archives_for_db(metadata)
 
-        if self.is_artifact_metadata(metadata):
-            vn_id, build_id = self.repository.resolve_existing_build_for_artifact(metadata)
-        else:
-            vn_id, build_id = self.repository.upsert_vn_and_build(metadata)
+        resolved_metadata = self._prepare_resolution_metadata(metadata)
+        vn_id = self.repository.get_or_create_vn(resolved_metadata)
+        build_id = self.repository.get_or_create_build(vn_id, resolved_metadata)
 
         candidate_sha256 = None
         if archives_to_process:
@@ -171,22 +225,32 @@ class VisualNovelDomainService:
         if not candidate_sha256:
             candidate_sha256 = metadata.get("sha256")
 
+        created_artifact_ids = []
         for archive_data in archives_to_process:
             sha = archive_data.get("sha256")
             path = archive_data.get("filepath") or archive_data.get("filename")
             if not sha or not path:
                 continue
-            self.repository.create_artifact(build_id, metadata, archive_data)
+            artifact_id = self.repository.create_artifact(build_id, resolved_metadata, archive_data)
+            if artifact_id is not None:
+                created_artifact_ids.append(artifact_id)
 
-        self.process_archives_for_build(
-            self.conn,
-            build_id,
-            metadata,
-            vn_id,
-            archives_to_process,
-        )
+        raw_text = metadata.get("_raw_text")
+        source_file = metadata.get("_source_file")
+        primary_artifact_id = created_artifact_ids[0] if created_artifact_ids else None
+        if raw_text and primary_artifact_id is not None:
+            self.repository.create_metadata_raw(raw_text, source_file, primary_artifact_id)
+
+        if self._supports_legacy_archive_processing():
+            self.process_archives_for_build(
+                self.conn,
+                build_id,
+                resolved_metadata,
+                vn_id,
+                archives_to_process,
+            )
         artifact, build, vn = self._build_domain_graph(
-            metadata,
+            resolved_metadata,
             archives_to_process,
             build_id=build_id,
             vn_id=vn_id,
@@ -197,4 +261,5 @@ class VisualNovelDomainService:
             artifact=artifact,
             build=build,
             vn=vn,
+            artifact_status="classified",
         )
