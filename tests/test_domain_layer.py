@@ -57,8 +57,8 @@ def test_ingest_uses_build_branch_for_non_artifact():
     assert captured["args"] == (22, "Sample VN", 11, [{"sha256": "abc"}])
     assert result.artifact is not None
     assert result.artifact.file_sha256 == "abc"
-    assert result.version is not None
-    assert result.version.version_string == "1.0"
+    assert result.build is not None
+    assert result.build.version.version_string == "1.0"
     assert result.vn is not None
     assert result.vn.canonical_title == "Sample VN"
 
@@ -82,16 +82,17 @@ def test_ingest_uses_artifact_branch():
     assert repo.calls == [("artifact", "Sample Patch")]
     assert called["processed"] is True
     assert result.artifact is not None
-    assert result.version is not None
+    assert result.build is not None
     assert result.vn is not None
 
 
-def test_domain_entities_model_file_to_artifact_to_version_to_vn():
+def test_domain_entities_model_file_to_artifact_to_build_to_version_to_vn():
     vn = VN(canonical_title="Example VN", developer="Dev Team", publisher="Pub Team")
-    build = Build(build_id=10, vn_id=20, version_string="2.0")
-    version = Version(version_string="2.0", vn=vn, build=build)
-    artifact = Artifact(file_sha256="deadbeef", version=version, artifact_type="archive")
+    version = Version(version_string="2.0", normalized_version="2.0")
+    build = Build(build_id=10, vn_id=20, version=version, release_type="full")
+    artifact = Artifact(file_sha256="deadbeef", build=build, artifact_type="archive")
 
     assert artifact.file_sha256 == "deadbeef"
-    assert artifact.version.version_string == "2.0"
-    assert artifact.version.vn.canonical_title == "Example VN"
+    assert artifact.build.version.version_string == "2.0"
+    assert artifact.build.release_type == "full"
+    assert vn.canonical_title == "Example VN"

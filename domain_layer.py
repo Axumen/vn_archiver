@@ -5,15 +5,17 @@ from typing import Protocol
 @dataclass(frozen=True)
 class Build:
     """
-    Persistence-facing release identity.
+    Build-centric release aggregate.
 
-    Build models the database-level identity for a release row while Version
-    models the domain-facing semantic release.
+    Build is the semantic release unit. Version is a value object attached to
+    Build that carries version semantics.
     """
 
     build_id: int | None
     vn_id: int | None
-    version_string: str
+    version: "Version"
+    release_type: str | None = None
+    release_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -26,14 +28,13 @@ class VN:
 @dataclass(frozen=True)
 class Version:
     version_string: str
-    vn: VN
-    build: Build | None = None
+    normalized_version: str | None = None
 
 
 @dataclass(frozen=True)
 class Artifact:
     file_sha256: str | None
-    version: Version
+    build: Build
     artifact_type: str | None = None
     platform: str | None = None
     source_url: str | None = None
@@ -44,7 +45,7 @@ class IngestionResult:
     vn_id: int
     build_id: int
     artifact: Artifact | None = None
-    version: Version | None = None
+    build: Build | None = None
     vn: VN | None = None
 
 
@@ -58,7 +59,7 @@ class VisualNovelDomainService:
     """
     Domain-layer orchestration for VN archiving.
 
-    This service centralizes the file -> Artifact -> Version -> VN flow so callers do
+    This service centralizes the file -> Artifact -> Build -> VN flow so callers do
     not need to coordinate low-level SQL-oriented helper functions directly.
     """
 
@@ -83,21 +84,26 @@ class VisualNovelDomainService:
             developer=metadata.get("developer"),
             publisher=metadata.get("publisher"),
         )
+        version = Version(
+            version_string=metadata.get("version", "unknown"),
+            normalized_version=metadata.get("normalized_version"),
+        )
         build = Build(
             build_id=build_id,
             vn_id=vn_id,
-            version_string=metadata.get("version", "unknown"),
+            version=version,
+            release_type=metadata.get("release_type"),
+            release_status=metadata.get("release_status"),
         )
-        version = Version(version_string=build.version_string, vn=vn, build=build)
         primary_archive = archives_to_process[0] if archives_to_process else {}
         artifact = Artifact(
             file_sha256=primary_archive.get("sha256"),
-            version=version,
+            build=build,
             artifact_type=metadata.get("artifact_type"),
             platform=metadata.get("platform"),
             source_url=metadata.get("url"),
         )
-        return artifact, version, vn
+        return artifact, build, vn
 
     def ingest(self, metadata):
         if not metadata.get("title"):
@@ -117,7 +123,7 @@ class VisualNovelDomainService:
             vn_id,
             archives_to_process,
         )
-        artifact, version, vn = self._build_domain_graph(
+        artifact, build, vn = self._build_domain_graph(
             metadata,
             archives_to_process,
             build_id=build_id,
@@ -127,6 +133,6 @@ class VisualNovelDomainService:
             vn_id=vn_id,
             build_id=build_id,
             artifact=artifact,
-            version=version,
+            build=build,
             vn=vn,
         )
