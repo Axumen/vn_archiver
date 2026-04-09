@@ -96,3 +96,21 @@ def test_domain_entities_model_file_to_artifact_to_build_to_version_to_vn():
     assert artifact.build.version.version_string == "2.0"
     assert artifact.build.release_type == "full"
     assert vn.canonical_title == "Example VN"
+
+
+def test_artifact_uses_metadata_sha256_when_archive_list_is_empty():
+    repo = FakeRepository()
+    service = VisualNovelDomainService(
+        conn=object(),
+        repository=repo,
+        is_artifact_metadata=lambda _: True,
+        collect_archives_for_db=lambda _: ([], None),
+        process_archives_for_build=lambda *args, **kwargs: None,
+    )
+
+    result = service.ingest({"title": "Patch", "sha256": "from-metadata"})
+
+    assert result.artifact is not None
+    assert result.artifact.file_sha256 == "from-metadata"
+    assert result.build is not None
+    assert result.artifact.build == result.build

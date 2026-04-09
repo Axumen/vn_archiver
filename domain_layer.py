@@ -7,8 +7,8 @@ class Build:
     """
     Build-centric release aggregate.
 
-    Build is the semantic release unit. Version is a value object attached to
-    Build that carries version semantics.
+    A Build represents a distributable release. Version is only a descriptor
+    attached to Build and does not define identity on its own.
     """
 
     build_id: int | None
@@ -27,12 +27,24 @@ class VN:
 
 @dataclass(frozen=True)
 class Version:
+    """
+    Descriptor for release labeling and ordering.
+
+    Version is descriptive metadata, not an identity root.
+    """
+
     version_string: str
     normalized_version: str | None = None
 
 
 @dataclass(frozen=True)
 class Artifact:
+    """
+    File-carrying artifact linked to a Build.
+
+    Files are modeled as artifacts linked to builds through this object.
+    """
+
     file_sha256: str | None
     build: Build
     artifact_type: str | None = None
@@ -96,8 +108,9 @@ class VisualNovelDomainService:
             release_status=metadata.get("release_status"),
         )
         primary_archive = archives_to_process[0] if archives_to_process else {}
+        file_sha256 = primary_archive.get("sha256") or metadata.get("sha256")
         artifact = Artifact(
-            file_sha256=primary_archive.get("sha256"),
+            file_sha256=file_sha256,
             build=build,
             artifact_type=metadata.get("artifact_type"),
             platform=metadata.get("platform"),
