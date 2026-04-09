@@ -73,6 +73,7 @@ def test_ingest_uses_build_branch_for_non_artifact():
     assert result.build.version.version_string == "1.0"
     assert result.vn is not None
     assert result.vn.canonical_title == "Sample VN"
+    assert result.artifact_status == "classified"
 
 
 def test_ingest_uses_artifact_branch():
@@ -97,6 +98,41 @@ def test_ingest_uses_artifact_branch():
     assert result.artifact is not None
     assert result.build is not None
     assert result.vn is not None
+    assert result.artifact_status == "classified"
+
+
+def test_ingest_normalizes_version_language_and_creator_before_resolution():
+    repo = FakeRepository()
+    captured = {}
+
+    def upsert_vn_and_build(metadata):
+        captured["metadata"] = metadata
+        return 1, 2
+
+    repo.upsert_vn_and_build = upsert_vn_and_build
+
+    service = VisualNovelDomainService(
+        conn=object(),
+        repository=repo,
+        is_artifact_metadata=lambda _: False,
+        collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
+        process_archives_for_build=lambda *args, **kwargs: None,
+    )
+
+    service.ingest(
+        {
+            "title": "Clannad",
+            "creator": "Key",
+            "version": "v1.0",
+            "language": "jp",
+            "release_type": "original",
+        }
+    )
+
+    assert captured["metadata"]["developer"] == "Key"
+    assert captured["metadata"]["version"] == "1.0"
+    assert captured["metadata"]["normalized_version"] == "1.0"
+    assert captured["metadata"]["language"] == "JP"
 
 
 def test_domain_entities_model_file_to_artifact_to_build_to_version_to_vn():
