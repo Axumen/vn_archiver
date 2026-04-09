@@ -35,6 +35,15 @@ CREATE TABLE IF NOT EXISTS artifact_state (
     FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS metadata_raw (
+    id INTEGER PRIMARY KEY,
+    artifact_id INTEGER,
+    source_file TEXT,
+    raw_text TEXT NOT NULL,
+    parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_builds_vn_id ON builds(vn_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_build_id ON artifacts(build_id);
 CREATE INDEX IF NOT EXISTS idx_artifact_state_status ON artifact_state(status);
