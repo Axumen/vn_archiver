@@ -158,14 +158,16 @@ Examples (non-exhaustive):
 
 Ingestion must follow this sequence:
 
-1. **File identity:** compute hash and resolve/create `File`.
-2. **Artifact identity:** resolve/create `Artifact` with provenance.
-3. **Composition mapping:** write `ArtifactFile` rows.
-4. **Build resolution:** resolve/create `Build` with normalized version + taxonomy.
-5. **Lineage resolution:** resolve/create `BuildRelation` links.
-6. **VN resolution:** resolve/create canonical VN identity.
+1. **Ingest files independently:** ZIP becomes an `Artifact` candidate keyed by sha256.
+2. **Parse metadata independently:** YAML/JSON sidecar becomes a structured metadata record (not yet VN/Build identity).
+3. **Pair artifact + metadata:** if pairing fails, mark the artifact workflow status as `unresolved`.
+4. **Resolve VN:** use metadata title to resolve/create VN identity.
+5. **Resolve Build:** resolve/create Build from normalized version/language/release keys.
+6. **Link Artifact → Build:** attach the artifact to the resolved build.
+7. **Split metadata persistence:** `title`/`creator` belong to VN-level fields; `version`/`language`/`release_type` belong to Build-level fields.
+8. **Mark completion:** successful pair+resolution transitions artifact workflow status to `classified`.
 
-Hash equality is only step 1. It must not decide release semantics by itself.
+Hash equality is only stage 1. It must not decide release semantics by itself.
 
 ---
 
