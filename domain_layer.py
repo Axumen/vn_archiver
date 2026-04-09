@@ -52,7 +52,7 @@ class Artifact:
     """
 
     file_sha256: str
-    build: Build
+    build_id: int
     artifact_type: str | None = None
     platform: str | None = None
     source_url: str | None = None
@@ -72,7 +72,7 @@ class IngestionResult:
 
     def __post_init__(self):
         if self.build is not None and self.artifact is not None:
-            if self.artifact.build != self.build:
+            if self.artifact.build_id != self.build.build_id:
                 raise ValueError("Artifact must belong to the returned Build.")
         if self.build is not None:
             if self.build.vn_id != self.vn_id:
@@ -137,27 +137,12 @@ class VisualNovelDomainService:
             raise ValueError("A Build must have at least one Artifact sha256.")
         artifact = Artifact(
             file_sha256=file_sha256,
-            build=build,
+            build_id=build_id,
             artifact_type=metadata.get("artifact_type"),
             platform=metadata.get("platform"),
             source_url=metadata.get("url"),
         )
         return artifact, build, vn
-
-    def _assert_sha256_globally_unique(self, sha256, resolved_build_id):
-        if not sha256 or not hasattr(self.conn, "execute"):
-            return
-        try:
-            row = self.conn.execute(
-                "SELECT build_id FROM artifacts WHERE sha256 = ? LIMIT 1",
-                (sha256,),
-            ).fetchone()
-        except sqlite3.Error:
-            return
-        if row and row[0] != resolved_build_id:
-            raise ValueError(
-                f"Artifact sha256 must be globally unique across builds: {sha256}"
-            )
 
     def ingest(self, metadata):
         if not metadata.get("title"):
@@ -183,7 +168,6 @@ class VisualNovelDomainService:
             candidate_sha256 = archives_to_process[0].get("sha256")
         if not candidate_sha256:
             candidate_sha256 = metadata.get("sha256")
-        self._assert_sha256_globally_unique(candidate_sha256, build_id)
 
         self.process_archives_for_build(
             self.conn,

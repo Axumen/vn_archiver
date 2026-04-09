@@ -90,11 +90,11 @@ def test_domain_entities_model_file_to_artifact_to_build_to_version_to_vn():
     vn = VN(canonical_title="Example VN", developer="Dev Team", publisher="Pub Team")
     version = Version(version_string="2.0", normalized_version="2.0")
     build = Build(build_id=10, vn_id=20, version=version, release_type="full")
-    artifact = Artifact(file_sha256="deadbeef", build=build, artifact_type="archive")
+    artifact = Artifact(file_sha256="deadbeef", build_id=build.build_id, artifact_type="archive")
 
     assert artifact.file_sha256 == "deadbeef"
-    assert artifact.build.version.version_string == "2.0"
-    assert artifact.build.release_type == "full"
+    assert build.version.version_string == "2.0"
+    assert build.release_type == "full"
     assert vn.canonical_title == "Example VN"
 
 
@@ -113,7 +113,7 @@ def test_artifact_uses_metadata_sha256_when_archive_list_is_empty():
     assert result.artifact is not None
     assert result.artifact.file_sha256 == "from-metadata"
     assert result.build is not None
-    assert result.artifact.build == result.build
+    assert result.artifact.build_id == result.build.build_id
 
 
 def test_ingest_requires_artifact_sha256_to_satisfy_build_invariant():
