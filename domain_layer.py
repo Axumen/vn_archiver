@@ -106,12 +106,13 @@ class VisualNovelDomainService:
         *,
         is_artifact_metadata,
         collect_archives_for_db,
-        process_archives_for_build,
+        process_archives_for_build=None,
     ):
         self.conn = conn
         self.repository = repository
         self.is_artifact_metadata = is_artifact_metadata
         self.collect_archives_for_db = collect_archives_for_db
+        # Deprecated legacy hook (files-table pipeline); intentionally unused.
         self.process_archives_for_build = process_archives_for_build
 
     def _build_domain_graph(self, metadata, archives_to_process, *, build_id=None, vn_id=None):
@@ -187,20 +188,6 @@ class VisualNovelDomainService:
 
         return resolved
 
-    def _supports_legacy_archive_processing(self):
-        """Legacy archive processing needs tables outside current architecture (e.g. files)."""
-        if self.conn is None:
-            return False
-        if not hasattr(self.conn, "execute"):
-            return True
-        try:
-            row = self.conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'files'"
-            ).fetchone()
-        except Exception:
-            return False
-        return row is not None
-
     def ingest(self, metadata):
         if not metadata.get("title"):
             raise ValueError("Title is required.")
@@ -241,14 +228,6 @@ class VisualNovelDomainService:
         if raw_text and primary_artifact_id is not None:
             self.repository.create_metadata_raw(raw_text, source_file, primary_artifact_id)
 
-        if self._supports_legacy_archive_processing():
-            self.process_archives_for_build(
-                self.conn,
-                build_id,
-                resolved_metadata,
-                vn_id,
-                archives_to_process,
-            )
         artifact, build, vn = self._build_domain_graph(
             resolved_metadata,
             archives_to_process,

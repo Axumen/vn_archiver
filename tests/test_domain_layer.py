@@ -51,18 +51,14 @@ def test_ingest_requires_title():
 
 
 def test_ingest_uses_build_branch_for_non_artifact():
-    captured = {}
     repo = FakeRepository()
-
-    def process_archives(conn, build_id, metadata, vn_id, archives_to_process):
-        captured["args"] = (build_id, metadata["title"], vn_id, archives_to_process)
 
     service = VisualNovelDomainService(
         conn=object(),
         repository=repo,
         is_artifact_metadata=lambda _: False,
         collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
-        process_archives_for_build=process_archives,
+        process_archives_for_build=lambda *args, **kwargs: None,
     )
 
     result = service.ingest({"title": "Sample VN", "version": "1.0"})
@@ -70,7 +66,6 @@ def test_ingest_uses_build_branch_for_non_artifact():
     assert result.vn_id == 11
     assert result.build_id == 22
     assert repo.calls == [("vn", "Sample VN"), ("build", 11, "Sample VN")]
-    assert captured["args"] == (22, "Sample VN", 11, [{"sha256": "abc", "filename": "sample.zip"}])
     assert repo.created_artifacts == [(22, "abc", "sample.zip")]
     assert result.artifact is not None
     assert result.artifact.file_sha256 == "abc"
@@ -98,7 +93,7 @@ def test_ingest_routes_all_ingests_through_get_or_create_vn_and_build():
     assert result.vn_id == 11
     assert result.build_id == 22
     assert repo.calls == [("vn", "Sample Patch"), ("build", 11, "Sample Patch")]
-    assert called["processed"] is True
+    assert called["processed"] is False
     assert repo.created_artifacts == []
     assert result.artifact is not None
     assert result.build is not None
