@@ -35,16 +35,27 @@ class VnIngestionRepository:
         return self._resolve_existing_build_for_artifact(self.conn, metadata)
 
     def get_or_create_vn(self, metadata):
-        series_id = self._upsert_series(self.conn, metadata)
-        vn_id = self._upsert_visual_novel_record(self.conn, metadata, series_id)
-        self._sync_vn_tags(self.conn, vn_id, metadata)
-        self._sync_canon_relationship(self.conn, vn_id, metadata)
-        return vn_id
+        title = str(metadata.get("title") or "").strip()
+        if not title:
+            raise ValueError("Title is required for VN resolution.")
+
+        existing = self.conn.execute(
+            "SELECT id FROM vn WHERE TRIM(title) = TRIM(?) COLLATE NOCASE LIMIT 1",
+            (title,),
+        ).fetchone()
+        if existing:
+            return existing["id"]
+
+        self.conn.execute(
+            "INSERT INTO vn (title) VALUES (?)",
+            (title,),
+        )
+        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def _build_lookup_filters(self, metadata):
-        version_value = (metadata.get("normalized_version") or metadata.get("version") or "").strip()
+        version_value = str(metadata.get("version") or metadata.get("version_string") or "").strip()
         language = metadata.get("language")
-        release_type = metadata.get("release_type") or metadata.get("build_type")
+        release_type = metadata.get("release_type")
         platform = metadata.get("platform")
         return version_value, language, release_type, platform
 
@@ -57,8 +68,8 @@ class VnIngestionRepository:
             row[1]
             for row in self.conn.execute("PRAGMA table_info(builds)").fetchall()
         }
-        version_column = "normalized_version" if "normalized_version" in build_columns else (
-            "version" if "version" in build_columns else "version_string"
+        version_column = "version_string" if "version_string" in build_columns else (
+            "version" if "version" in build_columns else "normalized_version"
         )
 
         where_clauses = ["vn_id = ?", f"{version_column} = ?"]
@@ -69,9 +80,6 @@ class VnIngestionRepository:
             params.append(language)
         if "release_type" in build_columns:
             where_clauses.append("COALESCE(release_type, '') = COALESCE(?, '')")
-            params.append(release_type)
-        elif "build_type" in build_columns:
-            where_clauses.append("COALESCE(build_type, '') = COALESCE(?, '')")
             params.append(release_type)
         if "platform" in build_columns:
             where_clauses.append("COALESCE(platform, '') = COALESCE(?, '')")
@@ -84,10 +92,36 @@ class VnIngestionRepository:
         return row["id"] if row else None
 
     def create_build(self, vn_id, metadata):
-        build_id = self._upsert_build_record(self.conn, vn_id, metadata)
-        self._sync_build_target_platforms(self.conn, build_id, metadata)
-        self._sync_build_relations(self.conn, build_id, metadata)
-        return build_id
+        version_value, language, release_type, platform = self._build_lookup_filters(metadata)
+        if not version_value:
+            version_value = "1.0"
+
+        build_columns = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(builds)").fetchall()
+        }
+        version_column = "version_string" if "version_string" in build_columns else (
+            "version" if "version" in build_columns else "normalized_version"
+        )
+
+        columns = ["vn_id", version_column]
+        values = [vn_id, version_value]
+
+        for optional_col, optional_val in (
+            ("language", language),
+            ("release_type", release_type),
+            ("platform", platform),
+        ):
+            if optional_col in build_columns:
+                columns.append(optional_col)
+                values.append(optional_val)
+
+        placeholders = ", ".join(["?"] * len(columns))
+        self.conn.execute(
+            f"INSERT INTO builds ({', '.join(columns)}) VALUES ({placeholders})",
+            tuple(values),
+        )
+        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def get_or_create_build(self, vn_id, metadata):
         existing = self.find_build(vn_id, metadata)
