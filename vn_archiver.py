@@ -906,28 +906,56 @@ def resolve_existing_build_for_artifact(conn, metadata):
     distribution_platform = normalized_optional("distribution_platform")
     normalized_version = str(metadata.get("normalized_version") or version).strip().lower()
 
-    rows = conn.execute(
-        """
+    def get_table_columns(table_name):
+        return {
+            row[1]
+            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+
+    vn_columns = get_table_columns("vn")
+    if "title" not in vn_columns:
+        raise ValueError("Current schema requires vn.title for artifact resolution.")
+
+    build_columns = get_table_columns("builds")
+    version_column = "normalized_version" if "normalized_version" in build_columns else (
+        "version" if "version" in build_columns else "version_string"
+    )
+
+    where_clauses = [
+        "TRIM(v.title) = TRIM(?) COLLATE NOCASE",
+        f"b.{version_column} = ?",
+    ]
+    params = [title, normalized_version]
+
+    if "language" in build_columns:
+        where_clauses.append("(? IS NULL OR COALESCE(b.language, '') = ?)")
+        params.extend([language, language or ""])
+
+    if "release_type" in build_columns or "build_type" in build_columns:
+        if "release_type" in build_columns and "build_type" in build_columns:
+            where_clauses.append("(? IS NULL OR COALESCE(b.release_type, COALESCE(b.build_type, '')) = ?)")
+        elif "release_type" in build_columns:
+            where_clauses.append("(? IS NULL OR COALESCE(b.release_type, '') = ?)")
+        else:
+            where_clauses.append("(? IS NULL OR COALESCE(b.build_type, '') = ?)")
+        params.extend([release_type, release_type or ""])
+
+    if "edition" in build_columns:
+        where_clauses.append("(? IS NULL OR COALESCE(b.edition, '') = ?)")
+        params.extend([edition, edition or ""])
+
+    if "distribution_platform" in build_columns:
+        where_clauses.append("(? IS NULL OR COALESCE(b.distribution_platform, '') = ?)")
+        params.extend([distribution_platform, distribution_platform or ""])
+
+    sql = f"""
         SELECT b.id AS build_id, b.vn_id
         FROM builds b
-        JOIN visual_novels v ON v.id = b.vn_id
-        WHERE TRIM(v.title) = TRIM(?) COLLATE NOCASE
-          AND b.normalized_version = ?
-          AND (? IS NULL OR COALESCE(b.language, '') = ?)
-          AND (? IS NULL OR COALESCE(b.release_type, COALESCE(b.build_type, '')) = ?)
-          AND (? IS NULL OR COALESCE(b.edition, '') = ?)
-          AND (? IS NULL OR COALESCE(b.distribution_platform, '') = ?)
+        JOIN vn v ON v.id = b.vn_id
+        WHERE {' AND '.join(where_clauses)}
         ORDER BY b.id DESC
-        """,
-        (
-            title,
-            normalized_version,
-            language, language or "",
-            release_type, release_type or "",
-            edition, edition or "",
-            distribution_platform, distribution_platform or "",
-        )
-    ).fetchall()
+    """
+    rows = conn.execute(sql, tuple(params)).fetchall()
 
     if not rows:
         raise ValueError(
@@ -1477,6 +1505,8 @@ def insert_visual_novel(metadata):
     '''
 
     metadata = normalize_metadata_fields(metadata)
+    raw_text = metadata.pop("_raw_text", None)
+    source_file = metadata.pop("_source_file", None)
     metadata_version = int(metadata.get("metadata_version") or detect_latest_metadata_template_version())
     metadata_is_artifact = is_artifact_metadata(metadata)
     template = (
@@ -1506,7 +1536,13 @@ def insert_visual_novel(metadata):
             collect_archives_for_db=collect_archives_for_db,
             process_archives_for_build=process_archives_for_build,
         )
-        result = domain_service.ingest(metadata)
+        ingest_payload = dict(metadata)
+        if raw_text is not None:
+            ingest_payload["_raw_text"] = raw_text
+        if source_file is not None:
+            ingest_payload["_source_file"] = source_file
+
+        result = domain_service.ingest(ingest_payload)
 
         return result.vn_id
 
@@ -1975,7 +2011,7 @@ def finalize_archive_creation(metadata, archives_data):
         print(Fore.GREEN + "Metadata creation complete!")
 
 
-def create_archive_from_metadata_file(archive_paths, metadata):
+def create_archive_from_metadata_file(archive_paths, metadata, raw_text=None, source_file=None):
     """Create archive pipeline from existing metadata.yaml without prompts."""
     archives_data = []
     for path in archive_paths:
@@ -1991,6 +2027,10 @@ def create_archive_from_metadata_file(archive_paths, metadata):
 
     prepared = dict(metadata or {})
     prepared.setdefault("metadata_version", detect_latest_metadata_template_version())
+    if raw_text is not None:
+        prepared["_raw_text"] = raw_text
+    if source_file is not None:
+        prepared["_source_file"] = source_file
     if archives_data:
         prepared["archives"] = [
             {
