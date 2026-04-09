@@ -916,37 +916,20 @@ def resolve_existing_build_for_artifact(conn, metadata):
     if "title" not in vn_columns:
         raise ValueError("Current schema requires vn.title for artifact resolution.")
 
-    build_columns = get_table_columns("builds")
-    version_column = "normalized_version" if "normalized_version" in build_columns else (
-        "version" if "version" in build_columns else "version_string"
-    )
-
     where_clauses = [
         "TRIM(v.title) = TRIM(?) COLLATE NOCASE",
-        f"b.{version_column} = ?",
+        "b.version_string = ?",
+        "(? IS NULL OR COALESCE(b.language, '') = ?)",
+        "(? IS NULL OR COALESCE(b.release_type, '') = ?)",
+        "(? IS NULL OR COALESCE(b.platform, '') = ?)",
     ]
-    params = [title, normalized_version]
-
-    if "language" in build_columns:
-        where_clauses.append("(? IS NULL OR COALESCE(b.language, '') = ?)")
-        params.extend([language, language or ""])
-
-    if "release_type" in build_columns or "build_type" in build_columns:
-        if "release_type" in build_columns and "build_type" in build_columns:
-            where_clauses.append("(? IS NULL OR COALESCE(b.release_type, COALESCE(b.build_type, '')) = ?)")
-        elif "release_type" in build_columns:
-            where_clauses.append("(? IS NULL OR COALESCE(b.release_type, '') = ?)")
-        else:
-            where_clauses.append("(? IS NULL OR COALESCE(b.build_type, '') = ?)")
-        params.extend([release_type, release_type or ""])
-
-    if "edition" in build_columns:
-        where_clauses.append("(? IS NULL OR COALESCE(b.edition, '') = ?)")
-        params.extend([edition, edition or ""])
-
-    if "distribution_platform" in build_columns:
-        where_clauses.append("(? IS NULL OR COALESCE(b.distribution_platform, '') = ?)")
-        params.extend([distribution_platform, distribution_platform or ""])
+    params = [
+        title,
+        normalized_version,
+        language, language or "",
+        release_type, release_type or "",
+        distribution_platform, distribution_platform or "",
+    ]
 
     sql = f"""
         SELECT b.id AS build_id, b.vn_id
