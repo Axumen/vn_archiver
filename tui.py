@@ -362,6 +362,8 @@ def upsert_build_from_metadata_yaml():
 
     metadata = order_metadata_for_yaml(metadata)
     try:
+        metadata["_raw_text"] = raw_metadata_text
+        metadata["_source_file"] = metadata_path
         vn_id = insert_visual_novel(metadata)
         notify(f"Build/VN metadata upserted successfully (vn_id={vn_id}).", "ok")
     except Exception as exc:
