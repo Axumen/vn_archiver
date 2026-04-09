@@ -11,6 +11,7 @@ class FakeRepository:
     def __init__(self):
         self.calls = []
         self.created_artifacts = []
+        self.raw_metadata_records = []
 
     def resolve_existing_build_for_artifact(self, metadata):
         self.calls.append(("artifact", metadata["title"]))
@@ -29,6 +30,9 @@ class FakeRepository:
             )
         )
         return 999
+
+    def create_metadata_raw(self, raw_text, source_file, artifact_id):
+        self.raw_metadata_records.append((raw_text, source_file, artifact_id))
 
 
 def test_ingest_requires_title():
@@ -133,6 +137,30 @@ def test_ingest_normalizes_version_language_and_creator_before_resolution():
     assert captured["metadata"]["version"] == "1.0"
     assert captured["metadata"]["normalized_version"] == "1.0"
     assert captured["metadata"]["language"] == "JP"
+
+
+def test_ingest_persists_raw_metadata_with_primary_artifact_id_when_present():
+    repo = FakeRepository()
+    service = VisualNovelDomainService(
+        conn=object(),
+        repository=repo,
+        is_artifact_metadata=lambda _: False,
+        collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
+        process_archives_for_build=lambda *args, **kwargs: None,
+    )
+
+    service.ingest(
+        {
+            "title": "Clannad",
+            "version": "1.0",
+            "_raw_text": "title: Clannad\nversion: 1.0\n",
+            "_source_file": "incoming/clannad_v1.yaml",
+        }
+    )
+
+    assert repo.raw_metadata_records == [
+        ("title: Clannad\nversion: 1.0\n", "incoming/clannad_v1.yaml", 999)
+    ]
 
 
 def test_domain_entities_model_file_to_artifact_to_build_to_version_to_vn():
