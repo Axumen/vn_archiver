@@ -89,6 +89,8 @@ class IngestionRepository(Protocol):
 
     def create_artifact(self, build_id, metadata, archive_data): ...
 
+    def create_metadata_raw(self, raw_text, source_file, artifact_id): ...
+
 
 class VisualNovelDomainService:
     """
@@ -213,12 +215,21 @@ class VisualNovelDomainService:
         if not candidate_sha256:
             candidate_sha256 = metadata.get("sha256")
 
+        created_artifact_ids = []
         for archive_data in archives_to_process:
             sha = archive_data.get("sha256")
             path = archive_data.get("filepath") or archive_data.get("filename")
             if not sha or not path:
                 continue
-            self.repository.create_artifact(build_id, resolved_metadata, archive_data)
+            artifact_id = self.repository.create_artifact(build_id, resolved_metadata, archive_data)
+            if artifact_id is not None:
+                created_artifact_ids.append(artifact_id)
+
+        raw_text = metadata.get("_raw_text")
+        source_file = metadata.get("_source_file")
+        if raw_text:
+            primary_artifact_id = created_artifact_ids[0] if created_artifact_ids else None
+            self.repository.create_metadata_raw(raw_text, source_file, primary_artifact_id)
 
         self.process_archives_for_build(
             self.conn,

@@ -338,7 +338,8 @@ def upsert_build_from_metadata_yaml():
 
     metadata_path = os.path.join(INCOMING_DIR, yaml_files[y_idx])
     with open(metadata_path, "r", encoding="utf-8") as f:
-        metadata = yaml.safe_load(f) or {}
+        raw_metadata_text = f.read()
+    metadata = yaml.safe_load(raw_metadata_text) or {}
 
     if not isinstance(metadata, dict):
         notify("Selected metadata yaml is not a valid object.", "error")
@@ -357,6 +358,8 @@ def upsert_build_from_metadata_yaml():
 
     metadata = order_metadata_for_yaml(metadata)
     try:
+        metadata["_raw_text"] = raw_metadata_text
+        metadata["_source_file"] = metadata_path
         vn_id = insert_visual_novel(metadata)
         notify(f"Build/VN metadata upserted successfully (vn_id={vn_id}).", "ok")
     except Exception as exc:
@@ -424,7 +427,8 @@ def quick_process_with_metadata_yaml():
 
         metadata_path = os.path.join(INCOMING_DIR, yaml_files[y_idx])
         with open(metadata_path, "r", encoding="utf-8") as f:
-            metadata = yaml.safe_load(f) or {}
+            raw_metadata_text = f.read()
+        metadata = yaml.safe_load(raw_metadata_text) or {}
 
         if not isinstance(metadata, dict):
             notify("Selected metadata yaml is not a valid object.", "error")
@@ -474,7 +478,12 @@ def quick_process_with_metadata_yaml():
         if list(ordered_metadata.keys()) != list(metadata.keys()):
             notify("Corrected metadata YAML field order based on template before processing.", "info")
 
-        create_archive_from_metadata_file(selected_paths, ordered_metadata)
+        create_archive_from_metadata_file(
+            selected_paths,
+            ordered_metadata,
+            raw_text=raw_metadata_text,
+            source_file=metadata_path,
+        )
 
         if os.path.exists(metadata_path):
             os.remove(metadata_path)
