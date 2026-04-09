@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS builds (
 
 CREATE TABLE IF NOT EXISTS artifacts (
     id INTEGER PRIMARY KEY,
-    build_id INTEGER NOT NULL,
+    build_id INTEGER,
     sha256 TEXT NOT NULL UNIQUE,
     path TEXT NOT NULL,
     type TEXT,
@@ -33,6 +33,15 @@ CREATE TABLE IF NOT EXISTS artifact_state (
     artifact_id INTEGER PRIMARY KEY,
     status TEXT,
     FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS metadata_raw (
+    id INTEGER PRIMARY KEY,
+    artifact_id INTEGER,
+    source_file TEXT,
+    raw_text TEXT NOT NULL,
+    parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_builds_vn_id ON builds(vn_id);
