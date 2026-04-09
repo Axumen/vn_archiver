@@ -135,7 +135,54 @@ class VnIngestionRepository:
         return vn_id, build_id
 
     def create_artifact(self, build_id, metadata, archive_data):
-        return self._create_artifact_record(self.conn, build_id, metadata, archive_data)
+        artifact_columns = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(artifacts)").fetchall()
+        }
+
+        # Legacy schema path (artifact_id + files table plumbing).
+        if "artifact_id" in artifact_columns:
+            return self._create_artifact_record(self.conn, build_id, metadata, archive_data)
+
+        artifact_sha = archive_data.get("sha256")
+        if not artifact_sha:
+            return None
+
+        artifact_path = archive_data.get("filepath") or archive_data.get("filename") or metadata.get("original_filename")
+        artifact_type = str(metadata.get("artifact_type") or "game_archive").strip().lower() or "game_archive"
+
+        existing = self.conn.execute(
+            "SELECT id, build_id FROM artifacts WHERE sha256 = ? LIMIT 1",
+            (artifact_sha,),
+        ).fetchone()
+        if existing:
+            if "build_id" in artifact_columns and build_id is not None:
+                self.conn.execute(
+                    "UPDATE artifacts SET build_id = COALESCE(build_id, ?) WHERE id = ?",
+                    (build_id, existing["id"]),
+                )
+            return existing["id"]
+
+        insert_columns = []
+        insert_values = []
+        if "build_id" in artifact_columns:
+            insert_columns.append("build_id")
+            insert_values.append(build_id)
+        insert_columns.append("sha256")
+        insert_values.append(artifact_sha)
+        if "path" in artifact_columns:
+            insert_columns.append("path")
+            insert_values.append(artifact_path or artifact_sha)
+        if "type" in artifact_columns:
+            insert_columns.append("type")
+            insert_values.append(artifact_type)
+
+        placeholders = ", ".join(["?"] * len(insert_columns))
+        self.conn.execute(
+            f"INSERT INTO artifacts ({', '.join(insert_columns)}) VALUES ({placeholders})",
+            tuple(insert_values),
+        )
+        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def create_metadata_raw(self, raw_text, source_file, artifact_id):
         self.conn.execute(
