@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS builds (
     language TEXT,
     platform TEXT,
     FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
-    UNIQUE (vn_id, version_string, language, release_type)
+    UNIQUE (vn_id, version_string, language, release_type, platform)
 );
 
 CREATE TABLE IF NOT EXISTS artifacts (
