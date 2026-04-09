@@ -10,6 +10,7 @@ from domain_layer import Artifact, Build, VN, Version, VisualNovelDomainService
 class FakeRepository:
     def __init__(self):
         self.calls = []
+        self.created_artifacts = []
 
     def resolve_existing_build_for_artifact(self, metadata):
         self.calls.append(("artifact", metadata["title"]))
@@ -18,6 +19,16 @@ class FakeRepository:
     def upsert_vn_and_build(self, metadata):
         self.calls.append(("build", metadata["title"]))
         return 11, 22
+
+    def create_artifact(self, build_id, metadata, archive_data):
+        self.created_artifacts.append(
+            (
+                build_id,
+                archive_data.get("sha256"),
+                archive_data.get("filepath") or archive_data.get("filename"),
+            )
+        )
+        return 999
 
 
 def test_ingest_requires_title():
@@ -45,7 +56,7 @@ def test_ingest_uses_build_branch_for_non_artifact():
         conn=object(),
         repository=repo,
         is_artifact_metadata=lambda _: False,
-        collect_archives_for_db=lambda _: ([{"sha256": "abc"}], "abc"),
+        collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
         process_archives_for_build=process_archives,
     )
 
@@ -54,7 +65,8 @@ def test_ingest_uses_build_branch_for_non_artifact():
     assert result.vn_id == 11
     assert result.build_id == 22
     assert repo.calls == [("build", "Sample VN")]
-    assert captured["args"] == (22, "Sample VN", 11, [{"sha256": "abc"}])
+    assert captured["args"] == (22, "Sample VN", 11, [{"sha256": "abc", "filename": "sample.zip"}])
+    assert repo.created_artifacts == [(22, "abc", "sample.zip")]
     assert result.artifact is not None
     assert result.artifact.file_sha256 == "abc"
     assert result.build is not None
@@ -81,6 +93,7 @@ def test_ingest_uses_artifact_branch():
     assert result.build_id == 77
     assert repo.calls == [("artifact", "Sample Patch")]
     assert called["processed"] is True
+    assert repo.created_artifacts == []
     assert result.artifact is not None
     assert result.build is not None
     assert result.vn is not None

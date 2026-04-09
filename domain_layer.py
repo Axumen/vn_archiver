@@ -86,6 +86,8 @@ class IngestionRepository(Protocol):
 
     def upsert_vn_and_build(self, metadata): ...
 
+    def create_artifact(self, build_id, metadata, archive_data): ...
+
 
 class VisualNovelDomainService:
     """
@@ -168,6 +170,13 @@ class VisualNovelDomainService:
             candidate_sha256 = archives_to_process[0].get("sha256")
         if not candidate_sha256:
             candidate_sha256 = metadata.get("sha256")
+
+        for archive_data in archives_to_process:
+            sha = archive_data.get("sha256")
+            path = archive_data.get("filepath") or archive_data.get("filename")
+            if not sha or not path:
+                continue
+            self.repository.create_artifact(build_id, metadata, archive_data)
 
         self.process_archives_for_build(
             self.conn,

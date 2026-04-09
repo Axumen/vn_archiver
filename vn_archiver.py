@@ -1497,6 +1497,7 @@ def insert_visual_novel(metadata):
             sync_build_target_platforms=sync_build_target_platforms,
             sync_build_relations=sync_build_relations,
             resolve_existing_build_for_artifact=resolve_existing_build_for_artifact,
+            create_artifact_record=upsert_artifact_record,
         )
         domain_service = VisualNovelDomainService(
             conn,
