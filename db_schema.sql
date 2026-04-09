@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS builds (
 
 CREATE TABLE IF NOT EXISTS artifacts (
     id INTEGER PRIMARY KEY,
-    build_id INTEGER NOT NULL,
+    build_id INTEGER,
     sha256 TEXT NOT NULL UNIQUE,
     path TEXT NOT NULL,
     type TEXT,

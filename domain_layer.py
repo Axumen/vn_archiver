@@ -83,9 +83,9 @@ class IngestionResult:
 
 
 class IngestionRepository(Protocol):
-    def resolve_existing_build_for_artifact(self, metadata): ...
+    def get_or_create_vn(self, metadata): ...
 
-    def upsert_vn_and_build(self, metadata): ...
+    def get_or_create_build(self, vn_id, metadata): ...
 
     def create_artifact(self, build_id, metadata, archive_data): ...
 
@@ -195,11 +195,8 @@ class VisualNovelDomainService:
         archives_to_process, _ = self.collect_archives_for_db(metadata)
 
         resolved_metadata = self._prepare_resolution_metadata(metadata)
-
-        if self.is_artifact_metadata(resolved_metadata):
-            vn_id, build_id = self.repository.resolve_existing_build_for_artifact(resolved_metadata)
-        else:
-            vn_id, build_id = self.repository.upsert_vn_and_build(resolved_metadata)
+        vn_id = self.repository.get_or_create_vn(resolved_metadata)
+        build_id = self.repository.get_or_create_build(vn_id, resolved_metadata)
 
         candidate_sha256 = None
         if archives_to_process:
