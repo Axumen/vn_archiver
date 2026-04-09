@@ -18,6 +18,7 @@ class VnIngestionRepository:
         sync_build_target_platforms,
         sync_build_relations,
         resolve_existing_build_for_artifact,
+        create_artifact_record,
     ):
         self.conn = conn
         self._upsert_series = upsert_series
@@ -28,6 +29,7 @@ class VnIngestionRepository:
         self._sync_build_target_platforms = sync_build_target_platforms
         self._sync_build_relations = sync_build_relations
         self._resolve_existing_build_for_artifact = resolve_existing_build_for_artifact
+        self._create_artifact_record = create_artifact_record
 
     def resolve_existing_build_for_artifact(self, metadata):
         return self._resolve_existing_build_for_artifact(self.conn, metadata)
@@ -42,3 +44,6 @@ class VnIngestionRepository:
         self._sync_build_target_platforms(self.conn, build_id, metadata)
         self._sync_build_relations(self.conn, build_id, metadata)
         return vn_id, build_id
+
+    def create_artifact(self, build_id, metadata, archive_data):
+        return self._create_artifact_record(self.conn, build_id, metadata, archive_data)
