@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from domain_layer import VisualNovelDomainService
+from domain_layer import Artifact, Build, VN, Version, VisualNovelDomainService
 
 
 class FakeRepository:
@@ -49,12 +49,18 @@ def test_ingest_uses_build_branch_for_non_artifact():
         process_archives_for_build=process_archives,
     )
 
-    result = service.ingest({"title": "Sample VN"})
+    result = service.ingest({"title": "Sample VN", "version": "1.0"})
 
     assert result.vn_id == 11
     assert result.build_id == 22
     assert repo.calls == [("build", "Sample VN")]
     assert captured["args"] == (22, "Sample VN", 11, [{"sha256": "abc"}])
+    assert result.artifact is not None
+    assert result.artifact.file_sha256 == "abc"
+    assert result.version is not None
+    assert result.version.version_string == "1.0"
+    assert result.vn is not None
+    assert result.vn.canonical_title == "Sample VN"
 
 
 def test_ingest_uses_artifact_branch():
@@ -75,3 +81,17 @@ def test_ingest_uses_artifact_branch():
     assert result.build_id == 77
     assert repo.calls == [("artifact", "Sample Patch")]
     assert called["processed"] is True
+    assert result.artifact is not None
+    assert result.version is not None
+    assert result.vn is not None
+
+
+def test_domain_entities_model_file_to_artifact_to_version_to_vn():
+    vn = VN(canonical_title="Example VN", developer="Dev Team", publisher="Pub Team")
+    build = Build(build_id=10, vn_id=20, version_string="2.0")
+    version = Version(version_string="2.0", vn=vn, build=build)
+    artifact = Artifact(file_sha256="deadbeef", version=version, artifact_type="archive")
+
+    assert artifact.file_sha256 == "deadbeef"
+    assert artifact.version.version_string == "2.0"
+    assert artifact.version.vn.canonical_title == "Example VN"
