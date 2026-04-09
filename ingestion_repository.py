@@ -53,7 +53,7 @@ class VnIngestionRepository:
         return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def _build_lookup_filters(self, metadata):
-        version_value = str(metadata.get("version") or metadata.get("version_string") or "").strip()
+        version_value = str(metadata.get("version") or "").strip()
         language = metadata.get("language")
         release_type = metadata.get("release_type")
         platform = metadata.get("platform")
@@ -64,26 +64,14 @@ class VnIngestionRepository:
         if not version_value:
             return None
 
-        build_columns = {
-            row[1]
-            for row in self.conn.execute("PRAGMA table_info(builds)").fetchall()
-        }
-        version_column = "version_string" if "version_string" in build_columns else (
-            "version" if "version" in build_columns else "normalized_version"
-        )
-
-        where_clauses = ["vn_id = ?", f"{version_column} = ?"]
+        where_clauses = ["vn_id = ?", "version_string = ?"]
         params = [vn_id, version_value]
-
-        if "language" in build_columns:
-            where_clauses.append("COALESCE(language, '') = COALESCE(?, '')")
-            params.append(language)
-        if "release_type" in build_columns:
-            where_clauses.append("COALESCE(release_type, '') = COALESCE(?, '')")
-            params.append(release_type)
-        if "platform" in build_columns:
-            where_clauses.append("COALESCE(platform, '') = COALESCE(?, '')")
-            params.append(platform)
+        where_clauses.append("COALESCE(language, '') = COALESCE(?, '')")
+        params.append(language)
+        where_clauses.append("COALESCE(release_type, '') = COALESCE(?, '')")
+        params.append(release_type)
+        where_clauses.append("COALESCE(platform, '') = COALESCE(?, '')")
+        params.append(platform)
 
         row = self.conn.execute(
             f"SELECT id FROM builds WHERE {' AND '.join(where_clauses)} ORDER BY id DESC LIMIT 1",
@@ -96,26 +84,8 @@ class VnIngestionRepository:
         if not version_value:
             version_value = "1.0"
 
-        build_columns = {
-            row[1]
-            for row in self.conn.execute("PRAGMA table_info(builds)").fetchall()
-        }
-        version_column = "version_string" if "version_string" in build_columns else (
-            "version" if "version" in build_columns else "normalized_version"
-        )
-
-        columns = ["vn_id", version_column]
-        values = [vn_id, version_value]
-
-        for optional_col, optional_val in (
-            ("language", language),
-            ("release_type", release_type),
-            ("platform", platform),
-        ):
-            if optional_col in build_columns:
-                columns.append(optional_col)
-                values.append(optional_val)
-
+        columns = ["vn_id", "version_string", "language", "release_type", "platform"]
+        values = [vn_id, version_value, language, release_type, platform]
         placeholders = ", ".join(["?"] * len(columns))
         self.conn.execute(
             f"INSERT INTO builds ({', '.join(columns)}) VALUES ({placeholders})",
@@ -135,7 +105,34 @@ class VnIngestionRepository:
         return vn_id, build_id
 
     def create_artifact(self, build_id, metadata, archive_data):
-        return self._create_artifact_record(self.conn, build_id, metadata, archive_data)
+        artifact_sha = archive_data.get("sha256")
+        if not artifact_sha:
+            return None
+
+        artifact_path = archive_data.get("filepath") or archive_data.get("filename") or metadata.get("original_filename")
+        artifact_type = str(metadata.get("artifact_type") or "game_archive").strip().lower() or "game_archive"
+
+        existing = self.conn.execute(
+            "SELECT id, build_id FROM artifacts WHERE sha256 = ? LIMIT 1",
+            (artifact_sha,),
+        ).fetchone()
+        if existing:
+            if build_id is not None:
+                self.conn.execute(
+                    "UPDATE artifacts SET build_id = COALESCE(build_id, ?) WHERE id = ?",
+                    (build_id, existing["id"]),
+                )
+            return existing["id"]
+
+        insert_columns = ["build_id", "sha256", "path", "type"]
+        insert_values = [build_id, artifact_sha, artifact_path or artifact_sha, artifact_type]
+
+        placeholders = ", ".join(["?"] * len(insert_columns))
+        self.conn.execute(
+            f"INSERT INTO artifacts ({', '.join(insert_columns)}) VALUES ({placeholders})",
+            tuple(insert_values),
+        )
+        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def create_metadata_raw(self, raw_text, source_file, artifact_id):
         self.conn.execute(
