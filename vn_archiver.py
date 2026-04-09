@@ -119,6 +119,26 @@ def sha1_file(filepath):
     return sha1.hexdigest()
 
 
+def _table_exists(conn, table_name):
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _column_exists(conn, table_name, column_name):
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    except Exception:
+        return False
+    for row in rows:
+        normalized = tuple(row)
+        if len(normalized) > 1 and normalized[1] == column_name:
+            return True
+    return False
+
+
 def _extract_remote_hashes(file_info_obj):
     """Best-effort extraction of remote object hashes from B2 file metadata."""
     file_info_map = getattr(file_info_obj, "file_info", None) or {}
@@ -2058,6 +2078,7 @@ def resolve_artifact_id_for_metadata(conn, build_id, metadata, fallback_sha=None
             if isinstance(archive, dict) and archive.get('sha256'):
                 sha_candidates.append(str(archive.get('sha256')).strip().lower())
 
+    artifact_id_column = "artifact_id" if _column_exists(conn, "artifacts", "artifact_id") else "id"
     for sha in sha_candidates:
         if not sha:
             continue
