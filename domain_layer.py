@@ -1,4 +1,3 @@
-import sqlite3
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -107,12 +106,13 @@ class VisualNovelDomainService:
         *,
         is_artifact_metadata,
         collect_archives_for_db,
-        process_archives_for_build,
+        process_archives_for_build=None,
     ):
         self.conn = conn
         self.repository = repository
         self.is_artifact_metadata = is_artifact_metadata
         self.collect_archives_for_db = collect_archives_for_db
+        # Deprecated legacy hook (files-table pipeline); intentionally unused.
         self.process_archives_for_build = process_archives_for_build
 
     def _build_domain_graph(self, metadata, archives_to_process, *, build_id=None, vn_id=None):
@@ -228,13 +228,6 @@ class VisualNovelDomainService:
         if raw_text and primary_artifact_id is not None:
             self.repository.create_metadata_raw(raw_text, source_file, primary_artifact_id)
 
-        self.process_archives_for_build(
-            self.conn,
-            build_id,
-            resolved_metadata,
-            vn_id,
-            archives_to_process,
-        )
         artifact, build, vn = self._build_domain_graph(
             resolved_metadata,
             archives_to_process,
