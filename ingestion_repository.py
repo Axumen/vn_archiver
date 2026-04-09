@@ -47,3 +47,9 @@ class VnIngestionRepository:
 
     def create_artifact(self, build_id, metadata, archive_data):
         return self._create_artifact_record(self.conn, build_id, metadata, archive_data)
+
+    def create_metadata_raw(self, raw_text, source_file, artifact_id):
+        self.conn.execute(
+            "INSERT INTO metadata_raw (raw_text, source_file, artifact_id) VALUES (?, ?, ?)",
+            (raw_text, source_file, artifact_id),
+        )

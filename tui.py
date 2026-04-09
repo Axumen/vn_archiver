@@ -338,7 +338,8 @@ def upsert_build_from_metadata_yaml():
 
     metadata_path = os.path.join(INCOMING_DIR, yaml_files[y_idx])
     with open(metadata_path, "r", encoding="utf-8") as f:
-        metadata = yaml.safe_load(f) or {}
+        raw_metadata_text = f.read()
+    metadata = yaml.safe_load(raw_metadata_text) or {}
 
     if not isinstance(metadata, dict):
         notify("Selected metadata yaml is not a valid object.", "error")
@@ -357,6 +358,8 @@ def upsert_build_from_metadata_yaml():
 
     metadata = order_metadata_for_yaml(metadata)
     try:
+        metadata["_raw_text"] = raw_metadata_text
+        metadata["_source_file"] = metadata_path
         vn_id = insert_visual_novel(metadata)
         notify(f"Build/VN metadata upserted successfully (vn_id={vn_id}).", "ok")
     except Exception as exc:
@@ -424,7 +427,8 @@ def quick_process_with_metadata_yaml():
 
         metadata_path = os.path.join(INCOMING_DIR, yaml_files[y_idx])
         with open(metadata_path, "r", encoding="utf-8") as f:
-            metadata = yaml.safe_load(f) or {}
+            raw_metadata_text = f.read()
+        metadata = yaml.safe_load(raw_metadata_text) or {}
 
         if not isinstance(metadata, dict):
             notify("Selected metadata yaml is not a valid object.", "error")
@@ -440,7 +444,7 @@ def quick_process_with_metadata_yaml():
         metadata_is_artifact = bool(str(metadata.get("artifact_type") or "").strip())
         if metadata_is_artifact:
             notify(
-                "Artifact metadata detected in Quick Process YAML; resolving/creating build context before artifact link.",
+                "Artifact metadata detected in Quick Process YAML; entering staged artifact workflow (pair → resolve → classify).",
                 "info",
             )
             _validate_derived_artifact_base_reference(metadata)
@@ -474,7 +478,12 @@ def quick_process_with_metadata_yaml():
         if list(ordered_metadata.keys()) != list(metadata.keys()):
             notify("Corrected metadata YAML field order based on template before processing.", "info")
 
-        create_archive_from_metadata_file(selected_paths, ordered_metadata)
+        create_archive_from_metadata_file(
+            selected_paths,
+            ordered_metadata,
+            raw_text=raw_metadata_text,
+            source_file=metadata_path,
+        )
 
         if os.path.exists(metadata_path):
             os.remove(metadata_path)
@@ -522,17 +531,23 @@ def process_artifact_with_metadata():
     artifact_path = os.path.join(INCOMING_DIR, artifact_filename)
     show_file_info(artifact_filename)
 
+    notify("Stage 1/7: Artifact file ingested independently (selected from incoming/).", "info")
+
     metadata = _prompt_artifact_metadata()
     if metadata is None:
         return
 
+    notify("Stage 2/7: Metadata parsed independently (not resolved to VN/Build yet).", "info")
+
     try:
+        notify("Stage 3/7: Pairing artifact ↔ metadata and resolving build context.", "info")
         _, resolved_build_id = _ensure_build_context_for_artifact(metadata)
     except ValueError as exc:
-        notify(str(exc), "error")
+        notify(f"Artifact status: unresolved ({exc})", "error")
         return
 
-    notify(f"Artifact metadata resolved to build_id={resolved_build_id}.", "ok")
+    notify(f"Stage 4/7: Build resolved (build_id={resolved_build_id}).", "ok")
+    notify("Stage 5-7/7: Linking artifact to build and completing classification.", "info")
 
     create_archive_from_metadata_file([artifact_path], metadata)
 
@@ -661,13 +676,7 @@ def _prompt_artifact_metadata():
 
     _validate_derived_artifact_base_reference(metadata)
 
-    try:
-        _, resolved_build_id = _ensure_build_context_for_artifact(metadata)
-        notify(f"Resolved artifact metadata to build_id={resolved_build_id}.", "ok")
-    except ValueError as exc:
-        notify(str(exc), "error")
-        return None
-
+    notify("Metadata captured. Build/VN resolution happens in the next stage.", "info")
     return metadata
 
 
