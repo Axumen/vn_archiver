@@ -75,7 +75,7 @@ def test_ingest_uses_artifact_branch():
         process_archives_for_build=lambda *args, **kwargs: called.update(processed=True),
     )
 
-    result = service.ingest({"title": "Sample Patch"})
+    result = service.ingest({"title": "Sample Patch", "sha256": "patch-sha"})
 
     assert result.vn_id == 55
     assert result.build_id == 77
@@ -114,3 +114,34 @@ def test_artifact_uses_metadata_sha256_when_archive_list_is_empty():
     assert result.artifact.file_sha256 == "from-metadata"
     assert result.build is not None
     assert result.artifact.build == result.build
+
+
+def test_ingest_requires_artifact_sha256_to_satisfy_build_invariant():
+    repo = FakeRepository()
+    service = VisualNovelDomainService(
+        conn=object(),
+        repository=repo,
+        is_artifact_metadata=lambda _: True,
+        collect_archives_for_db=lambda _: ([], None),
+        process_archives_for_build=lambda *args, **kwargs: None,
+    )
+
+    with pytest.raises(ValueError, match="at least one Artifact sha256"):
+        service.ingest({"title": "Patch Without Files"})
+
+
+def test_ingest_rejects_duplicate_archive_sha256_values():
+    repo = FakeRepository()
+    service = VisualNovelDomainService(
+        conn=object(),
+        repository=repo,
+        is_artifact_metadata=lambda _: False,
+        collect_archives_for_db=lambda _: (
+            [{"sha256": "dup"}, {"sha256": "dup"}],
+            "dup",
+        ),
+        process_archives_for_build=lambda *args, **kwargs: None,
+    )
+
+    with pytest.raises(ValueError, match="Duplicate artifact sha256"):
+        service.ingest({"title": "Duplicate SHA VN"})

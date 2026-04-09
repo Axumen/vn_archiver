@@ -1,3 +1,4 @@
+import sqlite3
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -11,11 +12,16 @@ class Build:
     attached to Build and does not define identity on its own.
     """
 
-    build_id: int | None
-    vn_id: int | None
+    build_id: int
+    vn_id: int
     version: "Version"
     release_type: str | None = None
     release_status: str | None = None
+    artifact_count: int = 1
+
+    def __post_init__(self):
+        if self.artifact_count < 1:
+            raise ValueError("A Build must have at least one Artifact.")
 
 
 @dataclass(frozen=True)
@@ -45,11 +51,15 @@ class Artifact:
     Files are modeled as artifacts linked to builds through this object.
     """
 
-    file_sha256: str | None
+    file_sha256: str
     build: Build
     artifact_type: str | None = None
     platform: str | None = None
     source_url: str | None = None
+
+    def __post_init__(self):
+        if not self.file_sha256:
+            raise ValueError("Artifact sha256 is required.")
 
 
 @dataclass(frozen=True)
@@ -59,6 +69,16 @@ class IngestionResult:
     artifact: Artifact | None = None
     build: Build | None = None
     vn: VN | None = None
+
+    def __post_init__(self):
+        if self.build is not None and self.artifact is not None:
+            if self.artifact.build != self.build:
+                raise ValueError("Artifact must belong to the returned Build.")
+        if self.build is not None:
+            if self.build.vn_id != self.vn_id:
+                raise ValueError("Build must belong to exactly one VN.")
+            if self.build.build_id != self.build_id:
+                raise ValueError("Build identity mismatch in ingestion result.")
 
 
 class IngestionRepository(Protocol):
@@ -91,6 +111,9 @@ class VisualNovelDomainService:
         self.process_archives_for_build = process_archives_for_build
 
     def _build_domain_graph(self, metadata, archives_to_process, *, build_id=None, vn_id=None):
+        if build_id is None or vn_id is None:
+            raise ValueError("Build and VN IDs must be resolved before domain graph creation.")
+
         vn = VN(
             canonical_title=metadata["title"],
             developer=metadata.get("developer"),
@@ -106,9 +129,12 @@ class VisualNovelDomainService:
             version=version,
             release_type=metadata.get("release_type"),
             release_status=metadata.get("release_status"),
+            artifact_count=max(1, len(archives_to_process)),
         )
         primary_archive = archives_to_process[0] if archives_to_process else {}
         file_sha256 = primary_archive.get("sha256") or metadata.get("sha256")
+        if not file_sha256:
+            raise ValueError("A Build must have at least one Artifact sha256.")
         artifact = Artifact(
             file_sha256=file_sha256,
             build=build,
@@ -117,6 +143,21 @@ class VisualNovelDomainService:
             source_url=metadata.get("url"),
         )
         return artifact, build, vn
+
+    def _assert_sha256_globally_unique(self, sha256, resolved_build_id):
+        if not sha256 or not hasattr(self.conn, "execute"):
+            return
+        try:
+            row = self.conn.execute(
+                "SELECT build_id FROM artifacts WHERE sha256 = ? LIMIT 1",
+                (sha256,),
+            ).fetchone()
+        except sqlite3.Error:
+            return
+        if row and row[0] != resolved_build_id:
+            raise ValueError(
+                f"Artifact sha256 must be globally unique across builds: {sha256}"
+            )
 
     def ingest(self, metadata):
         if not metadata.get("title"):
@@ -128,6 +169,21 @@ class VisualNovelDomainService:
             vn_id, build_id = self.repository.resolve_existing_build_for_artifact(metadata)
         else:
             vn_id, build_id = self.repository.upsert_vn_and_build(metadata)
+
+        candidate_sha256 = None
+        if archives_to_process:
+            seen = set()
+            for archive in archives_to_process:
+                sha = archive.get("sha256")
+                if not sha:
+                    continue
+                if sha in seen:
+                    raise ValueError(f"Duplicate artifact sha256 in ingest payload: {sha}")
+                seen.add(sha)
+            candidate_sha256 = archives_to_process[0].get("sha256")
+        if not candidate_sha256:
+            candidate_sha256 = metadata.get("sha256")
+        self._assert_sha256_globally_unique(candidate_sha256, build_id)
 
         self.process_archives_for_build(
             self.conn,
