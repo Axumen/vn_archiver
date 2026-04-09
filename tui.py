@@ -84,6 +84,10 @@ def notify(message, level="info"):
 def prompt(label):
     return input(WARNING + f"➤ {label}").strip()
 
+
+def notify_pipeline(stage, message, level="info"):
+    notify(f"Stage {stage}: {message}", level)
+
 # =============================
 # SUGGESTED VALUES (Normalized)
 # =============================
@@ -420,6 +424,8 @@ def quick_process_with_metadata_yaml():
             notify("No valid files selected.", "error")
             return
 
+        notify_pipeline("1", "Files ingested independently.")
+
         y_idx = int(yaml_choice) - 1
         if not (0 <= y_idx < len(yaml_files)):
             notify("Invalid metadata yaml selection.", "error")
@@ -429,6 +435,8 @@ def quick_process_with_metadata_yaml():
         with open(metadata_path, "r", encoding="utf-8") as f:
             raw_metadata_text = f.read()
         metadata = yaml.safe_load(raw_metadata_text) or {}
+
+        notify_pipeline("2", "Metadata parsed independently.")
 
         if not isinstance(metadata, dict):
             notify("Selected metadata yaml is not a valid object.", "error")
@@ -443,12 +451,15 @@ def quick_process_with_metadata_yaml():
 
         metadata_is_artifact = bool(str(metadata.get("artifact_type") or "").strip())
         if metadata_is_artifact:
-            notify(
-                "Artifact metadata detected in Quick Process YAML; entering staged artifact workflow (pair → resolve → classify).",
-                "info",
-            )
+            notify_pipeline("3", "Pairing artifact ↔ metadata.")
             _validate_derived_artifact_base_reference(metadata)
-            _ensure_build_context_for_artifact(metadata)
+            try:
+                _, resolved_build_id = _ensure_build_context_for_artifact(metadata)
+            except ValueError as exc:
+                notify(f"Artifact status: unresolved ({exc})", "error")
+                return
+            notify_pipeline("4", "VN resolved from metadata title.", "ok")
+            notify_pipeline(f"5", f"Build resolved (build_id={resolved_build_id}).", "ok")
 
         selected_sha256 = [sha256_file(path) for path in selected_paths]
         yaml_sha256 = []
@@ -484,12 +495,14 @@ def quick_process_with_metadata_yaml():
             raw_text=raw_metadata_text,
             source_file=metadata_path,
         )
+        notify_pipeline("6", "Artifact linked and metadata routed to VN/Build fields.", "ok")
+        notify_pipeline("7", "Artifact workflow marked classified.", "ok")
 
         if os.path.exists(metadata_path):
             os.remove(metadata_path)
             notify(f"Removed processed metadata yaml: {os.path.basename(metadata_path)}", "info")
-    except ValueError:
-        notify("Invalid input.", "error")
+    except ValueError as exc:
+        notify(f"Invalid input: {exc}", "error")
 
 
 def process_artifact_with_metadata():
@@ -531,25 +544,27 @@ def process_artifact_with_metadata():
     artifact_path = os.path.join(INCOMING_DIR, artifact_filename)
     show_file_info(artifact_filename)
 
-    notify("Stage 1/7: Artifact file ingested independently (selected from incoming/).", "info")
+    notify_pipeline("1", "Artifact file ingested independently.")
 
     metadata = _prompt_artifact_metadata()
     if metadata is None:
         return
 
-    notify("Stage 2/7: Metadata parsed independently (not resolved to VN/Build yet).", "info")
+    notify_pipeline("2", "Metadata parsed independently (not resolved to VN/Build yet).")
 
     try:
-        notify("Stage 3/7: Pairing artifact ↔ metadata and resolving build context.", "info")
+        notify_pipeline("3", "Pairing artifact ↔ metadata.")
         _, resolved_build_id = _ensure_build_context_for_artifact(metadata)
     except ValueError as exc:
         notify(f"Artifact status: unresolved ({exc})", "error")
         return
 
-    notify(f"Stage 4/7: Build resolved (build_id={resolved_build_id}).", "ok")
-    notify("Stage 5-7/7: Linking artifact to build and completing classification.", "info")
+    notify_pipeline("4", "VN resolved from metadata title.", "ok")
+    notify_pipeline("5", f"Build resolved (build_id={resolved_build_id}).", "ok")
 
     create_archive_from_metadata_file([artifact_path], metadata)
+    notify_pipeline("6", "Artifact linked and metadata routed to VN/Build fields.", "ok")
+    notify_pipeline("7", "Artifact workflow marked classified.", "ok")
 
 
 def _derive_build_metadata_from_artifact_metadata(metadata):

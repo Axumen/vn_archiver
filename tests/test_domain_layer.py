@@ -163,6 +163,29 @@ def test_ingest_persists_raw_metadata_with_primary_artifact_id_when_present():
     ]
 
 
+def test_ingest_skips_raw_metadata_persistence_when_no_artifact_id_available():
+    repo = FakeRepository()
+    service = VisualNovelDomainService(
+        conn=object(),
+        repository=repo,
+        is_artifact_metadata=lambda _: False,
+        collect_archives_for_db=lambda _: ([], None),
+        process_archives_for_build=lambda *args, **kwargs: None,
+    )
+
+    with pytest.raises(ValueError, match="at least one Artifact sha256"):
+        service.ingest(
+            {
+                "title": "MetadataOnly",
+                "version": "1.0",
+                "_raw_text": "title: MetadataOnly\nversion: 1.0\n",
+                "_source_file": "incoming/metadata_only.yaml",
+            }
+        )
+
+    assert repo.raw_metadata_records == []
+
+
 def test_domain_entities_model_file_to_artifact_to_build_to_version_to_vn():
     vn = VN(canonical_title="Example VN", developer="Dev Team", publisher="Pub Team")
     version = Version(version_string="2.0", normalized_version="2.0")

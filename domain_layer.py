@@ -227,8 +227,8 @@ class VisualNovelDomainService:
 
         raw_text = metadata.get("_raw_text")
         source_file = metadata.get("_source_file")
-        if raw_text:
-            primary_artifact_id = created_artifact_ids[0] if created_artifact_ids else None
+        primary_artifact_id = created_artifact_ids[0] if created_artifact_ids else None
+        if raw_text and primary_artifact_id is not None:
             self.repository.create_metadata_raw(raw_text, source_file, primary_artifact_id)
 
         self.process_archives_for_build(
