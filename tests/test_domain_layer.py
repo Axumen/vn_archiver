@@ -1,4 +1,5 @@
 import pytest
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -249,3 +250,70 @@ def test_ingest_rejects_duplicate_archive_sha256_values():
 
     with pytest.raises(ValueError, match="Duplicate artifact sha256"):
         service.ingest({"title": "Duplicate SHA VN"})
+
+
+def test_ingest_skips_legacy_archive_processing_when_files_table_is_absent():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE vn (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
+    conn.execute(
+        "CREATE TABLE builds (id INTEGER PRIMARY KEY, vn_id INTEGER NOT NULL, version_string TEXT, release_type TEXT, language TEXT, platform TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE artifacts (id INTEGER PRIMARY KEY, build_id INTEGER, sha256 TEXT NOT NULL UNIQUE, path TEXT NOT NULL, type TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE metadata_raw (id INTEGER PRIMARY KEY, artifact_id INTEGER, source_file TEXT, raw_text TEXT NOT NULL)"
+    )
+
+    class SqliteRepo(FakeRepository):
+        def __init__(self, conn):
+            super().__init__()
+            self.conn = conn
+
+        def get_or_create_vn(self, metadata):
+            row = self.conn.execute("SELECT id FROM vn WHERE title = ?", (metadata["title"],)).fetchone()
+            if row:
+                return row["id"]
+            self.conn.execute("INSERT INTO vn (title) VALUES (?)", (metadata["title"],))
+            return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        def get_or_create_build(self, vn_id, metadata):
+            row = self.conn.execute(
+                "SELECT id FROM builds WHERE vn_id = ? AND version_string = ?",
+                (vn_id, metadata.get("version") or "1.0"),
+            ).fetchone()
+            if row:
+                return row["id"]
+            self.conn.execute(
+                "INSERT INTO builds (vn_id, version_string, release_type, language, platform) VALUES (?, ?, ?, ?, ?)",
+                (vn_id, metadata.get("version") or "1.0", metadata.get("release_type"), metadata.get("language"), metadata.get("platform")),
+            )
+            return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        def create_artifact(self, build_id, metadata, archive_data):
+            self.conn.execute(
+                "INSERT INTO artifacts (build_id, sha256, path, type) VALUES (?, ?, ?, ?)",
+                (build_id, archive_data["sha256"], archive_data.get("filename") or archive_data.get("filepath"), metadata.get("artifact_type") or "game_archive"),
+            )
+            return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        def create_metadata_raw(self, raw_text, source_file, artifact_id):
+            self.conn.execute(
+                "INSERT INTO metadata_raw (artifact_id, source_file, raw_text) VALUES (?, ?, ?)",
+                (artifact_id, source_file, raw_text),
+            )
+
+    repo = SqliteRepo(conn)
+    called = {"processed": False}
+    service = VisualNovelDomainService(
+        conn=conn,
+        repository=repo,
+        is_artifact_metadata=lambda _: False,
+        collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
+        process_archives_for_build=lambda *args, **kwargs: called.update(processed=True),
+    )
+
+    result = service.ingest({"title": "Clannad", "version": "1.0"})
+    assert result.build_id is not None
+    assert called["processed"] is False
