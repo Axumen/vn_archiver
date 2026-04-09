@@ -1914,20 +1914,18 @@ def finalize_archive_creation(metadata, archives_data):
 
     build_id = None
     build_language = normalize_text_list_value(metadata.get('language'))
-    build_type = metadata.get('build_type')
-    build_edition = metadata.get('edition')
-    build_distribution_platform = metadata.get('distribution_platform')
+    build_release_type = metadata.get('release_type') or metadata.get('build_type')
+    build_platform = metadata.get('platform') or metadata.get('distribution_platform')
     with get_connection() as conn:
         build_row = conn.execute(
             '''
             SELECT id FROM builds
-            WHERE vn_id = ? AND version = ?
+            WHERE vn_id = ? AND version_string = ?
               AND COALESCE(language, '') = COALESCE(?, '')
-              AND COALESCE(build_type, '') = COALESCE(?, '')
-              AND COALESCE(edition, '') = COALESCE(?, '')
-              AND COALESCE(distribution_platform, '') = COALESCE(?, '')
+              AND COALESCE(release_type, '') = COALESCE(?, '')
+              AND COALESCE(platform, '') = COALESCE(?, '')
             ''',
-            (vn_id, metadata.get('version'), build_language, build_type, build_edition, build_distribution_platform)
+            (vn_id, metadata.get('version'), build_language, build_release_type, build_platform)
         ).fetchone()
         if build_row:
             build_id = build_row['id']
