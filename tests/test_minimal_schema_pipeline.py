@@ -42,19 +42,11 @@ def test_resolve_artifact_id_for_metadata_supports_minimal_artifacts_id_column()
     assert artifact_id == 42
 
 
-def test_get_current_metadata_version_number_returns_default_when_legacy_table_absent(monkeypatch):
-    conn = _make_conn()
-
-    @contextmanager
-    def fake_connection():
-        yield conn
-
-    monkeypatch.setattr(vn_archiver, "get_connection", fake_connection)
-
+def test_get_current_metadata_version_number_returns_default_one():
     assert vn_archiver.get_current_metadata_version_number(build_id=7) == 1
 
 
-def test_mirror_metadata_for_rebuild_uses_artifacts_fallback_when_archives_table_absent(tmp_path, monkeypatch):
+def test_mirror_metadata_for_rebuild_uses_artifacts_table(tmp_path, monkeypatch):
     conn = _make_conn()
     conn.execute("INSERT INTO vn (id, title) VALUES (1, 'Example VN')")
     conn.execute("INSERT INTO builds (id, vn_id, version_string) VALUES (7, 1, '1.0')")
