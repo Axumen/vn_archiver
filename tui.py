@@ -440,7 +440,7 @@ def quick_process_with_metadata_yaml():
         metadata_is_artifact = bool(str(metadata.get("artifact_type") or "").strip())
         if metadata_is_artifact:
             notify(
-                "Artifact metadata detected in Quick Process YAML; resolving/creating build context before artifact link.",
+                "Artifact metadata detected in Quick Process YAML; entering staged artifact workflow (pair → resolve → classify).",
                 "info",
             )
             _validate_derived_artifact_base_reference(metadata)
@@ -522,17 +522,23 @@ def process_artifact_with_metadata():
     artifact_path = os.path.join(INCOMING_DIR, artifact_filename)
     show_file_info(artifact_filename)
 
+    notify("Stage 1/7: Artifact file ingested independently (selected from incoming/).", "info")
+
     metadata = _prompt_artifact_metadata()
     if metadata is None:
         return
 
+    notify("Stage 2/7: Metadata parsed independently (not resolved to VN/Build yet).", "info")
+
     try:
+        notify("Stage 3/7: Pairing artifact ↔ metadata and resolving build context.", "info")
         _, resolved_build_id = _ensure_build_context_for_artifact(metadata)
     except ValueError as exc:
-        notify(str(exc), "error")
+        notify(f"Artifact status: unresolved ({exc})", "error")
         return
 
-    notify(f"Artifact metadata resolved to build_id={resolved_build_id}.", "ok")
+    notify(f"Stage 4/7: Build resolved (build_id={resolved_build_id}).", "ok")
+    notify("Stage 5-7/7: Linking artifact to build and completing classification.", "info")
 
     create_archive_from_metadata_file([artifact_path], metadata)
 
@@ -661,13 +667,7 @@ def _prompt_artifact_metadata():
 
     _validate_derived_artifact_base_reference(metadata)
 
-    try:
-        _, resolved_build_id = _ensure_build_context_for_artifact(metadata)
-        notify(f"Resolved artifact metadata to build_id={resolved_build_id}.", "ok")
-    except ValueError as exc:
-        notify(str(exc), "error")
-        return None
-
+    notify("Metadata captured. Build/VN resolution happens in the next stage.", "info")
     return metadata
 
 
