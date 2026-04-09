@@ -906,28 +906,56 @@ def resolve_existing_build_for_artifact(conn, metadata):
     distribution_platform = normalized_optional("distribution_platform")
     normalized_version = str(metadata.get("normalized_version") or version).strip().lower()
 
-    rows = conn.execute(
-        """
+    def get_table_columns(table_name):
+        return {
+            row[1]
+            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+
+    vn_columns = get_table_columns("vn")
+    if "title" not in vn_columns:
+        raise ValueError("Current schema requires vn.title for artifact resolution.")
+
+    build_columns = get_table_columns("builds")
+    version_column = "normalized_version" if "normalized_version" in build_columns else (
+        "version" if "version" in build_columns else "version_string"
+    )
+
+    where_clauses = [
+        "TRIM(v.title) = TRIM(?) COLLATE NOCASE",
+        f"b.{version_column} = ?",
+    ]
+    params = [title, normalized_version]
+
+    if "language" in build_columns:
+        where_clauses.append("(? IS NULL OR COALESCE(b.language, '') = ?)")
+        params.extend([language, language or ""])
+
+    if "release_type" in build_columns or "build_type" in build_columns:
+        if "release_type" in build_columns and "build_type" in build_columns:
+            where_clauses.append("(? IS NULL OR COALESCE(b.release_type, COALESCE(b.build_type, '')) = ?)")
+        elif "release_type" in build_columns:
+            where_clauses.append("(? IS NULL OR COALESCE(b.release_type, '') = ?)")
+        else:
+            where_clauses.append("(? IS NULL OR COALESCE(b.build_type, '') = ?)")
+        params.extend([release_type, release_type or ""])
+
+    if "edition" in build_columns:
+        where_clauses.append("(? IS NULL OR COALESCE(b.edition, '') = ?)")
+        params.extend([edition, edition or ""])
+
+    if "distribution_platform" in build_columns:
+        where_clauses.append("(? IS NULL OR COALESCE(b.distribution_platform, '') = ?)")
+        params.extend([distribution_platform, distribution_platform or ""])
+
+    sql = f"""
         SELECT b.id AS build_id, b.vn_id
         FROM builds b
-        JOIN visual_novels v ON v.id = b.vn_id
-        WHERE TRIM(v.title) = TRIM(?) COLLATE NOCASE
-          AND b.normalized_version = ?
-          AND (? IS NULL OR COALESCE(b.language, '') = ?)
-          AND (? IS NULL OR COALESCE(b.release_type, COALESCE(b.build_type, '')) = ?)
-          AND (? IS NULL OR COALESCE(b.edition, '') = ?)
-          AND (? IS NULL OR COALESCE(b.distribution_platform, '') = ?)
+        JOIN vn v ON v.id = b.vn_id
+        WHERE {' AND '.join(where_clauses)}
         ORDER BY b.id DESC
-        """,
-        (
-            title,
-            normalized_version,
-            language, language or "",
-            release_type, release_type or "",
-            edition, edition or "",
-            distribution_platform, distribution_platform or "",
-        )
-    ).fetchall()
+    """
+    rows = conn.execute(sql, tuple(params)).fetchall()
 
     if not rows:
         raise ValueError(
