@@ -1,0 +1,33 @@
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("yaml")
+import yaml
+
+from canonical_schema import DOMAIN_TABLES, table_names
+
+
+def _allowed_metadata_fields():
+    template_path = Path(__file__).resolve().parents[1] / "metadata" / "metadata_v1.yaml"
+    payload = yaml.safe_load(template_path.read_text(encoding="utf-8"))
+
+    allowed = set(payload.get("required") or []) | set(payload.get("optional") or [])
+    archives = payload.get("archives") or []
+    if archives and isinstance(archives[0], dict):
+        for key in archives[0].keys():
+            allowed.add(f"archives.{key}")
+    return allowed
+
+
+def test_domain_tables_follow_vn_build_file_core_order():
+    assert table_names() == ["vn", "build", "file", "build_relation"]
+
+
+def test_domain_columns_are_based_on_metadata_v1_fields():
+    allowed = _allowed_metadata_fields()
+    internal = {"id", "vn_id", "build_id", "from_build_id"}
+
+    for table in DOMAIN_TABLES:
+        for column in table.columns:
+            assert column.source_field in allowed or column.source_field in internal
