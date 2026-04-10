@@ -143,7 +143,6 @@ Hash equality is only stage 1. It must not decide release semantics by itself.
 
 - `Build ≠ Artifact`
 - `Artifact ≠ File`
-- `BuildRelation` is first-class, not inferred ad hoc.
 - Domain queries must traverse VN/build/artifact relationships, not only hashes.
 
 ---
@@ -162,9 +161,7 @@ Canonical interpretation:
 - `Build`: v1 (release_type=full)
 - `Build`: v2 (release_type=patch)
 - `Build`: april_fools (release_type=april_fools)
-- `BuildRelation`: v2 `depends_on` v1
 - `Artifact`s: one per acquired package with provenance
-- `File`s: deduplicated binaries linked through `ArtifactFile`
 
 ---
 
