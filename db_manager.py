@@ -9,6 +9,7 @@ from datetime import datetime
 DB_PATH = "archive.db"
 SCHEMA_PATH = "db_schema.sql"
 BACKUP_DIR = "db_backups"
+ENABLE_DATABASE_BACKUPS = False
 
 # Database is treated as fresh-initialized from db_schema.sql.
 TARGET_SCHEMA_VERSION = 5
@@ -75,11 +76,17 @@ def _backup_worker():
 
 
 def queue_database_backup():
+    if not ENABLE_DATABASE_BACKUPS:
+        return
+
     _ensure_backup_worker_started()
     _backup_queue.put(object())
 
 
 def create_database_backup():
+    if not ENABLE_DATABASE_BACKUPS:
+        return None
+
     if not os.path.exists(DB_PATH):
         return None
 
@@ -175,11 +182,17 @@ def _backup_worker():
 
 
 def queue_database_backup():
+    if not ENABLE_DATABASE_BACKUPS:
+        return
+
     _ensure_backup_worker_started()
     _backup_queue.put(object())
 
 
 def create_database_backup():
+    if not ENABLE_DATABASE_BACKUPS:
+        return None
+
     if not os.path.exists(DB_PATH):
         return None
 
@@ -296,11 +309,17 @@ def _backup_worker():
 
 
 def queue_database_backup():
+    if not ENABLE_DATABASE_BACKUPS:
+        return
+
     _ensure_backup_worker_started()
     _backup_queue.put(object())
 
 
 def create_database_backup():
+    if not ENABLE_DATABASE_BACKUPS:
+        return None
+
     if not os.path.exists(DB_PATH):
         return None
 
@@ -373,8 +392,11 @@ class ArchiverConnection(sqlite3.Connection):
 def create_database_backup():
     """
     Creates a timestamped backup of archive.db.
-    Returns the backup path, or None if the main DB does not exist.
+    Returns the backup path, or None if backups are disabled or the main DB does not exist.
     """
+    if not ENABLE_DATABASE_BACKUPS:
+        return None
+
     if not os.path.exists(DB_PATH):
         return None
 
@@ -395,9 +417,8 @@ def create_database_backup():
 
 class ArchiverConnection(sqlite3.Connection):
     """
-    Minimal backup-aware connection:
-    - Backup only after successful commit.
-    - No backup on rollback/cancelled operations.
+    Connection wrapper for project-specific SQLite behavior.
+    Database backups are currently disabled.
     """
 
     def __init__(self, *args, **kwargs):
@@ -406,8 +427,6 @@ class ArchiverConnection(sqlite3.Connection):
 
     def commit(self):
         super().commit()
-        if self.total_changes > self._last_total_changes:
-            create_database_backup()
         self._last_total_changes = self.total_changes
 
     def rollback(self):
