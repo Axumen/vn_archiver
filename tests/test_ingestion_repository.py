@@ -163,3 +163,80 @@ def test_create_artifact_allows_shared_sha_across_different_builds():
     assert len(rows) == 2
     assert rows[0]["build_id"] == 1
     assert rows[1]["build_id"] == 2
+
+
+def make_conn_new_schema():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE vn (vn_id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
+    conn.execute(
+        """
+        CREATE TABLE build (
+            build_id INTEGER PRIMARY KEY,
+            vn_id INTEGER NOT NULL,
+            version TEXT NOT NULL,
+            release_type TEXT,
+            language TEXT,
+            target_platform TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE file (
+            file_id INTEGER PRIMARY KEY,
+            sha256 TEXT NOT NULL UNIQUE,
+            filename TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE build_file (
+            build_id INTEGER NOT NULL,
+            file_id INTEGER NOT NULL,
+            original_filename TEXT,
+            archived_at TEXT,
+            PRIMARY KEY (build_id, file_id)
+        )
+        """
+    )
+    return conn
+
+
+def test_repository_supports_new_build_file_schema():
+    conn = make_conn_new_schema()
+    repo = VnIngestionRepository(
+        conn,
+        upsert_series=lambda *args, **kwargs: None,
+        upsert_visual_novel_record=lambda *args, **kwargs: None,
+        sync_vn_tags=lambda *args, **kwargs: None,
+        sync_canon_relationship=lambda *args, **kwargs: None,
+        upsert_build_record=lambda *args, **kwargs: None,
+        sync_build_target_platforms=lambda *args, **kwargs: None,
+        sync_build_relations=lambda *args, **kwargs: None,
+        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
+        create_artifact_record=lambda *args, **kwargs: None,
+    )
+
+    vn_id = repo.get_or_create_vn({"title": "Rewrite"})
+    build_id = repo.get_or_create_build(
+        vn_id,
+        {"version": "1.0", "release_type": "full", "language": "JP", "target_platform": "windows"},
+    )
+    file_id = repo.create_artifact(
+        build_id,
+        {"archived_at": "2026-04-10T00:00:00Z"},
+        {"sha256": "abc123", "filename": "rewrite.zip"},
+    )
+
+    assert vn_id == 1
+    assert build_id == 1
+    assert file_id == 1
+
+    row = conn.execute(
+        "SELECT bf.build_id, bf.file_id, f.sha256 FROM build_file bf JOIN file f ON f.file_id = bf.file_id"
+    ).fetchone()
+    assert row["build_id"] == 1
+    assert row["file_id"] == 1
+    assert row["sha256"] == "abc123"
