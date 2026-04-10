@@ -1,12 +1,12 @@
-metadata_version: 1
+metadata_version: 1       # Template/schema metadata format version
 
 # =====================================
 # REQUIRED FIELDS
 # =====================================
 required:
   # Work identity (required for build matching)
-  - title
-  - version
+  - title                # Canonical work title for this release/build family
+  - version              # Specific build/version label (e.g., v1.0, 1.02, Final)
 
 # =====================================
 # OPTIONAL FIELDS
@@ -15,55 +15,55 @@ optional:
   # -------------------------------------
   # SERIES
   # -------------------------------------
-  - series
-  - series_description
+  - series               # Franchise/series name this work belongs to
+  - series_description   # Short context for how this work fits in the series
 
   # -------------------------------------
   # VISUAL NOVEL (work-level)
   # -------------------------------------
-  - aliases              # Alternative titles (Romaji/Japanese/etc.)
-  - developer            # Comma-separated string or YAML list
-  - publisher            # Comma-separated string or YAML list
-  - release_status
-  - content_rating
+  - aliases              # Alternative titles (Romaji/Japanese/localized/etc.)
+  - developer            # Studio(s) that developed the work (string or list)
+  - publisher            # Publisher(s)/label(s) that released it (string or list)
+  - release_status       # Lifecycle state (released, upcoming, canceled, etc.)
+  - content_rating       # Age/content rating (18+, all-ages, unrated, etc.)
   - content_mode         # Suggested: sfw, nsfw, selectable, patchable, mixed, unknown
   - content_type         # Suggested: main_story, story_expansion, seasonal_event, april_fools, side_story, non_canon_special
   - description          # Work-level synopsis/description
   - source               # Source/store/origin URL
-  - tags
+  - tags                 # Keywords/genres/themes for search and filtering
 
   # -------------------------------------
   # BUILD (version-level)
   # -------------------------------------
-  - build_type
-  - release_type
-  - distribution_model
-  - distribution_platform
-  - language
+  - build_type           # Nature of build (full, patch, demo, DLC, update, etc.)
+  - release_type         # Release channel/state (stable, beta, alpha, hotfix, etc.)
+  - distribution_model   # Packaging style (installer, portable, archive, online, etc.)
+  - distribution_platform # Store/platform/source channel (Steam, DLsite, Itch, etc.)
+  - language             # Language(s) available in this specific build
   - translator           # String, list, or language-keyed map
-  - edition
-  - original_release_date
-  - release_date
-  - engine
-  - engine_version
-  - target_platform
+  - edition              # Edition/variant label (standard, collector, director's cut, etc.)
+  - original_release_date # First known release date of the work overall
+  - release_date         # Release date for this specific version/build
+  - engine               # Engine/framework used by the game (Ren'Py, KiriKiri, Unity, etc.)
+  - engine_version       # Engine version when known
+  - target_platform      # Runtime platform(s) (Windows, Linux, macOS, Android, etc.)
   
   # -------------------------------------
   # RELATIONSHIPS
   # -------------------------------------
-  - parent_vn_title
-  - relationship_type
+  - parent_vn_title      # Related/canonical parent work title for linked entries
+  - relationship_type    # Link type (fan_disc, sequel, prequel, remake, fandub, etc.)
 
   # -------------------------------------
   # MISC
   # -------------------------------------
-  - notes
+  - notes                # Freeform notes useful to archivists/users
   - change_note          # Metadata revision note
 
 # Multi-archive metadata block (optional)
 archives:
-  - filename:
-    sha256:
+  - filename:             # Archive file name (with extension) for this build asset
+    sha256:              # SHA-256 checksum for integrity verification
 
 # -------------------------------------
 # EXAMPLES
