@@ -1,4 +1,4 @@
-PRAGMA foreign_keys = ON;
+PRAGMA foreign_keys = OFF;
 
 -- Canonical schema v1 (fresh initialization only).
 
@@ -88,8 +88,45 @@ CREATE TABLE IF NOT EXISTS platforms (
     name TEXT NOT NULL UNIQUE
 );
 
-CREATE TABLE IF NOT EXISTS builds (
+CREATE TABLE IF NOT EXISTS vn_developers (
+    vn_id INTEGER NOT NULL,
+    org_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, org_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS vn_publishers (
+    vn_id INTEGER NOT NULL,
+    org_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, org_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS vn_aliases (
+    vn_id INTEGER NOT NULL,
+    alias TEXT NOT NULL,
+    PRIMARY KEY (vn_id, alias),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS vn_relationships (
+    vn_id INTEGER NOT NULL,
+    related_vn_id INTEGER NOT NULL,
+    relationship_type TEXT NOT NULL,
+    source TEXT,
+    PRIMARY KEY (vn_id, related_vn_id, relationship_type),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (related_vn_id) REFERENCES vn(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS vn_tags (
     vn_id INTEGER NOT NULL,
     version TEXT NOT NULL,
     normalized_version TEXT,
@@ -221,7 +258,7 @@ CREATE TABLE IF NOT EXISTS artifact_metadata_versions (
     UNIQUE (artifact_id, version_number)
 );
 
-CREATE TABLE IF NOT EXISTS metadata_raw (
+CREATE TABLE metadata_raw (
     id INTEGER PRIMARY KEY,
     artifact_id INTEGER,
     source_file TEXT,
