@@ -501,6 +501,8 @@ PASSTHROUGH_FIELDS = {
     "file_size_bytes",
     "original_filename",
     "archived_at",
+    "_raw_text",
+    "_source_file",
 }
 
 CATEGORY_ALL_FIELDS = CSV_TO_TEXT_FIELDS | CSV_TO_LIST_FIELDS | PASSTHROUGH_FIELDS
