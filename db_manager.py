@@ -492,23 +492,14 @@ def _column_exists(conn, table_name, column_name):
 
 def run_migrations(conn, current_version):
     """
-    Apply incremental schema/data migrations.
-    """
-    with exclusive_transaction(conn):
-        if current_version < 2:
-            _migrate_change_note_fallback_rows(conn)
-        if current_version < 3:
-            _migrate_build_identity_index(conn)
-        if current_version < 4:
-            # v4 relies on schema re-application for artifact metadata version tables/indexes.
-            pass
-        if current_version < 5:
-            _migrate_artifact_file_object_link(conn)
-        if current_version < 6:
-            _migrate_artifact_sha_uniqueness(conn)
+    Legacy no-op for canonical schema v1 bootstrap.
 
-        # Stamp DB at the current supported schema version.
-        conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
+    The project now initializes from scratch using db_schema.sql with
+    TARGET_SCHEMA_VERSION=1, so incremental migrations are intentionally
+    disabled to avoid stale migration code creating duplicate objects.
+    """
+    del conn, current_version
+    return
 
 
 def _migrate_change_note_fallback_rows(conn):
