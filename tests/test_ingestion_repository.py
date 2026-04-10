@@ -17,10 +17,10 @@ def make_conn():
             id INTEGER PRIMARY KEY,
             vn_id INTEGER NOT NULL,
             version_string TEXT,
-            release_type TEXT,
+            build_type TEXT,
             language TEXT,
             platform TEXT,
-            UNIQUE (vn_id, version_string, language, release_type, platform)
+            UNIQUE (vn_id, version_string, language, build_type, platform)
         )
         """
     )
@@ -63,7 +63,7 @@ def test_get_or_create_vn_and_build_works_without_visual_novels_table():
         {
             "version": "1.0",
             "language": "JP",
-            "release_type": "original",
+            "build_type": "original",
             "platform": "windows",
         },
     )
@@ -77,7 +77,7 @@ def test_get_or_create_vn_and_build_works_without_visual_novels_table():
         {
             "version": "1.0",
             "language": "JP",
-            "release_type": "original",
+            "build_type": "original",
             "platform": "windows",
         },
     )
@@ -103,7 +103,7 @@ def test_create_artifact_does_not_require_files_table_in_current_schema():
 
     conn.execute("INSERT INTO vn (id, title) VALUES (1, 'Clannad')")
     conn.execute(
-        "INSERT INTO builds (id, vn_id, version_string, release_type, language, platform) VALUES (1, 1, '1.0', 'original', 'JP', 'windows')"
+        "INSERT INTO builds (id, vn_id, version_string, build_type, language, platform) VALUES (1, 1, '1.0', 'original', 'JP', 'windows')"
     )
 
     artifact_id = repo.create_artifact(
@@ -138,10 +138,10 @@ def test_create_artifact_allows_shared_sha_across_different_builds():
     conn.execute("INSERT INTO vn (id, title) VALUES (1, 'Clannad')")
     conn.execute("INSERT INTO vn (id, title) VALUES (2, 'Tomoyo After')")
     conn.execute(
-        "INSERT INTO builds (id, vn_id, version_string, release_type, language, platform) VALUES (1, 1, '1.0', 'original', 'JP', 'windows')"
+        "INSERT INTO builds (id, vn_id, version_string, build_type, language, platform) VALUES (1, 1, '1.0', 'original', 'JP', 'windows')"
     )
     conn.execute(
-        "INSERT INTO builds (id, vn_id, version_string, release_type, language, platform) VALUES (2, 2, '1.0', 'original', 'JP', 'windows')"
+        "INSERT INTO builds (id, vn_id, version_string, build_type, language, platform) VALUES (2, 2, '1.0', 'original', 'JP', 'windows')"
     )
 
     first_id = repo.create_artifact(
@@ -175,7 +175,7 @@ def make_conn_new_schema():
             build_id INTEGER PRIMARY KEY,
             vn_id INTEGER NOT NULL,
             version TEXT NOT NULL,
-            release_type TEXT,
+            build_type TEXT,
             language TEXT,
             target_platform TEXT
         )
@@ -222,7 +222,7 @@ def test_repository_supports_new_build_file_schema():
     vn_id = repo.get_or_create_vn({"title": "Rewrite"})
     build_id = repo.get_or_create_build(
         vn_id,
-        {"version": "1.0", "release_type": "full", "language": "JP", "target_platform": "windows"},
+        {"version": "1.0", "build_type": "full", "language": "JP", "target_platform": "windows"},
     )
     file_id = repo.create_artifact(
         build_id,

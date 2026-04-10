@@ -84,12 +84,12 @@ class VnIngestionRepository:
     def _build_lookup_filters(self, metadata):
         version_value = str(metadata.get("version") or "").strip()
         language = metadata.get("language")
-        release_type = metadata.get("release_type")
+        build_type = metadata.get("build_type") or metadata.get("release_type")
         platform = metadata.get("platform") or metadata.get("target_platform")
-        return version_value, language, release_type, platform
+        return version_value, language, build_type, platform
 
     def find_build(self, vn_id, metadata):
-        version_value, language, release_type, platform = self._build_lookup_filters(metadata)
+        version_value, language, build_type, platform = self._build_lookup_filters(metadata)
         if not version_value:
             return None
 
@@ -100,9 +100,12 @@ class VnIngestionRepository:
         if "language" in columns:
             where_clauses.append("COALESCE(language, '') = COALESCE(?, '')")
             params.append(language)
-        if "release_type" in columns:
+        if "build_type" in columns:
+            where_clauses.append("COALESCE(build_type, '') = COALESCE(?, '')")
+            params.append(build_type)
+        elif "release_type" in columns:
             where_clauses.append("COALESCE(release_type, '') = COALESCE(?, '')")
-            params.append(release_type)
+            params.append(build_type)
         if self.build_platform_column in columns:
             where_clauses.append(
                 f"COALESCE({self.build_platform_column}, '') = COALESCE(?, '')"
@@ -116,7 +119,7 @@ class VnIngestionRepository:
         return row[self.build_id_column] if row else None
 
     def create_build(self, vn_id, metadata):
-        version_value, language, release_type, platform = self._build_lookup_filters(metadata)
+        version_value, language, build_type, platform = self._build_lookup_filters(metadata)
         if not version_value:
             version_value = "1.0"
 
@@ -127,9 +130,12 @@ class VnIngestionRepository:
         if "language" in columns:
             insert_columns.append("language")
             values.append(language)
-        if "release_type" in columns:
+        if "build_type" in columns:
+            insert_columns.append("build_type")
+            values.append(build_type)
+        elif "release_type" in columns:
             insert_columns.append("release_type")
-            values.append(release_type)
+            values.append(build_type)
         if self.build_platform_column in columns:
             insert_columns.append(self.build_platform_column)
             values.append(platform)

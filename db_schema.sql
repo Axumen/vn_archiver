@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS build (
     vn_id INTEGER NOT NULL,
     version TEXT NOT NULL,
     normalized_version TEXT GENERATED ALWAYS AS (lower(trim(version))) VIRTUAL,
-    release_type TEXT,
-    access_model TEXT,
+    build_type TEXT,
+    distribution_model TEXT,
     distribution_platform TEXT,
     language TEXT,
     translator TEXT,
@@ -39,8 +39,8 @@ CREATE TABLE IF NOT EXISTS build (
     notes TEXT,
     change_note TEXT,
     CHECK (release_date IS NULL OR release_date GLOB '????-??-??'),
-    CHECK (release_type IS NULL OR release_type IN ('full','patch','demo','trial','fandisc','hotfix','april_fools')),
-    CHECK (access_model IS NULL OR access_model IN ('free','paid','freemium','subscription')),
+    CHECK (build_type IS NULL OR build_type IN ('full','patch','demo','trial','fandisc','hotfix','april_fools')),
+    CHECK (distribution_model IS NULL OR distribution_model IN ('free','paid','freemium','subscription')),
     FOREIGN KEY (vn_id) REFERENCES vn(vn_id) ON DELETE CASCADE
 );
 
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS build_relation (
 );
 
 CREATE INDEX IF NOT EXISTS idx_build_vn ON build(vn_id);
-CREATE INDEX IF NOT EXISTS idx_build_release_type ON build(release_type);
+CREATE INDEX IF NOT EXISTS idx_build_type ON build(build_type);
 CREATE INDEX IF NOT EXISTS idx_file_sha256 ON file(sha256);
 CREATE INDEX IF NOT EXISTS idx_build_relation_from ON build_relation(from_build_id);
 
