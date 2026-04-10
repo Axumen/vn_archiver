@@ -24,21 +24,8 @@ DROP TABLE IF EXISTS organizations;
 DROP TABLE IF EXISTS vn_relationships;
 DROP TABLE IF EXISTS platforms;
 DROP TABLE IF EXISTS series;
-DROP TABLE IF EXISTS vn;
 DROP TABLE IF EXISTS visual_novels;
-
-CREATE TABLE vn (
-    id INTEGER PRIMARY KEY,
-    title TEXT NOT NULL UNIQUE,
-    description TEXT,
-    content_rating TEXT,
-    content_mode TEXT,
-    source_url TEXT,
-    original_release_date TEXT,
-    series_id INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE SET NULL
-);
+DROP TABLE IF EXISTS vn;
 
 CREATE TABLE series (
     id INTEGER PRIMARY KEY,
@@ -92,24 +79,50 @@ CREATE TABLE platforms (
     name TEXT NOT NULL UNIQUE
 );
 
+CREATE TABLE visual_novels (
+    id INTEGER PRIMARY KEY,
+    series_id INTEGER,
+    title TEXT NOT NULL UNIQUE,
+    canonical_slug TEXT,
+    aliases TEXT,
+    developer TEXT,
+    publisher TEXT,
+    release_status TEXT,
+    content_rating TEXT,
+    content_mode TEXT,
+    description TEXT,
+    source TEXT,
+    status TEXT DEFAULT 'local',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE SET NULL
+);
+
+CREATE TABLE vn (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL UNIQUE
+);
+
 CREATE TABLE builds (
     id INTEGER PRIMARY KEY,
     vn_id INTEGER NOT NULL,
-    version_string TEXT NOT NULL,
+    version TEXT NOT NULL,
     normalized_version TEXT,
-    release_type TEXT,
-    release_status TEXT,
     build_type TEXT,
-    language TEXT,
+    release_type TEXT,
     distribution_model TEXT,
     distribution_platform TEXT,
+    language TEXT,
+    translator TEXT,
     edition TEXT,
+    original_release_date TEXT,
     release_date TEXT,
     engine TEXT,
     engine_version TEXT,
-    content_type TEXT,
+    source TEXT,
+    status TEXT DEFAULT 'local',
+    archive_object_sha256 TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE
+    FOREIGN KEY (vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE
 );
 
 CREATE TABLE build_target_platforms (
@@ -142,20 +155,48 @@ CREATE TABLE vn_relationships (
 );
 
 CREATE TABLE artifacts (
-    id INTEGER PRIMARY KEY,
+    artifact_id INTEGER PRIMARY KEY,
     build_id INTEGER NOT NULL,
     artifact_type TEXT,
+    platform TEXT,
+    source_url TEXT,
     filename TEXT,
     sha256 TEXT NOT NULL,
-    path TEXT,
+    file_id INTEGER,
     file_object_sha256 TEXT,
-    source_url TEXT,
-    notes TEXT,
     base_artifact_id INTEGER,
+    release_date TEXT,
+    notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE,
-    FOREIGN KEY (base_artifact_id) REFERENCES artifacts(id) ON DELETE SET NULL,
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL,
+    FOREIGN KEY (base_artifact_id) REFERENCES artifacts(artifact_id) ON DELETE SET NULL,
     UNIQUE (build_id, sha256)
+);
+
+CREATE TABLE files (
+    id INTEGER PRIMARY KEY,
+    sha256 TEXT NOT NULL UNIQUE,
+    size_bytes INTEGER DEFAULT 0,
+    mime_type TEXT,
+    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE artifact_files (
+    artifact_id INTEGER NOT NULL,
+    file_id INTEGER NOT NULL,
+    path_in_artifact TEXT,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (artifact_id, file_id),
+    FOREIGN KEY (artifact_id) REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+);
+
+CREATE TABLE archive_objects (
+    sha256 TEXT PRIMARY KEY,
+    file_size INTEGER,
+    storage_path TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE metadata_objects (
@@ -174,7 +215,7 @@ CREATE TABLE metadata_versions (
     change_note TEXT,
     is_current INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE,
     FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE,
     FOREIGN KEY (metadata_hash) REFERENCES metadata_objects(hash),
     UNIQUE (build_id, version_number)
@@ -186,7 +227,7 @@ CREATE TABLE metadata_raw (
     source_file TEXT,
     raw_text TEXT NOT NULL,
     parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE SET NULL
+    FOREIGN KEY (artifact_id) REFERENCES artifacts(artifact_id) ON DELETE SET NULL
 );
 
 CREATE TABLE metadata_extensions (
@@ -197,7 +238,29 @@ CREATE TABLE metadata_extensions (
     FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_vn_series_id ON vn(series_id);
+CREATE TABLE artifact_metadata_objects (
+    hash TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE artifact_metadata_versions (
+    id INTEGER PRIMARY KEY,
+    artifact_id INTEGER NOT NULL,
+    metadata_hash TEXT NOT NULL,
+    parent_version_id INTEGER,
+    version_number INTEGER NOT NULL,
+    change_note TEXT,
+    is_current INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
+    FOREIGN KEY (metadata_hash) REFERENCES artifact_metadata_objects(hash),
+    FOREIGN KEY (parent_version_id) REFERENCES artifact_metadata_versions(id),
+    UNIQUE (artifact_id, version_number)
+);
+
+CREATE INDEX idx_visual_novels_series_id ON visual_novels(series_id);
 CREATE INDEX idx_builds_vn_id ON builds(vn_id);
 CREATE UNIQUE INDEX idx_unique_build_identity
 ON builds(
@@ -207,7 +270,6 @@ ON builds(
     COALESCE(release_type, ''),
     COALESCE(edition, '')
 );
-CREATE INDEX idx_builds_release_status ON builds(release_status);
 CREATE INDEX idx_builds_release_date ON builds(release_date);
 CREATE INDEX idx_builds_language ON builds(language);
 CREATE INDEX idx_artifacts_build_id ON artifacts(build_id);
@@ -215,5 +277,7 @@ CREATE INDEX idx_artifacts_sha256 ON artifacts(sha256);
 CREATE INDEX idx_artifacts_file_object_sha ON artifacts(file_object_sha256);
 CREATE INDEX idx_metadata_versions_build_current ON metadata_versions(build_id, is_current);
 CREATE INDEX idx_metadata_raw_artifact_id ON metadata_raw(artifact_id);
+CREATE INDEX idx_artifact_metadata_versions_current ON artifact_metadata_versions(artifact_id, is_current);
+CREATE INDEX idx_archive_objects_storage_path ON archive_objects(storage_path);
 
 PRAGMA foreign_keys = ON;
