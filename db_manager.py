@@ -12,7 +12,7 @@ BACKUP_DIR = "db_backups"
 ENABLE_DATABASE_BACKUPS = False
 
 # Database is treated as fresh-initialized from db_schema.sql.
-TARGET_SCHEMA_VERSION = 6
+TARGET_SCHEMA_VERSION = 7
 BACKUP_DEBOUNCE_SECONDS = 1.0
 
 WRITE_SQL_PREFIXES = (
@@ -473,23 +473,19 @@ def initialize_database():
 
     if is_new_db:
         print("Creating archive.db for the first time...")
-        with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
-            schema_sql = f.read()
-
-        with get_connection() as conn:
-            conn.executescript(schema_sql)
-            # Stamp the fresh database with our target version
-            conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
-        print("Database initialized successfully.")
     else:
-        # Apply CREATE ... IF NOT EXISTS statements/triggers for existing DBs too.
-        with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
-            schema_sql = f.read()
+        print("Replacing existing archive.db schema with the new canonical schema...")
 
-        with get_connection() as conn:
-            current_version = conn.execute("PRAGMA user_version;").fetchone()[0]
-            conn.executescript(schema_sql)
-            run_migrations(conn, current_version)
+    with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+        schema_sql = f.read()
+
+    with get_connection() as conn:
+        # db_schema.sql intentionally drops legacy tables first to ensure
+        # prior schema variants cannot interfere with the new model.
+        conn.executescript(schema_sql)
+        conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
+
+    print("Database initialized successfully.")
 
 
 def _column_exists(conn, table_name, column_name):
