@@ -1,4 +1,4 @@
-PRAGMA foreign_keys = ON;
+PRAGMA foreign_keys = OFF;
 
 -- Canonical schema v1 (fresh initialization only).
 
@@ -90,6 +90,38 @@ CREATE TABLE platforms (
 
 CREATE TABLE builds (
     id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE vn_developers (
+    vn_id INTEGER NOT NULL,
+    org_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, org_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE vn_publishers (
+    vn_id INTEGER NOT NULL,
+    org_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, org_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE vn_aliases (
+    vn_id INTEGER NOT NULL,
+    alias TEXT NOT NULL,
+    PRIMARY KEY (vn_id, alias),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE
+);
+
+CREATE TABLE tags (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE vn_tags (
     vn_id INTEGER NOT NULL,
     version TEXT NOT NULL,
     normalized_version TEXT,
