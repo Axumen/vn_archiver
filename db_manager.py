@@ -12,7 +12,7 @@ BACKUP_DIR = "db_backups"
 ENABLE_DATABASE_BACKUPS = False
 
 # Database is treated as fresh-initialized from db_schema.sql.
-TARGET_SCHEMA_VERSION = 5
+TARGET_SCHEMA_VERSION = 6
 BACKUP_DEBOUNCE_SECONDS = 1.0
 
 WRITE_SQL_PREFIXES = (
@@ -511,6 +511,8 @@ def run_migrations(conn, current_version):
             pass
         if current_version < 5:
             _migrate_artifact_file_object_link(conn)
+        if current_version < 6:
+            _migrate_artifact_sha_uniqueness(conn)
 
         # Stamp DB at the current supported schema version.
         conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
@@ -575,6 +577,40 @@ def _migrate_artifact_file_object_link(conn):
         ON artifacts(file_object_sha256);
         """
     )
+
+
+def _migrate_artifact_sha_uniqueness(conn):
+    """
+    Schema migration for v6:
+    allow shared artifact sha256 across different builds while keeping
+    per-build uniqueness for (build_id, sha256).
+    """
+    conn.execute("ALTER TABLE artifacts RENAME TO artifacts_legacy_v5;")
+    conn.execute(
+        """
+        CREATE TABLE artifacts (
+            id INTEGER PRIMARY KEY,
+            build_id INTEGER,
+            sha256 TEXT NOT NULL,
+            path TEXT NOT NULL,
+            type TEXT,
+            file_object_sha256 TEXT,
+            FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE,
+            UNIQUE (build_id, sha256)
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO artifacts (id, build_id, sha256, path, type, file_object_sha256)
+        SELECT id, build_id, sha256, path, type, file_object_sha256
+        FROM artifacts_legacy_v5;
+        """
+    )
+    conn.execute("DROP TABLE artifacts_legacy_v5;")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_build_id ON artifacts(build_id);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_sha256 ON artifacts(sha256);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_file_object_sha ON artifacts(file_object_sha256);")
 
 
 def cleanup_orphaned_metadata(conn):

@@ -22,10 +22,11 @@ CREATE TABLE IF NOT EXISTS builds (
 CREATE TABLE IF NOT EXISTS artifacts (
     id INTEGER PRIMARY KEY,
     build_id INTEGER,
-    sha256 TEXT NOT NULL UNIQUE,
+    sha256 TEXT NOT NULL,
     path TEXT NOT NULL,
     type TEXT,
-    FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE
+    FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE,
+    UNIQUE (build_id, sha256)
 );
 
 -- Optional pipeline/runtime state tracking outside identity model.
@@ -46,4 +47,5 @@ CREATE TABLE IF NOT EXISTS metadata_raw (
 
 CREATE INDEX IF NOT EXISTS idx_builds_vn_id ON builds(vn_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_build_id ON artifacts(build_id);
+CREATE INDEX IF NOT EXISTS idx_artifacts_sha256 ON artifacts(sha256);
 CREATE INDEX IF NOT EXISTS idx_artifact_state_status ON artifact_state(status);
