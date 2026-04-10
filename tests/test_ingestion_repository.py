@@ -32,9 +32,10 @@ def make_conn():
         CREATE TABLE artifacts (
             id INTEGER PRIMARY KEY,
             build_id INTEGER,
-            sha256 TEXT NOT NULL UNIQUE,
+            sha256 TEXT NOT NULL,
             path TEXT NOT NULL,
-            type TEXT
+            type TEXT,
+            UNIQUE (build_id, sha256)
         )
         """
     )
@@ -117,3 +118,48 @@ def test_create_artifact_does_not_require_files_table_in_current_schema():
     assert row["sha256"] == "abc123"
     assert row["path"] == "clannad_v1.0.zip"
     assert row["type"] == "game_archive"
+
+
+def test_create_artifact_allows_shared_sha_across_different_builds():
+    conn = make_conn()
+    repo = VnIngestionRepository(
+        conn,
+        upsert_series=lambda *args, **kwargs: None,
+        upsert_visual_novel_record=lambda *args, **kwargs: None,
+        sync_vn_tags=lambda *args, **kwargs: None,
+        sync_canon_relationship=lambda *args, **kwargs: None,
+        upsert_build_record=lambda *args, **kwargs: None,
+        sync_build_target_platforms=lambda *args, **kwargs: None,
+        sync_build_relations=lambda *args, **kwargs: None,
+        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
+        create_artifact_record=lambda *args, **kwargs: None,
+    )
+
+    conn.execute("INSERT INTO vn (id, title) VALUES (1, 'Clannad')")
+    conn.execute("INSERT INTO vn (id, title) VALUES (2, 'Tomoyo After')")
+    conn.execute(
+        "INSERT INTO builds (id, vn_id, version_string, release_type, language, platform) VALUES (1, 1, '1.0', 'original', 'JP', 'windows')"
+    )
+    conn.execute(
+        "INSERT INTO builds (id, vn_id, version_string, release_type, language, platform) VALUES (2, 2, '1.0', 'original', 'JP', 'windows')"
+    )
+
+    first_id = repo.create_artifact(
+        1,
+        {"artifact_type": "game_archive"},
+        {"sha256": "shared-sha", "filename": "readme.txt"},
+    )
+    second_id = repo.create_artifact(
+        2,
+        {"artifact_type": "game_archive"},
+        {"sha256": "shared-sha", "filename": "readme.txt"},
+    )
+
+    assert first_id != second_id
+    rows = conn.execute(
+        "SELECT id, build_id, sha256 FROM artifacts WHERE sha256 = ? ORDER BY id",
+        ("shared-sha",),
+    ).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["build_id"] == 1
+    assert rows[1]["build_id"] == 2

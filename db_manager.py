@@ -9,9 +9,10 @@ from datetime import datetime
 DB_PATH = "archive.db"
 SCHEMA_PATH = "db_schema.sql"
 BACKUP_DIR = "db_backups"
+ENABLE_DATABASE_BACKUPS = False
 
 # Database is treated as fresh-initialized from db_schema.sql.
-TARGET_SCHEMA_VERSION = 5
+TARGET_SCHEMA_VERSION = 6
 BACKUP_DEBOUNCE_SECONDS = 1.0
 
 WRITE_SQL_PREFIXES = (
@@ -75,11 +76,17 @@ def _backup_worker():
 
 
 def queue_database_backup():
+    if not ENABLE_DATABASE_BACKUPS:
+        return
+
     _ensure_backup_worker_started()
     _backup_queue.put(object())
 
 
 def create_database_backup():
+    if not ENABLE_DATABASE_BACKUPS:
+        return None
+
     if not os.path.exists(DB_PATH):
         return None
 
@@ -175,11 +182,17 @@ def _backup_worker():
 
 
 def queue_database_backup():
+    if not ENABLE_DATABASE_BACKUPS:
+        return
+
     _ensure_backup_worker_started()
     _backup_queue.put(object())
 
 
 def create_database_backup():
+    if not ENABLE_DATABASE_BACKUPS:
+        return None
+
     if not os.path.exists(DB_PATH):
         return None
 
@@ -296,11 +309,17 @@ def _backup_worker():
 
 
 def queue_database_backup():
+    if not ENABLE_DATABASE_BACKUPS:
+        return
+
     _ensure_backup_worker_started()
     _backup_queue.put(object())
 
 
 def create_database_backup():
+    if not ENABLE_DATABASE_BACKUPS:
+        return None
+
     if not os.path.exists(DB_PATH):
         return None
 
@@ -373,8 +392,11 @@ class ArchiverConnection(sqlite3.Connection):
 def create_database_backup():
     """
     Creates a timestamped backup of archive.db.
-    Returns the backup path, or None if the main DB does not exist.
+    Returns the backup path, or None if backups are disabled or the main DB does not exist.
     """
+    if not ENABLE_DATABASE_BACKUPS:
+        return None
+
     if not os.path.exists(DB_PATH):
         return None
 
@@ -395,9 +417,8 @@ def create_database_backup():
 
 class ArchiverConnection(sqlite3.Connection):
     """
-    Minimal backup-aware connection:
-    - Backup only after successful commit.
-    - No backup on rollback/cancelled operations.
+    Connection wrapper for project-specific SQLite behavior.
+    Database backups are currently disabled.
     """
 
     def __init__(self, *args, **kwargs):
@@ -406,8 +427,6 @@ class ArchiverConnection(sqlite3.Connection):
 
     def commit(self):
         super().commit()
-        if self.total_changes > self._last_total_changes:
-            create_database_backup()
         self._last_total_changes = self.total_changes
 
     def rollback(self):
@@ -492,6 +511,8 @@ def run_migrations(conn, current_version):
             pass
         if current_version < 5:
             _migrate_artifact_file_object_link(conn)
+        if current_version < 6:
+            _migrate_artifact_sha_uniqueness(conn)
 
         # Stamp DB at the current supported schema version.
         conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
@@ -556,6 +577,40 @@ def _migrate_artifact_file_object_link(conn):
         ON artifacts(file_object_sha256);
         """
     )
+
+
+def _migrate_artifact_sha_uniqueness(conn):
+    """
+    Schema migration for v6:
+    allow shared artifact sha256 across different builds while keeping
+    per-build uniqueness for (build_id, sha256).
+    """
+    conn.execute("ALTER TABLE artifacts RENAME TO artifacts_legacy_v5;")
+    conn.execute(
+        """
+        CREATE TABLE artifacts (
+            id INTEGER PRIMARY KEY,
+            build_id INTEGER,
+            sha256 TEXT NOT NULL,
+            path TEXT NOT NULL,
+            type TEXT,
+            file_object_sha256 TEXT,
+            FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE,
+            UNIQUE (build_id, sha256)
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO artifacts (id, build_id, sha256, path, type, file_object_sha256)
+        SELECT id, build_id, sha256, path, type, file_object_sha256
+        FROM artifacts_legacy_v5;
+        """
+    )
+    conn.execute("DROP TABLE artifacts_legacy_v5;")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_build_id ON artifacts(build_id);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_sha256 ON artifacts(sha256);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_file_object_sha ON artifacts(file_object_sha256);")
 
 
 def cleanup_orphaned_metadata(conn):
