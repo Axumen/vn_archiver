@@ -12,7 +12,7 @@ BACKUP_DIR = "db_backups"
 ENABLE_DATABASE_BACKUPS = False
 
 # Database is treated as fresh-initialized from db_schema.sql.
-TARGET_SCHEMA_VERSION = 6
+TARGET_SCHEMA_VERSION = 1
 BACKUP_DEBOUNCE_SECONDS = 1.0
 
 WRITE_SQL_PREFIXES = (
@@ -466,30 +466,23 @@ def get_connection():
 
 def initialize_database():
     """
-    Initializes the database using the schema if it doesn't already exist.
-    If it DOES exist, it checks if schema migrations are needed to update it.
+    Initializes the database from scratch using db_schema.sql.
+    Any existing database file is deleted to ensure a clean v1 schema.
     """
-    is_new_db = not os.path.exists(DB_PATH)
-
-    if is_new_db:
-        print("Creating archive.db for the first time...")
-        with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
-            schema_sql = f.read()
-
-        with get_connection() as conn:
-            conn.executescript(schema_sql)
-            # Stamp the fresh database with our target version
-            conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
-        print("Database initialized successfully.")
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+        print("Existing archive.db removed. Recreating database from scratch...")
     else:
-        # Apply CREATE ... IF NOT EXISTS statements/triggers for existing DBs too.
-        with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
-            schema_sql = f.read()
+        print("Creating archive.db for the first time...")
 
-        with get_connection() as conn:
-            current_version = conn.execute("PRAGMA user_version;").fetchone()[0]
-            conn.executescript(schema_sql)
-            run_migrations(conn, current_version)
+    with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+        schema_sql = f.read()
+
+    with get_connection() as conn:
+        conn.executescript(schema_sql)
+        conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
+
+    print("Database initialized successfully.")
 
 
 def _column_exists(conn, table_name, column_name):
@@ -499,23 +492,14 @@ def _column_exists(conn, table_name, column_name):
 
 def run_migrations(conn, current_version):
     """
-    Apply incremental schema/data migrations.
-    """
-    with exclusive_transaction(conn):
-        if current_version < 2:
-            _migrate_change_note_fallback_rows(conn)
-        if current_version < 3:
-            _migrate_build_identity_index(conn)
-        if current_version < 4:
-            # v4 relies on schema re-application for artifact metadata version tables/indexes.
-            pass
-        if current_version < 5:
-            _migrate_artifact_file_object_link(conn)
-        if current_version < 6:
-            _migrate_artifact_sha_uniqueness(conn)
+    Legacy no-op for canonical schema v1 bootstrap.
 
-        # Stamp DB at the current supported schema version.
-        conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
+    The project now initializes from scratch using db_schema.sql with
+    TARGET_SCHEMA_VERSION=1, so incremental migrations are intentionally
+    disabled to avoid stale migration code creating duplicate objects.
+    """
+    del conn, current_version
+    return
 
 
 def _migrate_change_note_fallback_rows(conn):
