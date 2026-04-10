@@ -113,15 +113,16 @@ class VnIngestionRepository:
         artifact_type = str(metadata.get("artifact_type") or "game_archive").strip().lower() or "game_archive"
 
         existing = self.conn.execute(
-            "SELECT id, build_id FROM artifacts WHERE sha256 = ? LIMIT 1",
-            (artifact_sha,),
+            """
+            SELECT id
+            FROM artifacts
+            WHERE sha256 = ?
+              AND COALESCE(build_id, -1) = COALESCE(?, -1)
+            LIMIT 1
+            """,
+            (artifact_sha, build_id),
         ).fetchone()
         if existing:
-            if build_id is not None:
-                self.conn.execute(
-                    "UPDATE artifacts SET build_id = COALESCE(build_id, ?) WHERE id = ?",
-                    (build_id, existing["id"]),
-                )
             return existing["id"]
 
         insert_columns = ["build_id", "sha256", "path", "type"]
