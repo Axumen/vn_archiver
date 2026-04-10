@@ -66,7 +66,6 @@ FIELD_SUGGESTIONS = {
     "release_status": ["ongoing", "completed", "hiatus", "cancelled", "abandoned"],
     "distribution_model": ["free", "paid", "freemium", "donationware", "subscription", "patron_only"],
     "build_type": ["full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "standalone"],
-    "release_type": ["full", "patch", "demo", "trial", "fandisc", "hotfix", "april_fools"],
     "language": ["japanese", "english", "chinese-simplified", "chinese-traditional", "korean", "spanish", "german",
                  "french", "russian", "multi-language"],
     "distribution_platform": ["steam", "itch.io", "dlsite", "fanza", "gumroad", "patreon", "booth",
