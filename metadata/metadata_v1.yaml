@@ -37,7 +37,6 @@ optional:
   # -------------------------------------
   - build_type
   - release_type
-  - normalized_version
   - distribution_model
   - distribution_platform
   - language
@@ -59,7 +58,6 @@ optional:
   # -------------------------------------
   # MISC
   # -------------------------------------
-  - source_url
   - notes
   - change_note          # Metadata revision note
 

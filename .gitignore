@@ -12,3 +12,12 @@ run_tui.bat
 backblaze_config.yml
 rclone.exe
 rclone.exe
+vn archive/
+archive - Copy.db
+backblaze_config.yaml
+before artifact insertion.db
+db_backups/
+rebuild_metadata/
+uploading/
+__pycache__/
+__pycache__/vn_archiver.cpython-310.pyc
