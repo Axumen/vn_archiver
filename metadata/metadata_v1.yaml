@@ -47,8 +47,7 @@ optional:
   - engine
   - engine_version
   - target_platform
-  - build_relations      # [{relation_type, to_version}] for dependency/lineage modeling
-
+  
   # -------------------------------------
   # RELATIONSHIPS
   # -------------------------------------
