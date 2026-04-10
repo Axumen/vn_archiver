@@ -1,31 +1,6 @@
 PRAGMA foreign_keys = OFF;
 
--- Full replacement schema: clear legacy objects so older table layouts
--- cannot interfere with the new normalized model.
-DROP TABLE IF EXISTS artifact_state;
-DROP TABLE IF EXISTS metadata_raw;
-DROP TABLE IF EXISTS metadata_versions;
-DROP TABLE IF EXISTS metadata_objects;
-DROP TABLE IF EXISTS metadata_extensions;
-DROP TABLE IF EXISTS artifact_metadata_versions;
-DROP TABLE IF EXISTS artifact_metadata_objects;
-DROP TABLE IF EXISTS archive_objects;
-DROP TABLE IF EXISTS archives;
-DROP TABLE IF EXISTS artifacts;
-DROP TABLE IF EXISTS build_target_platforms;
-DROP TABLE IF EXISTS build_relations;
-DROP TABLE IF EXISTS builds;
-DROP TABLE IF EXISTS vn_tags;
-DROP TABLE IF EXISTS tags;
-DROP TABLE IF EXISTS vn_aliases;
-DROP TABLE IF EXISTS vn_publishers;
-DROP TABLE IF EXISTS vn_developers;
-DROP TABLE IF EXISTS organizations;
-DROP TABLE IF EXISTS vn_relationships;
-DROP TABLE IF EXISTS platforms;
-DROP TABLE IF EXISTS series;
-DROP TABLE IF EXISTS visual_novels;
-DROP TABLE IF EXISTS vn;
+-- Canonical schema v1 (fresh initialization only).
 
 CREATE TABLE series (
     id INTEGER PRIMARY KEY,
@@ -34,6 +9,86 @@ CREATE TABLE series (
 );
 
 CREATE TABLE organizations (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE visual_novels (
+    id INTEGER PRIMARY KEY,
+    series_id INTEGER,
+    title TEXT NOT NULL UNIQUE,
+    canonical_slug TEXT,
+    aliases TEXT,
+    developer TEXT,
+    publisher TEXT,
+    release_status TEXT,
+    content_rating TEXT,
+    content_mode TEXT,
+    description TEXT,
+    source TEXT,
+    status TEXT DEFAULT 'local',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE SET NULL
+);
+
+-- Transitional compatibility table for repository paths that still query `vn`.
+CREATE TABLE vn (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE vn_developers (
+    vn_id INTEGER NOT NULL,
+    org_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, org_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE vn_publishers (
+    vn_id INTEGER NOT NULL,
+    org_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, org_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE vn_aliases (
+    vn_id INTEGER NOT NULL,
+    alias TEXT NOT NULL,
+    PRIMARY KEY (vn_id, alias),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE
+);
+
+CREATE TABLE vn_relationships (
+    vn_id INTEGER NOT NULL,
+    related_vn_id INTEGER NOT NULL,
+    relationship_type TEXT NOT NULL,
+    source TEXT,
+    PRIMARY KEY (vn_id, related_vn_id, relationship_type),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (related_vn_id) REFERENCES vn(id) ON DELETE CASCADE
+);
+
+CREATE TABLE tags (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE vn_tags (
+    vn_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, tag_id),
+    FOREIGN KEY (vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
+
+CREATE TABLE platforms (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE builds (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE
 );
@@ -67,43 +122,6 @@ CREATE TABLE tags (
 );
 
 CREATE TABLE vn_tags (
-    vn_id INTEGER NOT NULL,
-    tag_id INTEGER NOT NULL,
-    PRIMARY KEY (vn_id, tag_id),
-    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
-    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
-);
-
-CREATE TABLE platforms (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE
-);
-
-CREATE TABLE visual_novels (
-    id INTEGER PRIMARY KEY,
-    series_id INTEGER,
-    title TEXT NOT NULL UNIQUE,
-    canonical_slug TEXT,
-    aliases TEXT,
-    developer TEXT,
-    publisher TEXT,
-    release_status TEXT,
-    content_rating TEXT,
-    content_mode TEXT,
-    description TEXT,
-    source TEXT,
-    status TEXT DEFAULT 'local',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE SET NULL
-);
-
-CREATE TABLE vn (
-    id INTEGER PRIMARY KEY,
-    title TEXT NOT NULL UNIQUE
-);
-
-CREATE TABLE builds (
-    id INTEGER PRIMARY KEY,
     vn_id INTEGER NOT NULL,
     version TEXT NOT NULL,
     normalized_version TEXT,
@@ -144,14 +162,12 @@ CREATE TABLE build_relations (
     FOREIGN KEY (to_build_id) REFERENCES builds(id) ON DELETE CASCADE
 );
 
-CREATE TABLE vn_relationships (
-    vn_id INTEGER NOT NULL,
-    related_vn_id INTEGER NOT NULL,
-    relationship_type TEXT NOT NULL,
-    source TEXT,
-    PRIMARY KEY (vn_id, related_vn_id, relationship_type),
-    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
-    FOREIGN KEY (related_vn_id) REFERENCES vn(id) ON DELETE CASCADE
+CREATE TABLE files (
+    id INTEGER PRIMARY KEY,
+    sha256 TEXT NOT NULL UNIQUE,
+    size_bytes INTEGER DEFAULT 0,
+    mime_type TEXT,
+    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE artifacts (
@@ -172,14 +188,6 @@ CREATE TABLE artifacts (
     FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL,
     FOREIGN KEY (base_artifact_id) REFERENCES artifacts(artifact_id) ON DELETE SET NULL,
     UNIQUE (build_id, sha256)
-);
-
-CREATE TABLE files (
-    id INTEGER PRIMARY KEY,
-    sha256 TEXT NOT NULL UNIQUE,
-    size_bytes INTEGER DEFAULT 0,
-    mime_type TEXT,
-    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE artifact_files (
@@ -211,6 +219,7 @@ CREATE TABLE metadata_versions (
     vn_id INTEGER NOT NULL,
     build_id INTEGER NOT NULL,
     metadata_hash TEXT NOT NULL,
+    parent_version_id INTEGER,
     version_number INTEGER NOT NULL,
     change_note TEXT,
     is_current INTEGER NOT NULL DEFAULT 1,
@@ -218,24 +227,8 @@ CREATE TABLE metadata_versions (
     FOREIGN KEY (vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE,
     FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE,
     FOREIGN KEY (metadata_hash) REFERENCES metadata_objects(hash),
+    FOREIGN KEY (parent_version_id) REFERENCES metadata_versions(id),
     UNIQUE (build_id, version_number)
-);
-
-CREATE TABLE metadata_raw (
-    id INTEGER PRIMARY KEY,
-    artifact_id INTEGER,
-    source_file TEXT,
-    raw_text TEXT NOT NULL,
-    parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (artifact_id) REFERENCES artifacts(artifact_id) ON DELETE SET NULL
-);
-
-CREATE TABLE metadata_extensions (
-    build_id INTEGER NOT NULL,
-    key TEXT NOT NULL,
-    value_json TEXT NOT NULL,
-    PRIMARY KEY (build_id, key),
-    FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE
 );
 
 CREATE TABLE artifact_metadata_objects (
@@ -260,6 +253,23 @@ CREATE TABLE artifact_metadata_versions (
     UNIQUE (artifact_id, version_number)
 );
 
+CREATE TABLE metadata_raw (
+    id INTEGER PRIMARY KEY,
+    artifact_id INTEGER,
+    source_file TEXT,
+    raw_text TEXT NOT NULL,
+    parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts(artifact_id) ON DELETE SET NULL
+);
+
+CREATE TABLE metadata_extensions (
+    build_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    PRIMARY KEY (build_id, key),
+    FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE
+);
+
 CREATE INDEX idx_visual_novels_series_id ON visual_novels(series_id);
 CREATE INDEX idx_builds_vn_id ON builds(vn_id);
 CREATE UNIQUE INDEX idx_unique_build_identity
@@ -279,5 +289,3 @@ CREATE INDEX idx_metadata_versions_build_current ON metadata_versions(build_id, 
 CREATE INDEX idx_metadata_raw_artifact_id ON metadata_raw(artifact_id);
 CREATE INDEX idx_artifact_metadata_versions_current ON artifact_metadata_versions(artifact_id, is_current);
 CREATE INDEX idx_archive_objects_storage_path ON archive_objects(storage_path);
-
-PRAGMA foreign_keys = ON;

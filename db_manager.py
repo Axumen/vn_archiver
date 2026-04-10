@@ -12,7 +12,7 @@ BACKUP_DIR = "db_backups"
 ENABLE_DATABASE_BACKUPS = False
 
 # Database is treated as fresh-initialized from db_schema.sql.
-TARGET_SCHEMA_VERSION = 7
+TARGET_SCHEMA_VERSION = 1
 BACKUP_DEBOUNCE_SECONDS = 1.0
 
 WRITE_SQL_PREFIXES = (
@@ -466,22 +466,19 @@ def get_connection():
 
 def initialize_database():
     """
-    Initializes the database using the schema if it doesn't already exist.
-    If it DOES exist, it checks if schema migrations are needed to update it.
+    Initializes the database from scratch using db_schema.sql.
+    Any existing database file is deleted to ensure a clean v1 schema.
     """
-    is_new_db = not os.path.exists(DB_PATH)
-
-    if is_new_db:
-        print("Creating archive.db for the first time...")
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+        print("Existing archive.db removed. Recreating database from scratch...")
     else:
-        print("Replacing existing archive.db schema with the new canonical schema...")
+        print("Creating archive.db for the first time...")
 
     with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
         schema_sql = f.read()
 
     with get_connection() as conn:
-        # db_schema.sql intentionally drops legacy tables first to ensure
-        # prior schema variants cannot interfere with the new model.
         conn.executescript(schema_sql)
         conn.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION};")
 
