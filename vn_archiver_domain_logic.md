@@ -59,26 +59,7 @@ Required fields:
 
 Build is the **semantic unit** users query when asking “which version/release is this?”
 
-### 3) BuildRelation
-
-Represents directed relationships between builds.
-
-Required fields:
-
-- `from_build_id`
-- `to_build_id`
-- `relation_type` (controlled vocabulary)
-
-Minimum relation types:
-
-- `depends_on`
-- `supersedes`
-- `branch_of`
-- `equivalent_to`
-
-This is mandatory to model patch chains, forks, and release lineage.
-
-### 4) Artifact
+### 3) Artifact
 
 Represents a concrete distribution of a build (zip, installer, patch package, etc.).
 
@@ -92,7 +73,7 @@ Required fields:
 
 An artifact is **not** a file. It is a packaging/provenance object.
 
-### 5) File
+### 4) File
 
 Represents deduplicated binary identity.
 
@@ -106,26 +87,13 @@ Required fields:
 
 File identity must be reusable across any number of artifacts/builds.
 
-### 6) ArtifactFile
-
-Represents artifact composition (many-to-many between artifacts and files).
-
-Required fields:
-
-- `artifact_id`
-- `file_id`
-- `path_in_artifact` (optional but recommended)
-- `is_primary`
-
-This table is required for unpacked/multi-file distributions and for cross-artifact file reuse.
-
 ---
 
 ## Required Cardinality Rules
 
 - One `VN` has many `Build`s.
 - One `Build` has many `Artifact`s.
-- One `Artifact` has many `File`s (via `ArtifactFile`).
+- One `Artifact` has many `File`s.
 - One `File` can appear in many `Artifact`s.
 - `BuildRelation` is many-to-many self-reference over `Build`.
 
