@@ -1,4 +1,4 @@
-PRAGMA foreign_keys = ON;
+PRAGMA foreign_keys = OFF;
 
 -- Canonical schema v1 (fresh initialization only).
 
@@ -88,8 +88,100 @@ CREATE TABLE IF NOT EXISTS platforms (
     name TEXT NOT NULL UNIQUE
 );
 
-CREATE TABLE IF NOT EXISTS builds (
+CREATE TABLE organizations (
     id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE visual_novels (
+    id INTEGER PRIMARY KEY,
+    series_id INTEGER,
+    title TEXT NOT NULL UNIQUE,
+    canonical_slug TEXT,
+    aliases TEXT,
+    developer TEXT,
+    publisher TEXT,
+    release_status TEXT,
+    content_rating TEXT,
+    content_mode TEXT,
+    description TEXT,
+    source TEXT,
+    status TEXT DEFAULT 'local',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE SET NULL
+);
+
+-- Transitional compatibility table for repository paths that still query `vn`.
+CREATE TABLE vn (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE vn_developers (
+    vn_id INTEGER NOT NULL,
+    org_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, org_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE vn_publishers (
+    vn_id INTEGER NOT NULL,
+    org_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, org_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE vn_aliases (
+    vn_id INTEGER NOT NULL,
+    alias TEXT NOT NULL,
+    PRIMARY KEY (vn_id, alias),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE
+);
+
+CREATE TABLE vn_relationships (
+    vn_id INTEGER NOT NULL,
+    related_vn_id INTEGER NOT NULL,
+    relationship_type TEXT NOT NULL,
+    source TEXT,
+    PRIMARY KEY (vn_id, related_vn_id, relationship_type),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (related_vn_id) REFERENCES vn(id) ON DELETE CASCADE
+);
+
+CREATE TABLE tags (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE vn_tags (
+    vn_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, tag_id),
+    FOREIGN KEY (vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
+
+CREATE TABLE platforms (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE builds (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE vn_developers (
+    vn_id INTEGER NOT NULL,
+    org_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, org_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE vn_publishers (
     vn_id INTEGER NOT NULL,
     version TEXT NOT NULL,
     normalized_version TEXT,
@@ -221,7 +313,46 @@ CREATE TABLE IF NOT EXISTS artifact_metadata_versions (
     UNIQUE (artifact_id, version_number)
 );
 
-CREATE TABLE IF NOT EXISTS metadata_raw (
+CREATE TABLE metadata_versions (
+    id INTEGER PRIMARY KEY,
+    vn_id INTEGER NOT NULL,
+    build_id INTEGER NOT NULL,
+    metadata_hash TEXT NOT NULL,
+    parent_version_id INTEGER,
+    version_number INTEGER NOT NULL,
+    change_note TEXT,
+    is_current INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (vn_id) REFERENCES visual_novels(id) ON DELETE CASCADE,
+    FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE,
+    FOREIGN KEY (metadata_hash) REFERENCES metadata_objects(hash),
+    FOREIGN KEY (parent_version_id) REFERENCES metadata_versions(id),
+    UNIQUE (build_id, version_number)
+);
+
+CREATE TABLE artifact_metadata_objects (
+    hash TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE artifact_metadata_versions (
+    id INTEGER PRIMARY KEY,
+    artifact_id INTEGER NOT NULL,
+    metadata_hash TEXT NOT NULL,
+    parent_version_id INTEGER,
+    version_number INTEGER NOT NULL,
+    change_note TEXT,
+    is_current INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
+    FOREIGN KEY (metadata_hash) REFERENCES artifact_metadata_objects(hash),
+    FOREIGN KEY (parent_version_id) REFERENCES artifact_metadata_versions(id),
+    UNIQUE (artifact_id, version_number)
+);
+
+CREATE TABLE metadata_raw (
     id INTEGER PRIMARY KEY,
     artifact_id INTEGER,
     source_file TEXT,
