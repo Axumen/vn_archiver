@@ -2095,16 +2095,23 @@ def resolve_artifact_id_for_metadata(conn, build_id, metadata, fallback_sha=None
             if isinstance(archive, dict) and archive.get('sha256'):
                 sha_candidates.append(str(archive.get('sha256')).strip().lower())
 
-    artifact_id_column = "artifact_id" if _column_exists(conn, "artifacts", "artifact_id") else "id"
     for sha in sha_candidates:
         if not sha:
             continue
-        row = conn.execute(
-            'SELECT id FROM artifacts WHERE build_id = ? AND sha256 = ?',
-            (build_id, sha)
-        ).fetchone()
-        if row:
-            return row['id']
+
+        if _table_exists(conn, "file") and _table_exists(conn, "build_file"):
+            row = conn.execute(
+                """
+                SELECT f.file_id
+                FROM build_file bf
+                JOIN file f ON f.file_id = bf.file_id
+                WHERE bf.build_id = ? AND LOWER(f.sha256) = LOWER(?)
+                LIMIT 1
+                """,
+                (build_id, sha),
+            ).fetchone()
+            if row:
+                return row["file_id"]
 
     return None
 
