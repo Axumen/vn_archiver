@@ -355,6 +355,8 @@ def _process_incoming_pairs():
 
 
 def add_file_to_existing_build():
+    from datetime import datetime as _dt
+
     print()
     panel("Add File to Existing Build")
 
@@ -446,7 +448,7 @@ def add_file_to_existing_build():
     build_id = int(build_rows[build_idx]["build_id"])
     file_sha = sha256_file(selected_path)
     file_size = os.path.getsize(selected_path)
-    archived_at = datetime.utcnow().isoformat() + "Z"
+    archived_at = _dt.utcnow().isoformat() + "Z"
 
     with get_connection() as conn:
         file_row = conn.execute("SELECT file_id FROM file WHERE sha256 = ? LIMIT 1", (file_sha,)).fetchone()
