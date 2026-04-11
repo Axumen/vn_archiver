@@ -32,8 +32,8 @@ class FakeRepository:
         )
         return 999
 
-    def create_metadata_raw(self, raw_text, source_file, artifact_id, build_id=None):
-        self.raw_metadata_records.append((raw_text, source_file, artifact_id, build_id))
+    def create_metadata_raw(self, raw_payload, artifact_id, build_id=None):
+        self.raw_metadata_records.append((raw_payload, artifact_id, build_id))
 
 
 def test_ingest_requires_title():
@@ -159,7 +159,7 @@ def test_ingest_persists_raw_metadata_with_primary_artifact_id_when_present():
     )
 
     assert repo.raw_metadata_records == [
-        ("title: Clannad\nversion: 1.0\n", "incoming/clannad_v1.yaml", 999, 22)
+        ({"title": "Clannad", "version": "1.0", "normalized_version": "1.0"}, 999, 22)
     ]
 
 
@@ -293,10 +293,10 @@ def test_ingest_skips_legacy_archive_processing_when_files_table_is_absent():
             )
             return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-        def create_metadata_raw(self, raw_text, source_file, artifact_id):
+        def create_metadata_raw(self, raw_payload, artifact_id, build_id=None):
             self.conn.execute(
                 "INSERT INTO metadata_raw (artifact_id, source_file, raw_text) VALUES (?, ?, ?)",
-                (artifact_id, source_file, raw_text),
+                (artifact_id, None, str(raw_payload)),
             )
 
     repo = SqliteRepo(conn)

@@ -1,4 +1,5 @@
 import hashlib
+import json
 from datetime import datetime
 
 
@@ -425,13 +426,18 @@ class VnIngestionRepository:
             return self._create_artifact_in_file_tables(build_id, metadata, archive_data)
         raise RuntimeError("No supported artifact/file persistence tables found in current schema.")
 
-    def create_metadata_raw(self, raw_text, source_file, artifact_id, build_id=None):
+    def create_metadata_raw(self, raw_payload, artifact_id, build_id=None):
         if self._table_exists("metadata_raw_versions"):
             if build_id is None:
                 return
 
-            raw_text_value = str(raw_text or "")
-            raw_sha256 = hashlib.sha256(raw_text_value.encode("utf-8")).hexdigest()
+            if isinstance(raw_payload, dict):
+                payload = {k: v for k, v in raw_payload.items() if not str(k).startswith("_")}
+                raw_json_value = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            else:
+                raw_json_value = json.dumps({"raw_value": str(raw_payload or "")}, ensure_ascii=False, sort_keys=True)
+
+            raw_sha256 = hashlib.sha256(raw_json_value.encode("utf-8")).hexdigest()
             created_at = datetime.utcnow().isoformat() + "Z"
 
             next_version = self.conn.execute(
@@ -442,15 +448,15 @@ class VnIngestionRepository:
             self.conn.execute(
                 """
                 INSERT INTO metadata_raw_versions (
-                    build_id, file_id, source_file, raw_text, raw_sha256, version_number, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    build_id, file_id, raw_json, raw_sha256, version_number, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (build_id, artifact_id, source_file, raw_text_value, raw_sha256, next_version, created_at),
+                (build_id, artifact_id, raw_json_value, raw_sha256, next_version, created_at),
             )
             return
 
         if self._table_exists("metadata_raw"):
             self.conn.execute(
                 "INSERT INTO metadata_raw (raw_text, source_file, artifact_id) VALUES (?, ?, ?)",
-                (raw_text, source_file, artifact_id),
+                (str(raw_payload or ""), None, artifact_id),
             )
