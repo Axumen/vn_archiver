@@ -2295,12 +2295,21 @@ def mirror_metadata_for_rebuild(staged_meta_path, archives_data, build_id):
 
     archive_id_by_sha = {}
     with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT id, sha256 FROM artifacts WHERE build_id = ?",
-            (build_id,),
-        ).fetchall()
-        for row in rows:
-            archive_id_by_sha[str(row["sha256"]).strip().lower()] = int(row["id"])
+        if _table_exists(conn, "file") and _table_exists(conn, "build_file"):
+            rows = conn.execute(
+                """
+                SELECT f.file_id AS id, f.sha256 AS sha256
+                FROM build_file bf
+                JOIN file f ON f.file_id = bf.file_id
+                WHERE bf.build_id = ?
+                """,
+                (build_id,),
+            ).fetchall()
+            for row in rows:
+                archive_id_by_sha[str(row["sha256"]).strip().lower()] = int(row["id"])
+        else:
+            print(Fore.YELLOW + "[WARN] Rebuild metadata mirror skipped: missing file/build_file tables.")
+            return []
 
     staged_name = Path(staged_meta_path).name
     mirrored_paths = []
