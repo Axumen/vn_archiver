@@ -2,8 +2,8 @@ class VnIngestionRepository:
     """Repository adapter for VN/build/file ingestion across schema variants.
 
     Supports both:
-    - legacy tables (`vn`, `builds`, `artifacts`)
-    - new domain tables (`vn`, `build`, `file`, `build_file`)
+    - legacy build tables (`vn`, `builds`)
+    - new domain tables (`vn`, `build`, `file`, `build_file`, `tags`, `vn_tags`)
     """
 
     def __init__(
@@ -97,6 +97,35 @@ class VnIngestionRepository:
             return " | ".join(normalized_chunks) if normalized_chunks else None
         return str(value).strip() or None
 
+    @staticmethod
+    def _normalize_tag_list(value):
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item).strip().lower() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            return [part.strip().lower() for part in value.split(",") if part.strip()]
+        normalized = str(value).strip().lower()
+        return [normalized] if normalized else []
+
+    def _sync_vn_tags_if_supported(self, vn_id, tags_value):
+        if not self._table_exists("tags") or not self._table_exists("vn_tags"):
+            return
+
+        tags = self._normalize_tag_list(tags_value)
+        self.conn.execute("DELETE FROM vn_tags WHERE vn_id = ?", (vn_id,))
+        for tag in tags:
+            tag_row = self.conn.execute("SELECT tag_id FROM tags WHERE name = ? LIMIT 1", (tag,)).fetchone()
+            if tag_row:
+                tag_id = int(tag_row["tag_id"])
+            else:
+                self.conn.execute("INSERT INTO tags (name) VALUES (?)", (tag,))
+                tag_id = int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            self.conn.execute(
+                "INSERT OR IGNORE INTO vn_tags (vn_id, tag_id) VALUES (?, ?)",
+                (vn_id, tag_id),
+            )
+
     def resolve_existing_build_for_artifact(self, metadata):
         return self._resolve_existing_build_for_artifact(self.conn, metadata)
 
@@ -142,6 +171,7 @@ class VnIngestionRepository:
                     f"UPDATE {self.vn_table} SET {assignments} WHERE {self.vn_id_column} = ?",
                     tuple(vn_values.values()) + (vn_id,),
                 )
+            self._sync_vn_tags_if_supported(vn_id, metadata.get("tags"))
             return vn_id
 
         insert_columns = ["title"]
@@ -155,7 +185,9 @@ class VnIngestionRepository:
             f"INSERT INTO {self.vn_table} ({', '.join(insert_columns)}) VALUES ({placeholders})",
             tuple(insert_values),
         )
-        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        vn_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        self._sync_vn_tags_if_supported(vn_id, metadata.get("tags"))
+        return vn_id
 
     def _build_lookup_filters(self, metadata):
         version_value = str(metadata.get("version") or "").strip()

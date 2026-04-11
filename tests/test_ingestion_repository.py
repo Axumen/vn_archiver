@@ -184,6 +184,23 @@ def make_conn_new_schema():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE tags (
+            tag_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE vn_tags (
+            vn_id INTEGER NOT NULL,
+            tag_id INTEGER NOT NULL,
+            PRIMARY KEY (vn_id, tag_id)
+        )
+        """
+    )
     return conn
 
 
@@ -223,3 +240,45 @@ def test_repository_supports_new_build_file_schema():
     assert row["build_id"] == 1
     assert row["file_id"] == 1
     assert row["sha256"] == "abc123"
+
+
+def test_repository_syncs_vn_tags_when_tables_exist():
+    conn = make_conn_new_schema()
+    repo = VnIngestionRepository(
+        conn,
+        upsert_series=lambda *args, **kwargs: None,
+        upsert_visual_novel_record=lambda *args, **kwargs: None,
+        sync_vn_tags=lambda *args, **kwargs: None,
+        sync_canon_relationship=lambda *args, **kwargs: None,
+        upsert_build_record=lambda *args, **kwargs: None,
+        sync_build_target_platforms=lambda *args, **kwargs: None,
+        sync_build_relations=lambda *args, **kwargs: None,
+        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
+        create_artifact_record=lambda *args, **kwargs: None,
+    )
+
+    vn_id = repo.get_or_create_vn({"title": "Clannad", "tags": ["romance", "drama"]})
+    rows = conn.execute(
+        """
+        SELECT t.name
+        FROM vn_tags vt
+        JOIN tags t ON t.tag_id = vt.tag_id
+        WHERE vt.vn_id = ?
+        ORDER BY t.name
+        """,
+        (vn_id,),
+    ).fetchall()
+    assert [row["name"] for row in rows] == ["drama", "romance"]
+
+    repo.get_or_create_vn({"title": "Clannad", "tags": "nakige, drama"})
+    rows = conn.execute(
+        """
+        SELECT t.name
+        FROM vn_tags vt
+        JOIN tags t ON t.tag_id = vt.tag_id
+        WHERE vt.vn_id = ?
+        ORDER BY t.name
+        """,
+        (vn_id,),
+    ).fetchall()
+    assert [row["name"] for row in rows] == ["drama", "nakige"]
