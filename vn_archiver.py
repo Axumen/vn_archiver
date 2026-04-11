@@ -2179,13 +2179,17 @@ def order_metadata_for_yaml(metadata):
 
 def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None):
     """Create a metadata.yaml copy and stage it in uploading/ with recommended naming."""
-    meta_sha = metadata.get('sha256')
-    if not meta_sha and isinstance(metadata.get('archives'), list) and metadata['archives']:
-        first_arch = metadata['archives'][0]
+    metadata_for_staging = dict(metadata or {})
+    metadata_for_staging.pop("_raw_text", None)
+    metadata_for_staging.pop("_source_file", None)
+
+    meta_sha = metadata_for_staging.get('sha256')
+    if not meta_sha and isinstance(metadata_for_staging.get('archives'), list) and metadata_for_staging['archives']:
+        first_arch = metadata_for_staging['archives'][0]
         if isinstance(first_arch, dict):
             meta_sha = first_arch.get('sha256')
 
-    final_name = build_recommended_metadata_name(metadata, meta_sha, metadata_version_number)
+    final_name = build_recommended_metadata_name(metadata_for_staging, meta_sha, metadata_version_number)
 
     if target_dir is None:
         target_dir = get_uploading_latest_dir(metadata)
@@ -2193,7 +2197,7 @@ def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir
     target_dir.mkdir(parents=True, exist_ok=True)
 
     temp_meta_path = target_dir / 'metadata.yaml'
-    ordered_metadata = order_metadata_for_yaml(metadata)
+    ordered_metadata = order_metadata_for_yaml(metadata_for_staging)
     with open(temp_meta_path, 'w', encoding='utf-8') as handle:
         yaml.dump(ordered_metadata, handle, sort_keys=False, allow_unicode=True)
 
