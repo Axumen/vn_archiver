@@ -88,7 +88,7 @@ class IngestionRepository(Protocol):
 
     def create_artifact(self, build_id, metadata, archive_data): ...
 
-    def create_metadata_raw(self, raw_text, source_file, artifact_id): ...
+    def create_metadata_raw(self, raw_text, source_file, artifact_id, build_id=None): ...
 
 
 class VisualNovelDomainService:
@@ -226,7 +226,12 @@ class VisualNovelDomainService:
         source_file = metadata.get("_source_file")
         primary_artifact_id = created_artifact_ids[0] if created_artifact_ids else None
         if raw_text and primary_artifact_id is not None:
-            self.repository.create_metadata_raw(raw_text, source_file, primary_artifact_id)
+            self.repository.create_metadata_raw(
+                raw_text,
+                source_file,
+                primary_artifact_id,
+                build_id=build_id,
+            )
 
         artifact, build, vn = self._build_domain_graph(
             resolved_metadata,

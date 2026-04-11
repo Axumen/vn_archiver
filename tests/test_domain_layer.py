@@ -32,8 +32,8 @@ class FakeRepository:
         )
         return 999
 
-    def create_metadata_raw(self, raw_text, source_file, artifact_id):
-        self.raw_metadata_records.append((raw_text, source_file, artifact_id))
+    def create_metadata_raw(self, raw_text, source_file, artifact_id, build_id=None):
+        self.raw_metadata_records.append((raw_text, source_file, artifact_id, build_id))
 
 
 def test_ingest_requires_title():
@@ -159,7 +159,7 @@ def test_ingest_persists_raw_metadata_with_primary_artifact_id_when_present():
     )
 
     assert repo.raw_metadata_records == [
-        ("title: Clannad\nversion: 1.0\n", "incoming/clannad_v1.yaml", 999)
+        ("title: Clannad\nversion: 1.0\n", "incoming/clannad_v1.yaml", 999, 22)
     ]
 
 
