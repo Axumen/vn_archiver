@@ -19,19 +19,19 @@ def _make_conn():
     conn.execute(
         "CREATE TABLE builds (id INTEGER PRIMARY KEY, vn_id INTEGER NOT NULL, version_string TEXT, release_type TEXT, language TEXT, platform TEXT)"
     )
+    conn.execute("CREATE TABLE file (file_id INTEGER PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, filename TEXT)")
     conn.execute(
-        "CREATE TABLE artifacts (id INTEGER PRIMARY KEY, build_id INTEGER, sha256 TEXT NOT NULL UNIQUE, path TEXT NOT NULL, type TEXT)"
+        "CREATE TABLE build_file (build_id INTEGER NOT NULL, file_id INTEGER NOT NULL, PRIMARY KEY (build_id, file_id))"
     )
     return conn
 
 
-def test_resolve_artifact_id_for_metadata_supports_minimal_artifacts_id_column():
+def test_resolve_artifact_id_for_metadata_uses_file_build_file_linkage():
     conn = _make_conn()
     conn.execute("INSERT INTO vn (id, title) VALUES (1, 'Example VN')")
     conn.execute("INSERT INTO builds (id, vn_id, version_string) VALUES (7, 1, '1.0')")
-    conn.execute(
-        "INSERT INTO artifacts (id, build_id, sha256, path, type) VALUES (42, 7, 'abc123', 'sample.zip', 'game_archive')"
-    )
+    conn.execute("INSERT INTO file (file_id, sha256, filename) VALUES (42, 'abc123', 'sample.zip')")
+    conn.execute("INSERT INTO build_file (build_id, file_id) VALUES (7, 42)")
 
     artifact_id = vn_archiver.resolve_artifact_id_for_metadata(
         conn,
@@ -46,13 +46,12 @@ def test_get_current_metadata_version_number_returns_default_one():
     assert vn_archiver.get_current_metadata_version_number(build_id=7) == 1
 
 
-def test_mirror_metadata_for_rebuild_uses_artifacts_table(tmp_path, monkeypatch):
+def test_mirror_metadata_for_rebuild_uses_file_build_file_table(tmp_path, monkeypatch):
     conn = _make_conn()
     conn.execute("INSERT INTO vn (id, title) VALUES (1, 'Example VN')")
     conn.execute("INSERT INTO builds (id, vn_id, version_string) VALUES (7, 1, '1.0')")
-    conn.execute(
-        "INSERT INTO artifacts (id, build_id, sha256, path, type) VALUES (13, 7, 'deadbeef', 'vn.zip', 'game_archive')"
-    )
+    conn.execute("INSERT INTO file (file_id, sha256, filename) VALUES (13, 'deadbeef', 'vn.zip')")
+    conn.execute("INSERT INTO build_file (build_id, file_id) VALUES (7, 13)")
 
     staged = tmp_path / "meta.yaml"
     staged.write_text("title: Example VN\n", encoding="utf-8")
