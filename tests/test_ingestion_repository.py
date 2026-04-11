@@ -2,6 +2,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ingestion_repository import VnIngestionRepository
@@ -86,7 +88,7 @@ def test_get_or_create_vn_and_build_works_without_visual_novels_table():
     assert same_build_id == build_id
 
 
-def test_create_artifact_does_not_require_files_table_in_current_schema():
+def test_create_artifact_fails_without_file_tables():
     conn = make_conn()
     repo = VnIngestionRepository(
         conn,
@@ -106,21 +108,15 @@ def test_create_artifact_does_not_require_files_table_in_current_schema():
         "INSERT INTO builds (id, vn_id, version_string, build_type, language, platform) VALUES (1, 1, '1.0', 'original', 'JP', 'windows')"
     )
 
-    artifact_id = repo.create_artifact(
-        1,
-        {"artifact_type": "game_archive"},
-        {"sha256": "abc123", "filename": "clannad_v1.0.zip"},
-    )
-
-    row = conn.execute("SELECT id, build_id, sha256, path, type FROM artifacts WHERE id = ?", (artifact_id,)).fetchone()
-    assert row is not None
-    assert row["build_id"] == 1
-    assert row["sha256"] == "abc123"
-    assert row["path"] == "clannad_v1.0.zip"
-    assert row["type"] == "game_archive"
+    with pytest.raises(RuntimeError, match="No supported artifact/file persistence tables"):
+        repo.create_artifact(
+            1,
+            {"artifact_type": "game_archive"},
+            {"sha256": "abc123", "filename": "clannad_v1.0.zip"},
+        )
 
 
-def test_create_artifact_allows_shared_sha_across_different_builds():
+def test_create_artifact_fails_for_legacy_artifacts_schema():
     conn = make_conn()
     repo = VnIngestionRepository(
         conn,
@@ -144,25 +140,12 @@ def test_create_artifact_allows_shared_sha_across_different_builds():
         "INSERT INTO builds (id, vn_id, version_string, build_type, language, platform) VALUES (2, 2, '1.0', 'original', 'JP', 'windows')"
     )
 
-    first_id = repo.create_artifact(
-        1,
-        {"artifact_type": "game_archive"},
-        {"sha256": "shared-sha", "filename": "readme.txt"},
-    )
-    second_id = repo.create_artifact(
-        2,
-        {"artifact_type": "game_archive"},
-        {"sha256": "shared-sha", "filename": "readme.txt"},
-    )
-
-    assert first_id != second_id
-    rows = conn.execute(
-        "SELECT id, build_id, sha256 FROM artifacts WHERE sha256 = ? ORDER BY id",
-        ("shared-sha",),
-    ).fetchall()
-    assert len(rows) == 2
-    assert rows[0]["build_id"] == 1
-    assert rows[1]["build_id"] == 2
+    with pytest.raises(RuntimeError, match="No supported artifact/file persistence tables"):
+        repo.create_artifact(
+            1,
+            {"artifact_type": "game_archive"},
+            {"sha256": "shared-sha", "filename": "readme.txt"},
+        )
 
 
 def make_conn_new_schema():
@@ -198,6 +181,23 @@ def make_conn_new_schema():
             original_filename TEXT,
             archived_at TEXT,
             PRIMARY KEY (build_id, file_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE tags (
+            tag_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE vn_tags (
+            vn_id INTEGER NOT NULL,
+            tag_id INTEGER NOT NULL,
+            PRIMARY KEY (vn_id, tag_id)
         )
         """
     )
@@ -240,3 +240,45 @@ def test_repository_supports_new_build_file_schema():
     assert row["build_id"] == 1
     assert row["file_id"] == 1
     assert row["sha256"] == "abc123"
+
+
+def test_repository_syncs_vn_tags_when_tables_exist():
+    conn = make_conn_new_schema()
+    repo = VnIngestionRepository(
+        conn,
+        upsert_series=lambda *args, **kwargs: None,
+        upsert_visual_novel_record=lambda *args, **kwargs: None,
+        sync_vn_tags=lambda *args, **kwargs: None,
+        sync_canon_relationship=lambda *args, **kwargs: None,
+        upsert_build_record=lambda *args, **kwargs: None,
+        sync_build_target_platforms=lambda *args, **kwargs: None,
+        sync_build_relations=lambda *args, **kwargs: None,
+        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
+        create_artifact_record=lambda *args, **kwargs: None,
+    )
+
+    vn_id = repo.get_or_create_vn({"title": "Clannad", "tags": ["romance", "drama"]})
+    rows = conn.execute(
+        """
+        SELECT t.name
+        FROM vn_tags vt
+        JOIN tags t ON t.tag_id = vt.tag_id
+        WHERE vt.vn_id = ?
+        ORDER BY t.name
+        """,
+        (vn_id,),
+    ).fetchall()
+    assert [row["name"] for row in rows] == ["drama", "romance"]
+
+    repo.get_or_create_vn({"title": "Clannad", "tags": "nakige, drama"})
+    rows = conn.execute(
+        """
+        SELECT t.name
+        FROM vn_tags vt
+        JOIN tags t ON t.tag_id = vt.tag_id
+        WHERE vt.vn_id = ?
+        ORDER BY t.name
+        """,
+        (vn_id,),
+    ).fetchall()
+    assert [row["name"] for row in rows] == ["drama", "nakige"]

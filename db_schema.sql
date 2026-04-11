@@ -78,9 +78,24 @@ CREATE TABLE IF NOT EXISTS build_relation (
     FOREIGN KEY (to_build_id) REFERENCES build(build_id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS tags (
+    tag_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS vn_tags (
+    vn_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, tag_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(vn_id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(tag_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_build_vn ON build(vn_id);
 CREATE INDEX IF NOT EXISTS idx_build_type ON build(build_type);
 CREATE INDEX IF NOT EXISTS idx_file_sha256 ON file(sha256);
 CREATE INDEX IF NOT EXISTS idx_build_relation_from ON build_relation(from_build_id);
+CREATE INDEX IF NOT EXISTS idx_vn_tags_vn ON vn_tags(vn_id);
+CREATE INDEX IF NOT EXISTS idx_vn_tags_tag ON vn_tags(tag_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_build_identity ON build(vn_id, normalized_version, language, edition, distribution_platform);
