@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 import json
 import re
-from datetime import datetime
 from db_manager import initialize_database, get_connection
 from pathlib import Path
 from colorama import init, Fore, Style
