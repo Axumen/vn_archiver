@@ -2,6 +2,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ingestion_repository import VnIngestionRepository
@@ -86,7 +88,7 @@ def test_get_or_create_vn_and_build_works_without_visual_novels_table():
     assert same_build_id == build_id
 
 
-def test_create_artifact_does_not_require_files_table_in_current_schema():
+def test_create_artifact_fails_without_file_tables():
     conn = make_conn()
     repo = VnIngestionRepository(
         conn,
@@ -106,21 +108,15 @@ def test_create_artifact_does_not_require_files_table_in_current_schema():
         "INSERT INTO builds (id, vn_id, version_string, build_type, language, platform) VALUES (1, 1, '1.0', 'original', 'JP', 'windows')"
     )
 
-    artifact_id = repo.create_artifact(
-        1,
-        {"artifact_type": "game_archive"},
-        {"sha256": "abc123", "filename": "clannad_v1.0.zip"},
-    )
-
-    row = conn.execute("SELECT id, build_id, sha256, path, type FROM artifacts WHERE id = ?", (artifact_id,)).fetchone()
-    assert row is not None
-    assert row["build_id"] == 1
-    assert row["sha256"] == "abc123"
-    assert row["path"] == "clannad_v1.0.zip"
-    assert row["type"] == "game_archive"
+    with pytest.raises(RuntimeError, match="No supported artifact/file persistence tables"):
+        repo.create_artifact(
+            1,
+            {"artifact_type": "game_archive"},
+            {"sha256": "abc123", "filename": "clannad_v1.0.zip"},
+        )
 
 
-def test_create_artifact_allows_shared_sha_across_different_builds():
+def test_create_artifact_fails_for_legacy_artifacts_schema():
     conn = make_conn()
     repo = VnIngestionRepository(
         conn,
@@ -144,25 +140,12 @@ def test_create_artifact_allows_shared_sha_across_different_builds():
         "INSERT INTO builds (id, vn_id, version_string, build_type, language, platform) VALUES (2, 2, '1.0', 'original', 'JP', 'windows')"
     )
 
-    first_id = repo.create_artifact(
-        1,
-        {"artifact_type": "game_archive"},
-        {"sha256": "shared-sha", "filename": "readme.txt"},
-    )
-    second_id = repo.create_artifact(
-        2,
-        {"artifact_type": "game_archive"},
-        {"sha256": "shared-sha", "filename": "readme.txt"},
-    )
-
-    assert first_id != second_id
-    rows = conn.execute(
-        "SELECT id, build_id, sha256 FROM artifacts WHERE sha256 = ? ORDER BY id",
-        ("shared-sha",),
-    ).fetchall()
-    assert len(rows) == 2
-    assert rows[0]["build_id"] == 1
-    assert rows[1]["build_id"] == 2
+    with pytest.raises(RuntimeError, match="No supported artifact/file persistence tables"):
+        repo.create_artifact(
+            1,
+            {"artifact_type": "game_archive"},
+            {"sha256": "shared-sha", "filename": "readme.txt"},
+        )
 
 
 def make_conn_new_schema():

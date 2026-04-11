@@ -57,8 +57,45 @@ class VnIngestionRepository:
         self.build_version_column = "version" if "version" in build_columns else "version_string"
         self.build_platform_column = "target_platform" if "target_platform" in build_columns else "platform"
 
-        self.has_artifacts_table = self._table_exists("artifacts")
         self.has_file_link_tables = self._table_exists("file") and self._table_exists("build_file")
+
+    @staticmethod
+    def _normalize_text_value(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        if isinstance(value, list):
+            parts = [str(item).strip() for item in value if str(item).strip()]
+            return ", ".join(parts) if parts else None
+        return str(value).strip() or None
+
+    @staticmethod
+    def _normalize_translator_value(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        if isinstance(value, list):
+            parts = [str(item).strip() for item in value if str(item).strip()]
+            return ", ".join(parts) if parts else None
+        if isinstance(value, dict):
+            normalized_chunks = []
+            for language_key, translators in value.items():
+                key = str(language_key).strip()
+                if not key:
+                    continue
+                if isinstance(translators, list):
+                    names = [str(name).strip() for name in translators if str(name).strip()]
+                else:
+                    single = str(translators).strip()
+                    names = [single] if single else []
+                if names:
+                    normalized_chunks.append(f"{key}: {', '.join(names)}")
+            return " | ".join(normalized_chunks) if normalized_chunks else None
+        return str(value).strip() or None
 
     def resolve_existing_build_for_artifact(self, metadata):
         return self._resolve_existing_build_for_artifact(self.conn, metadata)
@@ -68,16 +105,55 @@ class VnIngestionRepository:
         if not title:
             raise ValueError("Title is required for VN resolution.")
 
+        vn_columns = self._table_columns(self.vn_table)
+        vn_updatable_columns = [
+            "series",
+            "series_description",
+            "aliases",
+            "developer",
+            "publisher",
+            "release_status",
+            "content_rating",
+            "content_mode",
+            "content_type",
+            "description",
+            "source",
+            "tags",
+            "original_release_date",
+        ]
+
+        vn_values = {}
+        for column_name in vn_updatable_columns:
+            if column_name not in vn_columns:
+                continue
+            if column_name not in metadata:
+                continue
+            vn_values[column_name] = self._normalize_text_value(metadata.get(column_name))
+
         existing = self.conn.execute(
             f"SELECT {self.vn_id_column} FROM {self.vn_table} WHERE TRIM(title) = TRIM(?) COLLATE NOCASE LIMIT 1",
             (title,),
         ).fetchone()
         if existing:
-            return existing[self.vn_id_column]
+            vn_id = existing[self.vn_id_column]
+            if vn_values:
+                assignments = ", ".join(f"{column} = ?" for column in vn_values)
+                self.conn.execute(
+                    f"UPDATE {self.vn_table} SET {assignments} WHERE {self.vn_id_column} = ?",
+                    tuple(vn_values.values()) + (vn_id,),
+                )
+            return vn_id
 
+        insert_columns = ["title"]
+        insert_values = [title]
+        for column_name, value in vn_values.items():
+            insert_columns.append(column_name)
+            insert_values.append(value)
+
+        placeholders = ", ".join(["?"] * len(insert_columns))
         self.conn.execute(
-            f"INSERT INTO {self.vn_table} (title) VALUES (?)",
-            (title,),
+            f"INSERT INTO {self.vn_table} ({', '.join(insert_columns)}) VALUES ({placeholders})",
+            tuple(insert_values),
         )
         return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -140,6 +216,30 @@ class VnIngestionRepository:
             insert_columns.append(self.build_platform_column)
             values.append(platform)
 
+        build_column_to_metadata = {
+            "distribution_model": "distribution_model",
+            "distribution_platform": "distribution_platform",
+            "translator": "translator",
+            "edition": "edition",
+            "release_date": "release_date",
+            "engine": "engine",
+            "engine_version": "engine_version",
+            "notes": "notes",
+            "change_note": "change_note",
+        }
+
+        for build_column, metadata_key in build_column_to_metadata.items():
+            if build_column not in columns:
+                continue
+            if metadata_key not in metadata:
+                continue
+            if build_column == "translator":
+                normalized_value = self._normalize_translator_value(metadata.get(metadata_key))
+            else:
+                normalized_value = self._normalize_text_value(metadata.get(metadata_key))
+            insert_columns.append(build_column)
+            values.append(normalized_value)
+
         placeholders = ", ".join(["?"] * len(insert_columns))
         self.conn.execute(
             f"INSERT INTO {self.build_table} ({', '.join(insert_columns)}) VALUES ({placeholders})",
@@ -157,33 +257,6 @@ class VnIngestionRepository:
         vn_id = self.get_or_create_vn(metadata)
         build_id = self.get_or_create_build(vn_id, metadata)
         return vn_id, build_id
-
-    def _create_artifact_in_legacy_table(self, build_id, metadata, archive_data):
-        artifact_sha = archive_data.get("sha256")
-        if not artifact_sha:
-            return None
-
-        artifact_path = archive_data.get("filepath") or archive_data.get("filename") or metadata.get("original_filename")
-        artifact_type = str(metadata.get("artifact_type") or "game_archive").strip().lower() or "game_archive"
-
-        existing = self.conn.execute(
-            """
-            SELECT id
-            FROM artifacts
-            WHERE sha256 = ?
-              AND COALESCE(build_id, -1) = COALESCE(?, -1)
-            LIMIT 1
-            """,
-            (artifact_sha, build_id),
-        ).fetchone()
-        if existing:
-            return existing["id"]
-
-        self.conn.execute(
-            "INSERT INTO artifacts (build_id, sha256, path, type) VALUES (?, ?, ?, ?)",
-            (build_id, artifact_sha, artifact_path or artifact_sha, artifact_type),
-        )
-        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def _create_artifact_in_file_tables(self, build_id, metadata, archive_data):
         artifact_sha = archive_data.get("sha256")
@@ -218,8 +291,6 @@ class VnIngestionRepository:
         return file_id
 
     def create_artifact(self, build_id, metadata, archive_data):
-        if self.has_artifacts_table:
-            return self._create_artifact_in_legacy_table(build_id, metadata, archive_data)
         if self.has_file_link_tables:
             return self._create_artifact_in_file_tables(build_id, metadata, archive_data)
         raise RuntimeError("No supported artifact/file persistence tables found in current schema.")
