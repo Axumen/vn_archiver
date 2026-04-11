@@ -253,6 +253,38 @@ def test_repository_supports_new_build_file_schema():
     assert row["sha256"] == "abc123"
 
 
+def test_repository_uses_canonical_build_keys_only():
+    conn = make_conn_new_schema()
+    repo = VnIngestionRepository(
+        conn,
+        upsert_series=lambda *args, **kwargs: None,
+        upsert_visual_novel_record=lambda *args, **kwargs: None,
+        sync_vn_tags=lambda *args, **kwargs: None,
+        sync_canon_relationship=lambda *args, **kwargs: None,
+        upsert_build_record=lambda *args, **kwargs: None,
+        sync_build_target_platforms=lambda *args, **kwargs: None,
+        sync_build_relations=lambda *args, **kwargs: None,
+        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
+        create_artifact_record=lambda *args, **kwargs: None,
+    )
+
+    vn_id = repo.get_or_create_vn({"title": "AIR"})
+    build_id = repo.get_or_create_build(
+        vn_id,
+        {
+            "version": "1.0",
+            "release_type": "full",  # legacy key should not be consumed
+            "platform": "windows",   # legacy key should not be consumed
+        },
+    )
+
+    row = conn.execute(
+        "SELECT build_type, target_platform FROM build WHERE build_id = ?",
+        (build_id,),
+    ).fetchone()
+    assert row["build_type"] is None
+    assert row["target_platform"] is None
+
 def test_repository_syncs_vn_tags_when_tables_exist():
     conn = make_conn_new_schema()
     repo = VnIngestionRepository(

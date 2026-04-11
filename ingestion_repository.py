@@ -4,7 +4,7 @@ from datetime import datetime
 
 
 class VnIngestionRepository:
-    """Repository adapter for VN/build/file ingestion across schema variants.
+    """Repository adapter for VN/build/file ingestion on the canonical schema.
 
     Strictly supports the new domain schema:
     - `vn`, `build`, `file`, `build_file`
@@ -298,8 +298,8 @@ class VnIngestionRepository:
     def _build_lookup_filters(self, metadata):
         version_value = str(metadata.get("version") or "").strip()
         language = self._normalize_text_value(metadata.get("language"))
-        build_type = metadata.get("build_type") or metadata.get("release_type")
-        platform = self._normalize_text_value(metadata.get("platform") or metadata.get("target_platform"))
+        build_type = metadata.get("build_type")
+        platform = self._normalize_text_value(metadata.get("target_platform"))
         return version_value, language, build_type, platform
 
     def find_build(self, vn_id, metadata):
@@ -316,9 +316,6 @@ class VnIngestionRepository:
             params.append(language)
         if "build_type" in columns:
             where_clauses.append("COALESCE(build_type, '') = COALESCE(?, '')")
-            params.append(build_type)
-        elif "release_type" in columns:
-            where_clauses.append("COALESCE(release_type, '') = COALESCE(?, '')")
             params.append(build_type)
         if self.build_platform_column in columns:
             where_clauses.append(
@@ -346,9 +343,6 @@ class VnIngestionRepository:
             values.append(language)
         if "build_type" in columns:
             insert_columns.append("build_type")
-            values.append(build_type)
-        elif "release_type" in columns:
-            insert_columns.append("release_type")
             values.append(build_type)
         if self.build_platform_column in columns:
             insert_columns.append(self.build_platform_column)
