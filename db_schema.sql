@@ -78,9 +78,69 @@ CREATE TABLE IF NOT EXISTS build_relation (
     FOREIGN KEY (to_build_id) REFERENCES build(build_id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS tags (
+    tag_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS vn_tags (
+    vn_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, tag_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(vn_id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(tag_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS developers (
+    developer_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS vn_developers (
+    vn_id INTEGER NOT NULL,
+    developer_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, developer_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(vn_id) ON DELETE CASCADE,
+    FOREIGN KEY (developer_id) REFERENCES developers(developer_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS publishers (
+    publisher_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS vn_publishers (
+    vn_id INTEGER NOT NULL,
+    publisher_id INTEGER NOT NULL,
+    PRIMARY KEY (vn_id, publisher_id),
+    FOREIGN KEY (vn_id) REFERENCES vn(vn_id) ON DELETE CASCADE,
+    FOREIGN KEY (publisher_id) REFERENCES publishers(publisher_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS languages (
+    language_id INTEGER PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS build_languages (
+    build_id INTEGER NOT NULL,
+    language_id INTEGER NOT NULL,
+    PRIMARY KEY (build_id, language_id),
+    FOREIGN KEY (build_id) REFERENCES build(build_id) ON DELETE CASCADE,
+    FOREIGN KEY (language_id) REFERENCES languages(language_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_build_vn ON build(vn_id);
 CREATE INDEX IF NOT EXISTS idx_build_type ON build(build_type);
 CREATE INDEX IF NOT EXISTS idx_file_sha256 ON file(sha256);
 CREATE INDEX IF NOT EXISTS idx_build_relation_from ON build_relation(from_build_id);
+CREATE INDEX IF NOT EXISTS idx_vn_tags_vn ON vn_tags(vn_id);
+CREATE INDEX IF NOT EXISTS idx_vn_tags_tag ON vn_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_vn_developers_vn ON vn_developers(vn_id);
+CREATE INDEX IF NOT EXISTS idx_vn_developers_dev ON vn_developers(developer_id);
+CREATE INDEX IF NOT EXISTS idx_vn_publishers_vn ON vn_publishers(vn_id);
+CREATE INDEX IF NOT EXISTS idx_vn_publishers_pub ON vn_publishers(publisher_id);
+CREATE INDEX IF NOT EXISTS idx_build_languages_build ON build_languages(build_id);
+CREATE INDEX IF NOT EXISTS idx_build_languages_lang ON build_languages(language_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_build_identity ON build(vn_id, normalized_version, language, edition, distribution_platform);
