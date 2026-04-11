@@ -6,9 +6,11 @@ from datetime import datetime
 class VnIngestionRepository:
     """Repository adapter for VN/build/file ingestion across schema variants.
 
-    Supports both:
-    - legacy build tables (`vn`, `builds`)
-    - new domain tables (`vn`, `build`, `file`, `build_file`, `tags`, `vn_tags`)
+    Strictly supports the new domain schema:
+    - `vn`, `build`, `file`, `build_file`
+    - optional enrichments: `tags`, `vn_tags`, `developers`, `vn_developers`,
+      `publishers`, `vn_publishers`, `languages`, `build_languages`,
+      `metadata_raw_versions`
     """
 
     def __init__(
@@ -53,14 +55,22 @@ class VnIngestionRepository:
 
     def _resolve_schema(self):
         self.vn_table = "vn"
+        if not self._table_exists(self.vn_table):
+            raise RuntimeError("New schema required: missing 'vn' table.")
         vn_columns = self._table_columns(self.vn_table)
-        self.vn_id_column = "vn_id" if "vn_id" in vn_columns else "id"
+        if "vn_id" not in vn_columns:
+            raise RuntimeError("New schema required: 'vn.vn_id' column is missing.")
+        self.vn_id_column = "vn_id"
 
-        self.build_table = "build" if self._table_exists("build") else "builds"
+        self.build_table = "build"
+        if not self._table_exists(self.build_table):
+            raise RuntimeError("New schema required: missing 'build' table.")
         build_columns = self._table_columns(self.build_table)
-        self.build_id_column = "build_id" if "build_id" in build_columns else "id"
-        self.build_version_column = "version" if "version" in build_columns else "version_string"
-        self.build_platform_column = "target_platform" if "target_platform" in build_columns else "platform"
+        if "build_id" not in build_columns or "version" not in build_columns:
+            raise RuntimeError("New schema required: 'build.build_id' and 'build.version' columns are missing.")
+        self.build_id_column = "build_id"
+        self.build_version_column = "version"
+        self.build_platform_column = "target_platform"
 
         self.has_file_link_tables = self._table_exists("file") and self._table_exists("build_file")
 
@@ -454,9 +464,3 @@ class VnIngestionRepository:
                 (build_id, artifact_id, raw_json_value, raw_sha256, next_version, created_at),
             )
             return
-
-        if self._table_exists("metadata_raw"):
-            self.conn.execute(
-                "INSERT INTO metadata_raw (raw_text, source_file, artifact_id) VALUES (?, ?, ?)",
-                (str(raw_payload or ""), None, artifact_id),
-            )

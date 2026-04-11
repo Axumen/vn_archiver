@@ -1938,34 +1938,19 @@ def finalize_archive_creation(metadata, archives_data):
     build_release_type = metadata.get('release_type') or metadata.get('build_type')
     build_platform = metadata.get('platform') or metadata.get('distribution_platform')
     with get_connection() as conn:
-        has_legacy_builds = _table_exists(conn, "builds")
-        if has_legacy_builds:
-            build_row = conn.execute(
-                '''
-                SELECT id FROM builds
-                WHERE vn_id = ? AND version_string = ?
-                  AND COALESCE(language, '') = COALESCE(?, '')
-                  AND COALESCE(release_type, '') = COALESCE(?, '')
-                  AND COALESCE(platform, '') = COALESCE(?, '')
-                ''',
-                (vn_id, metadata.get('version'), build_language, build_release_type, build_platform)
-            ).fetchone()
-            if build_row:
-                build_id = build_row['id']
-        else:
-            build_row = conn.execute(
-                '''
-                SELECT build_id FROM build
-                WHERE vn_id = ? AND version = ?
-                  AND COALESCE(language, '') = COALESCE(?, '')
-                  AND COALESCE(build_type, '') = COALESCE(?, '')
-                  AND COALESCE(distribution_platform, '') = COALESCE(?, '')
-                LIMIT 1
-                ''',
-                (vn_id, metadata.get('version'), build_language, build_release_type, build_platform)
-            ).fetchone()
-            if build_row:
-                build_id = build_row['build_id']
+        build_row = conn.execute(
+            '''
+            SELECT build_id FROM build
+            WHERE vn_id = ? AND version = ?
+              AND COALESCE(language, '') = COALESCE(?, '')
+              AND COALESCE(build_type, '') = COALESCE(?, '')
+              AND COALESCE(distribution_platform, '') = COALESCE(?, '')
+            LIMIT 1
+            ''',
+            (vn_id, metadata.get('version'), build_language, build_release_type, build_platform)
+        ).fetchone()
+        if build_row:
+            build_id = build_row['build_id']
 
     metadata_version_number = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
     if is_artifact_metadata(metadata):

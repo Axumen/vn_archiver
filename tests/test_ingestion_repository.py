@@ -44,107 +44,54 @@ def make_conn():
     return conn
 
 
-def test_get_or_create_vn_and_build_works_without_visual_novels_table():
+def test_repository_requires_new_schema_tables():
     conn = make_conn()
-    repo = VnIngestionRepository(
-        conn,
-        upsert_series=lambda *args, **kwargs: None,
-        upsert_visual_novel_record=lambda *args, **kwargs: None,
-        sync_vn_tags=lambda *args, **kwargs: None,
-        sync_canon_relationship=lambda *args, **kwargs: None,
-        upsert_build_record=lambda *args, **kwargs: None,
-        sync_build_target_platforms=lambda *args, **kwargs: None,
-        sync_build_relations=lambda *args, **kwargs: None,
-        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
-        create_artifact_record=lambda *args, **kwargs: None,
-    )
-
-    vn_id = repo.get_or_create_vn({"title": "Clannad"})
-    build_id = repo.get_or_create_build(
-        vn_id,
-        {
-            "version": "1.0",
-            "language": "JP",
-            "build_type": "original",
-            "platform": "windows",
-        },
-    )
-
-    assert vn_id == 1
-    assert build_id == 1
-
-    same_vn_id = repo.get_or_create_vn({"title": "Clannad"})
-    same_build_id = repo.get_or_create_build(
-        same_vn_id,
-        {
-            "version": "1.0",
-            "language": "JP",
-            "build_type": "original",
-            "platform": "windows",
-        },
-    )
-
-    assert same_vn_id == vn_id
-    assert same_build_id == build_id
+    with pytest.raises(RuntimeError, match="New schema required"):
+        VnIngestionRepository(
+            conn,
+            upsert_series=lambda *args, **kwargs: None,
+            upsert_visual_novel_record=lambda *args, **kwargs: None,
+            sync_vn_tags=lambda *args, **kwargs: None,
+            sync_canon_relationship=lambda *args, **kwargs: None,
+            upsert_build_record=lambda *args, **kwargs: None,
+            sync_build_target_platforms=lambda *args, **kwargs: None,
+            sync_build_relations=lambda *args, **kwargs: None,
+            resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
+            create_artifact_record=lambda *args, **kwargs: None,
+        )
 
 
 def test_create_artifact_fails_without_file_tables():
     conn = make_conn()
-    repo = VnIngestionRepository(
-        conn,
-        upsert_series=lambda *args, **kwargs: None,
-        upsert_visual_novel_record=lambda *args, **kwargs: None,
-        sync_vn_tags=lambda *args, **kwargs: None,
-        sync_canon_relationship=lambda *args, **kwargs: None,
-        upsert_build_record=lambda *args, **kwargs: None,
-        sync_build_target_platforms=lambda *args, **kwargs: None,
-        sync_build_relations=lambda *args, **kwargs: None,
-        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
-        create_artifact_record=lambda *args, **kwargs: None,
-    )
-
-    conn.execute("INSERT INTO vn (id, title) VALUES (1, 'Clannad')")
-    conn.execute(
-        "INSERT INTO builds (id, vn_id, version_string, build_type, language, platform) VALUES (1, 1, '1.0', 'original', 'JP', 'windows')"
-    )
-
-    with pytest.raises(RuntimeError, match="No supported artifact/file persistence tables"):
-        repo.create_artifact(
-            1,
-            {"artifact_type": "game_archive"},
-            {"sha256": "abc123", "filename": "clannad_v1.0.zip"},
+    with pytest.raises(RuntimeError, match="New schema required"):
+        VnIngestionRepository(
+            conn,
+            upsert_series=lambda *args, **kwargs: None,
+            upsert_visual_novel_record=lambda *args, **kwargs: None,
+            sync_vn_tags=lambda *args, **kwargs: None,
+            sync_canon_relationship=lambda *args, **kwargs: None,
+            upsert_build_record=lambda *args, **kwargs: None,
+            sync_build_target_platforms=lambda *args, **kwargs: None,
+            sync_build_relations=lambda *args, **kwargs: None,
+            resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
+            create_artifact_record=lambda *args, **kwargs: None,
         )
 
 
 def test_create_artifact_fails_for_legacy_artifacts_schema():
     conn = make_conn()
-    repo = VnIngestionRepository(
-        conn,
-        upsert_series=lambda *args, **kwargs: None,
-        upsert_visual_novel_record=lambda *args, **kwargs: None,
-        sync_vn_tags=lambda *args, **kwargs: None,
-        sync_canon_relationship=lambda *args, **kwargs: None,
-        upsert_build_record=lambda *args, **kwargs: None,
-        sync_build_target_platforms=lambda *args, **kwargs: None,
-        sync_build_relations=lambda *args, **kwargs: None,
-        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
-        create_artifact_record=lambda *args, **kwargs: None,
-    )
-
-    conn.execute("INSERT INTO vn (id, title) VALUES (1, 'Clannad')")
-    conn.execute("INSERT INTO vn (id, title) VALUES (2, 'Tomoyo After')")
-    conn.execute(
-        "INSERT INTO builds (id, vn_id, version_string, build_type, language, platform) VALUES (1, 1, '1.0', 'original', 'JP', 'windows')"
-    )
-    conn.execute(
-        "INSERT INTO builds (id, vn_id, version_string, build_type, language, platform) VALUES (2, 2, '1.0', 'original', 'JP', 'windows')"
-    )
-
-    with pytest.raises(RuntimeError, match="No supported artifact/file persistence tables"):
-        repo.create_artifact(
-            1,
-            {"artifact_type": "game_archive"},
-            {"sha256": "shared-sha", "filename": "readme.txt"},
+    with pytest.raises(RuntimeError, match="New schema required"):
+        VnIngestionRepository(
+            conn,
+            upsert_series=lambda *args, **kwargs: None,
+            upsert_visual_novel_record=lambda *args, **kwargs: None,
+            sync_vn_tags=lambda *args, **kwargs: None,
+            sync_canon_relationship=lambda *args, **kwargs: None,
+            upsert_build_record=lambda *args, **kwargs: None,
+            sync_build_target_platforms=lambda *args, **kwargs: None,
+            sync_build_relations=lambda *args, **kwargs: None,
+            resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
+            create_artifact_record=lambda *args, **kwargs: None,
         )
 
 
