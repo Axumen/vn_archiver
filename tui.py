@@ -267,6 +267,31 @@ def toggle_metadata_editor_mode():
 
 
 def process_incoming_pairs():
+    """Pair-processing submenu: paired ingest, build-only upsert, or file-to-build linking."""
+    print()
+    panel("Process Incoming")
+    print(PRIMARY + "  1) Process Incoming Pairs (File + YAML)")
+    print(PRIMARY + "  2) Create Build from Metadata YAML")
+    print(PRIMARY + "  3) Add File to Existing Build")
+    print(PRIMARY + "  0) Back\n")
+
+    mode = prompt("Select option: ")
+    if mode in ("", "0"):
+        return
+    if mode == "1":
+        _process_incoming_pairs()
+        return
+    if mode == "2":
+        upsert_build_from_metadata_yaml()
+        return
+    if mode == "3":
+        add_file_to_existing_build()
+        return
+
+    notify("Invalid option.", "error")
+
+
+def _process_incoming_pairs():
     """Minimal processing workflow: pair incoming file + YAML by stem and ingest."""
     print()
     panel("Process Incoming Pairs (Minimal Workflow)")
@@ -327,6 +352,122 @@ def process_incoming_pairs():
         if os.path.exists(metadata_path):
             os.remove(metadata_path)
             notify(f"Removed processed metadata yaml: {yaml_name}", "info")
+
+
+def add_file_to_existing_build():
+    print()
+    panel("Add File to Existing Build")
+
+    if not os.path.exists(INCOMING_DIR):
+        os.makedirs(INCOMING_DIR)
+
+    candidate_files = sorted([
+        f for f in os.listdir(INCOMING_DIR)
+        if os.path.isfile(os.path.join(INCOMING_DIR, f))
+        and not f.lower().endswith((".yaml", ".yml"))
+    ])
+    if not candidate_files:
+        notify(f"No archive/artifact files found in '{INCOMING_DIR}' (excluding yaml).", "error")
+        return
+
+    panel("Select File")
+    for i, filename in enumerate(candidate_files, 1):
+        print(TEXT + f"[{i}] {filename}")
+
+    file_choice = prompt("Select file number, or 0 to cancel: ")
+    if file_choice in ("", "0"):
+        return
+    try:
+        file_idx = int(file_choice) - 1
+        if not (0 <= file_idx < len(candidate_files)):
+            notify("Invalid file selection.", "error")
+            return
+    except ValueError:
+        notify("Invalid input.", "error")
+        return
+
+    selected_file = candidate_files[file_idx]
+    selected_path = os.path.join(INCOMING_DIR, selected_file)
+
+    with get_connection() as conn:
+        has_build_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='build'"
+        ).fetchone() is not None
+        has_link_tables = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='file'"
+        ).fetchone() is not None and conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='build_file'"
+        ).fetchone() is not None
+
+        if not has_build_table or not has_link_tables:
+            notify("Current schema does not support Add File workflow (requires build + file + build_file).", "error")
+            return
+
+        build_rows = conn.execute(
+            """
+            SELECT
+                b.build_id,
+                v.title,
+                b.version,
+                b.build_type,
+                b.language,
+                b.distribution_platform
+            FROM build b
+            JOIN vn v ON v.vn_id = b.vn_id
+            ORDER BY v.title COLLATE NOCASE, b.version COLLATE NOCASE, b.build_id
+            """
+        ).fetchall()
+
+    if not build_rows:
+        notify("No builds found. Create a build first (option 2).", "error")
+        return
+
+    panel("Select Build")
+    for i, row in enumerate(build_rows, 1):
+        print(
+            TEXT
+            + f"[{i}] {row['title']} | v{row['version']} | "
+            + f"type={row['build_type'] or '-'} | lang={row['language'] or '-'} | "
+            + f"platform={row['distribution_platform'] or '-'}"
+        )
+
+    build_choice = prompt("Select build number, or 0 to cancel: ")
+    if build_choice in ("", "0"):
+        return
+    try:
+        build_idx = int(build_choice) - 1
+        if not (0 <= build_idx < len(build_rows)):
+            notify("Invalid build selection.", "error")
+            return
+    except ValueError:
+        notify("Invalid input.", "error")
+        return
+
+    build_id = int(build_rows[build_idx]["build_id"])
+    file_sha = sha256_file(selected_path)
+    file_size = os.path.getsize(selected_path)
+    archived_at = datetime.utcnow().isoformat() + "Z"
+
+    with get_connection() as conn:
+        file_row = conn.execute("SELECT file_id FROM file WHERE sha256 = ? LIMIT 1", (file_sha,)).fetchone()
+        if file_row:
+            file_id = int(file_row["file_id"])
+        else:
+            conn.execute(
+                "INSERT INTO file (sha256, size_bytes, first_seen_at, filename, mime_type) VALUES (?, ?, ?, ?, ?)",
+                (file_sha, file_size, archived_at, selected_file, None),
+            )
+            file_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO build_file (build_id, file_id, original_filename, archived_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (build_id, file_id, selected_file, archived_at),
+        )
+
+    notify(f"Linked file '{selected_file}' to build_id={build_id}.", "ok")
 
 def create_metadata_only():
     print()
