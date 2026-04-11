@@ -457,12 +457,12 @@ CSV_TO_TEXT_FIELDS = {
     "language",
     "content_rating",
     "content_mode",
+    "target_platform",
 }
 
 CSV_TO_LIST_FIELDS = {
     "aliases",
     "tags",
-    "target_platform",
 }
 
 PASSTHROUGH_FIELDS = {
@@ -1938,18 +1938,34 @@ def finalize_archive_creation(metadata, archives_data):
     build_release_type = metadata.get('release_type') or metadata.get('build_type')
     build_platform = metadata.get('platform') or metadata.get('distribution_platform')
     with get_connection() as conn:
-        build_row = conn.execute(
-            '''
-            SELECT id FROM builds
-            WHERE vn_id = ? AND version_string = ?
-              AND COALESCE(language, '') = COALESCE(?, '')
-              AND COALESCE(release_type, '') = COALESCE(?, '')
-              AND COALESCE(platform, '') = COALESCE(?, '')
-            ''',
-            (vn_id, metadata.get('version'), build_language, build_release_type, build_platform)
-        ).fetchone()
-        if build_row:
-            build_id = build_row['id']
+        has_legacy_builds = _table_exists(conn, "builds")
+        if has_legacy_builds:
+            build_row = conn.execute(
+                '''
+                SELECT id FROM builds
+                WHERE vn_id = ? AND version_string = ?
+                  AND COALESCE(language, '') = COALESCE(?, '')
+                  AND COALESCE(release_type, '') = COALESCE(?, '')
+                  AND COALESCE(platform, '') = COALESCE(?, '')
+                ''',
+                (vn_id, metadata.get('version'), build_language, build_release_type, build_platform)
+            ).fetchone()
+            if build_row:
+                build_id = build_row['id']
+        else:
+            build_row = conn.execute(
+                '''
+                SELECT build_id FROM build
+                WHERE vn_id = ? AND version = ?
+                  AND COALESCE(language, '') = COALESCE(?, '')
+                  AND COALESCE(build_type, '') = COALESCE(?, '')
+                  AND COALESCE(distribution_platform, '') = COALESCE(?, '')
+                LIMIT 1
+                ''',
+                (vn_id, metadata.get('version'), build_language, build_release_type, build_platform)
+            ).fetchone()
+            if build_row:
+                build_id = build_row['build_id']
 
     metadata_version_number = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
     if is_artifact_metadata(metadata):
@@ -2163,13 +2179,17 @@ def order_metadata_for_yaml(metadata):
 
 def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None):
     """Create a metadata.yaml copy and stage it in uploading/ with recommended naming."""
-    meta_sha = metadata.get('sha256')
-    if not meta_sha and isinstance(metadata.get('archives'), list) and metadata['archives']:
-        first_arch = metadata['archives'][0]
+    metadata_for_staging = dict(metadata or {})
+    metadata_for_staging.pop("_raw_text", None)
+    metadata_for_staging.pop("_source_file", None)
+
+    meta_sha = metadata_for_staging.get('sha256')
+    if not meta_sha and isinstance(metadata_for_staging.get('archives'), list) and metadata_for_staging['archives']:
+        first_arch = metadata_for_staging['archives'][0]
         if isinstance(first_arch, dict):
             meta_sha = first_arch.get('sha256')
 
-    final_name = build_recommended_metadata_name(metadata, meta_sha, metadata_version_number)
+    final_name = build_recommended_metadata_name(metadata_for_staging, meta_sha, metadata_version_number)
 
     if target_dir is None:
         target_dir = get_uploading_latest_dir(metadata)
@@ -2177,7 +2197,7 @@ def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir
     target_dir.mkdir(parents=True, exist_ok=True)
 
     temp_meta_path = target_dir / 'metadata.yaml'
-    ordered_metadata = order_metadata_for_yaml(metadata)
+    ordered_metadata = order_metadata_for_yaml(metadata_for_staging)
     with open(temp_meta_path, 'w', encoding='utf-8') as handle:
         yaml.dump(ordered_metadata, handle, sort_keys=False, allow_unicode=True)
 
