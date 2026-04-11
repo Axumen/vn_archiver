@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 import json
 import re
-from datetime import datetime
 from db_manager import initialize_database, get_connection
 from pathlib import Path
 from colorama import init, Fore, Style
@@ -317,136 +316,17 @@ def process_incoming_pairs():
         notify_pipeline("2", f"Parsed metadata: {yaml_name}")
 
         ordered_metadata = order_metadata_for_yaml(parsed)
-        try:
-            create_archive_from_metadata_file(
-                [archive_path],
-                ordered_metadata,
-                raw_text=raw_metadata_text,
-                source_file=metadata_path,
-            )
-        except Exception as exc:
-            notify(
-                f"Primary ingest path failed for '{archive_name}' ({exc}). Falling back to direct pair ingest.",
-                "warn",
-            )
-            _ingest_pair_direct_to_archive_db(
-                archive_path,
-                ordered_metadata,
-                raw_metadata_text=raw_metadata_text,
-                source_file=metadata_path,
-            )
+        create_archive_from_metadata_file(
+            [archive_path],
+            ordered_metadata,
+            raw_text=raw_metadata_text,
+            source_file=metadata_path,
+        )
         notify_pipeline("3-7", f"Paired/resolved/classified: {archive_name}", "ok")
 
         if os.path.exists(metadata_path):
             os.remove(metadata_path)
             notify(f"Removed processed metadata yaml: {yaml_name}", "info")
-
-
-def _ingest_pair_direct_to_archive_db(archive_path, metadata, *, raw_metadata_text, source_file):
-    """
-    Fallback ingestion path for pair processing.
-
-    Writes VN/build/file link rows directly to archive.db using the current
-    domain schema when the legacy ingest route is unavailable.
-    """
-    title = str(metadata.get("title") or "").strip()
-    version = str(metadata.get("version") or "").strip()
-    if not title or not version:
-        raise ValueError("Paired ingest requires metadata fields: title and version")
-
-    archive_name = Path(archive_path).name
-    archive_sha = sha256_file(archive_path)
-    archive_size = os.path.getsize(archive_path)
-    now_utc = datetime.utcnow().isoformat() + "Z"
-
-    with get_connection() as conn:
-        table_row = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='build'"
-        ).fetchone()
-        if not table_row:
-            initialize_database(reset=False)
-
-    with get_connection() as conn:
-        vn_row = conn.execute("SELECT vn_id FROM vn WHERE title = ? LIMIT 1", (title,)).fetchone()
-        if vn_row:
-            vn_id = vn_row["vn_id"]
-        else:
-            conn.execute("INSERT INTO vn (title) VALUES (?)", (title,))
-            vn_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-        build_type = metadata.get("build_type") or metadata.get("release_type")
-        distribution_model = metadata.get("distribution_model") or metadata.get("access_model")
-        distribution_platform = metadata.get("distribution_platform")
-        language = metadata.get("language")
-        edition = metadata.get("edition")
-
-        build_row = conn.execute(
-            """
-            SELECT build_id
-            FROM build
-            WHERE vn_id = ?
-              AND version = ?
-              AND COALESCE(language, '') = COALESCE(?, '')
-              AND COALESCE(build_type, '') = COALESCE(?, '')
-              AND COALESCE(edition, '') = COALESCE(?, '')
-              AND COALESCE(distribution_platform, '') = COALESCE(?, '')
-            LIMIT 1
-            """,
-            (vn_id, version, language, build_type, edition, distribution_platform),
-        ).fetchone()
-        if build_row:
-            build_id = build_row["build_id"]
-        else:
-            conn.execute(
-                """
-                INSERT INTO build (
-                    vn_id, version, build_type, distribution_model, distribution_platform,
-                    language, translator, edition, release_date, engine, engine_version,
-                    target_platform, notes, change_note
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    vn_id,
-                    version,
-                    build_type,
-                    distribution_model,
-                    distribution_platform,
-                    language,
-                    metadata.get("translator"),
-                    edition,
-                    metadata.get("release_date"),
-                    metadata.get("engine"),
-                    metadata.get("engine_version"),
-                    metadata.get("target_platform"),
-                    metadata.get("notes"),
-                    metadata.get("change_note"),
-                ),
-            )
-            build_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-        file_row = conn.execute("SELECT file_id FROM file WHERE sha256 = ? LIMIT 1", (archive_sha,)).fetchone()
-        if file_row:
-            file_id = file_row["file_id"]
-        else:
-            conn.execute(
-                "INSERT INTO file (sha256, size_bytes, first_seen_at, filename, mime_type) VALUES (?, ?, ?, ?, ?)",
-                (archive_sha, archive_size, now_utc, archive_name, None),
-            )
-            file_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO build_file (build_id, file_id, original_filename, archived_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (build_id, file_id, archive_name, now_utc),
-        )
-
-        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata_raw'").fetchone():
-            conn.execute(
-                "INSERT INTO metadata_raw (raw_text, source_file, artifact_id) VALUES (?, ?, ?)",
-                (raw_metadata_text, source_file, file_id),
-            )
 
 def create_metadata_only():
     print()
