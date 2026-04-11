@@ -130,6 +130,20 @@ CREATE TABLE IF NOT EXISTS build_languages (
     FOREIGN KEY (language_id) REFERENCES languages(language_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS metadata_raw_versions (
+    metadata_raw_id INTEGER PRIMARY KEY,
+    build_id INTEGER NOT NULL,
+    file_id INTEGER,
+    source_file TEXT,
+    raw_text TEXT NOT NULL,
+    raw_sha256 TEXT NOT NULL,
+    version_number INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (build_id) REFERENCES build(build_id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES file(file_id) ON DELETE SET NULL,
+    UNIQUE (build_id, version_number)
+);
+
 CREATE INDEX IF NOT EXISTS idx_build_vn ON build(vn_id);
 CREATE INDEX IF NOT EXISTS idx_build_type ON build(build_type);
 CREATE INDEX IF NOT EXISTS idx_file_sha256 ON file(sha256);
@@ -142,5 +156,7 @@ CREATE INDEX IF NOT EXISTS idx_vn_publishers_vn ON vn_publishers(vn_id);
 CREATE INDEX IF NOT EXISTS idx_vn_publishers_pub ON vn_publishers(publisher_id);
 CREATE INDEX IF NOT EXISTS idx_build_languages_build ON build_languages(build_id);
 CREATE INDEX IF NOT EXISTS idx_build_languages_lang ON build_languages(language_id);
+CREATE INDEX IF NOT EXISTS idx_metadata_raw_build ON metadata_raw_versions(build_id, version_number DESC);
+CREATE INDEX IF NOT EXISTS idx_metadata_raw_sha ON metadata_raw_versions(raw_sha256);
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_build_identity ON build(vn_id, normalized_version, language, edition, distribution_platform);

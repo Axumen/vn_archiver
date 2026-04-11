@@ -252,6 +252,20 @@ def make_conn_new_schema():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE metadata_raw_versions (
+            metadata_raw_id INTEGER PRIMARY KEY,
+            build_id INTEGER NOT NULL,
+            file_id INTEGER,
+            source_file TEXT,
+            raw_text TEXT NOT NULL,
+            raw_sha256 TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     return conn
 
 
@@ -411,3 +425,37 @@ def test_repository_syncs_build_languages_when_tables_exist():
         (build_id,),
     ).fetchall()
     assert [row["code"] for row in rows] == ["english", "japanese"]
+
+
+def test_repository_tracks_raw_metadata_versions_per_build():
+    conn = make_conn_new_schema()
+    repo = VnIngestionRepository(
+        conn,
+        upsert_series=lambda *args, **kwargs: None,
+        upsert_visual_novel_record=lambda *args, **kwargs: None,
+        sync_vn_tags=lambda *args, **kwargs: None,
+        sync_canon_relationship=lambda *args, **kwargs: None,
+        upsert_build_record=lambda *args, **kwargs: None,
+        sync_build_target_platforms=lambda *args, **kwargs: None,
+        sync_build_relations=lambda *args, **kwargs: None,
+        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
+        create_artifact_record=lambda *args, **kwargs: None,
+    )
+
+    repo.create_metadata_raw("title: A\nversion: 1.0\n", "incoming/a.yaml", artifact_id=7, build_id=3)
+    repo.create_metadata_raw("title: A\nversion: 1.1\n", "incoming/a.yaml", artifact_id=8, build_id=3)
+
+    rows = conn.execute(
+        """
+        SELECT build_id, file_id, source_file, version_number, raw_sha256
+        FROM metadata_raw_versions
+        WHERE build_id = 3
+        ORDER BY version_number
+        """
+    ).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["file_id"] == 7
+    assert rows[0]["version_number"] == 1
+    assert rows[1]["file_id"] == 8
+    assert rows[1]["version_number"] == 2
+    assert rows[0]["raw_sha256"] != rows[1]["raw_sha256"]

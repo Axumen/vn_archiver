@@ -1,3 +1,7 @@
+import hashlib
+from datetime import datetime
+
+
 class VnIngestionRepository:
     """Repository adapter for VN/build/file ingestion across schema variants.
 
@@ -421,10 +425,32 @@ class VnIngestionRepository:
             return self._create_artifact_in_file_tables(build_id, metadata, archive_data)
         raise RuntimeError("No supported artifact/file persistence tables found in current schema.")
 
-    def create_metadata_raw(self, raw_text, source_file, artifact_id):
-        if not self._table_exists("metadata_raw"):
+    def create_metadata_raw(self, raw_text, source_file, artifact_id, build_id=None):
+        if self._table_exists("metadata_raw_versions"):
+            if build_id is None:
+                return
+
+            raw_text_value = str(raw_text or "")
+            raw_sha256 = hashlib.sha256(raw_text_value.encode("utf-8")).hexdigest()
+            created_at = datetime.utcnow().isoformat() + "Z"
+
+            next_version = self.conn.execute(
+                "SELECT COALESCE(MAX(version_number), 0) + 1 FROM metadata_raw_versions WHERE build_id = ?",
+                (build_id,),
+            ).fetchone()[0]
+
+            self.conn.execute(
+                """
+                INSERT INTO metadata_raw_versions (
+                    build_id, file_id, source_file, raw_text, raw_sha256, version_number, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (build_id, artifact_id, source_file, raw_text_value, raw_sha256, next_version, created_at),
+            )
             return
-        self.conn.execute(
-            "INSERT INTO metadata_raw (raw_text, source_file, artifact_id) VALUES (?, ?, ?)",
-            (raw_text, source_file, artifact_id),
-        )
+
+        if self._table_exists("metadata_raw"):
+            self.conn.execute(
+                "INSERT INTO metadata_raw (raw_text, source_file, artifact_id) VALUES (?, ?, ?)",
+                (raw_text, source_file, artifact_id),
+            )
