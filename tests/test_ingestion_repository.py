@@ -201,6 +201,57 @@ def make_conn_new_schema():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE developers (
+            developer_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE vn_developers (
+            vn_id INTEGER NOT NULL,
+            developer_id INTEGER NOT NULL,
+            PRIMARY KEY (vn_id, developer_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE publishers (
+            publisher_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE vn_publishers (
+            vn_id INTEGER NOT NULL,
+            publisher_id INTEGER NOT NULL,
+            PRIMARY KEY (vn_id, publisher_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE languages (
+            language_id INTEGER PRIMARY KEY,
+            code TEXT NOT NULL UNIQUE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE build_languages (
+            build_id INTEGER NOT NULL,
+            language_id INTEGER NOT NULL,
+            PRIMARY KEY (build_id, language_id)
+        )
+        """
+    )
     return conn
 
 
@@ -282,3 +333,81 @@ def test_repository_syncs_vn_tags_when_tables_exist():
         (vn_id,),
     ).fetchall()
     assert [row["name"] for row in rows] == ["drama", "nakige"]
+
+
+def test_repository_syncs_vn_developers_and_publishers_when_tables_exist():
+    conn = make_conn_new_schema()
+    repo = VnIngestionRepository(
+        conn,
+        upsert_series=lambda *args, **kwargs: None,
+        upsert_visual_novel_record=lambda *args, **kwargs: None,
+        sync_vn_tags=lambda *args, **kwargs: None,
+        sync_canon_relationship=lambda *args, **kwargs: None,
+        upsert_build_record=lambda *args, **kwargs: None,
+        sync_build_target_platforms=lambda *args, **kwargs: None,
+        sync_build_relations=lambda *args, **kwargs: None,
+        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
+        create_artifact_record=lambda *args, **kwargs: None,
+    )
+
+    vn_id = repo.get_or_create_vn(
+        {"title": "Rewrite", "developer": ["Key", "VisualArt's"], "publisher": "Key"}
+    )
+
+    dev_rows = conn.execute(
+        """
+        SELECT d.name
+        FROM vn_developers vd
+        JOIN developers d ON d.developer_id = vd.developer_id
+        WHERE vd.vn_id = ?
+        ORDER BY d.name
+        """,
+        (vn_id,),
+    ).fetchall()
+    pub_rows = conn.execute(
+        """
+        SELECT p.name
+        FROM vn_publishers vp
+        JOIN publishers p ON p.publisher_id = vp.publisher_id
+        WHERE vp.vn_id = ?
+        ORDER BY p.name
+        """,
+        (vn_id,),
+    ).fetchall()
+
+    assert [row["name"] for row in dev_rows] == ["key", "visualart's"]
+    assert [row["name"] for row in pub_rows] == ["key"]
+
+
+def test_repository_syncs_build_languages_when_tables_exist():
+    conn = make_conn_new_schema()
+    repo = VnIngestionRepository(
+        conn,
+        upsert_series=lambda *args, **kwargs: None,
+        upsert_visual_novel_record=lambda *args, **kwargs: None,
+        sync_vn_tags=lambda *args, **kwargs: None,
+        sync_canon_relationship=lambda *args, **kwargs: None,
+        upsert_build_record=lambda *args, **kwargs: None,
+        sync_build_target_platforms=lambda *args, **kwargs: None,
+        sync_build_relations=lambda *args, **kwargs: None,
+        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
+        create_artifact_record=lambda *args, **kwargs: None,
+    )
+
+    vn_id = repo.get_or_create_vn({"title": "Clannad"})
+    build_id = repo.get_or_create_build(
+        vn_id,
+        {"version": "1.0", "build_type": "full", "language": ["english", "japanese"]},
+    )
+
+    rows = conn.execute(
+        """
+        SELECT l.code
+        FROM build_languages bl
+        JOIN languages l ON l.language_id = bl.language_id
+        WHERE bl.build_id = ?
+        ORDER BY l.code
+        """,
+        (build_id,),
+    ).fetchall()
+    assert [row["code"] for row in rows] == ["english", "japanese"]

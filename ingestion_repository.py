@@ -126,6 +126,61 @@ class VnIngestionRepository:
                 (vn_id, tag_id),
             )
 
+    def _sync_vn_people_if_supported(
+        self,
+        *,
+        vn_id,
+        raw_value,
+        dictionary_table,
+        dictionary_id_column,
+        dictionary_name_column,
+        join_table,
+        join_foreign_id_column,
+    ):
+        if not self._table_exists(dictionary_table) or not self._table_exists(join_table):
+            return
+
+        values = self._normalize_tag_list(raw_value)
+        self.conn.execute(f"DELETE FROM {join_table} WHERE vn_id = ?", (vn_id,))
+        for name in values:
+            row = self.conn.execute(
+                f"SELECT {dictionary_id_column} FROM {dictionary_table} WHERE {dictionary_name_column} = ? LIMIT 1",
+                (name,),
+            ).fetchone()
+            if row:
+                foreign_id = int(row[dictionary_id_column])
+            else:
+                self.conn.execute(
+                    f"INSERT INTO {dictionary_table} ({dictionary_name_column}) VALUES (?)",
+                    (name,),
+                )
+                foreign_id = int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            self.conn.execute(
+                f"INSERT OR IGNORE INTO {join_table} (vn_id, {join_foreign_id_column}) VALUES (?, ?)",
+                (vn_id, foreign_id),
+            )
+
+    def _sync_build_languages_if_supported(self, build_id, language_value):
+        if not self._table_exists("languages") or not self._table_exists("build_languages"):
+            return
+
+        values = self._normalize_tag_list(language_value)
+        self.conn.execute("DELETE FROM build_languages WHERE build_id = ?", (build_id,))
+        for code in values:
+            row = self.conn.execute(
+                "SELECT language_id FROM languages WHERE code = ? LIMIT 1",
+                (code,),
+            ).fetchone()
+            if row:
+                language_id = int(row["language_id"])
+            else:
+                self.conn.execute("INSERT INTO languages (code) VALUES (?)", (code,))
+                language_id = int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            self.conn.execute(
+                "INSERT OR IGNORE INTO build_languages (build_id, language_id) VALUES (?, ?)",
+                (build_id, language_id),
+            )
+
     def resolve_existing_build_for_artifact(self, metadata):
         return self._resolve_existing_build_for_artifact(self.conn, metadata)
 
@@ -172,6 +227,24 @@ class VnIngestionRepository:
                     tuple(vn_values.values()) + (vn_id,),
                 )
             self._sync_vn_tags_if_supported(vn_id, metadata.get("tags"))
+            self._sync_vn_people_if_supported(
+                vn_id=vn_id,
+                raw_value=metadata.get("developer"),
+                dictionary_table="developers",
+                dictionary_id_column="developer_id",
+                dictionary_name_column="name",
+                join_table="vn_developers",
+                join_foreign_id_column="developer_id",
+            )
+            self._sync_vn_people_if_supported(
+                vn_id=vn_id,
+                raw_value=metadata.get("publisher"),
+                dictionary_table="publishers",
+                dictionary_id_column="publisher_id",
+                dictionary_name_column="name",
+                join_table="vn_publishers",
+                join_foreign_id_column="publisher_id",
+            )
             return vn_id
 
         insert_columns = ["title"]
@@ -187,13 +260,31 @@ class VnIngestionRepository:
         )
         vn_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         self._sync_vn_tags_if_supported(vn_id, metadata.get("tags"))
+        self._sync_vn_people_if_supported(
+            vn_id=vn_id,
+            raw_value=metadata.get("developer"),
+            dictionary_table="developers",
+            dictionary_id_column="developer_id",
+            dictionary_name_column="name",
+            join_table="vn_developers",
+            join_foreign_id_column="developer_id",
+        )
+        self._sync_vn_people_if_supported(
+            vn_id=vn_id,
+            raw_value=metadata.get("publisher"),
+            dictionary_table="publishers",
+            dictionary_id_column="publisher_id",
+            dictionary_name_column="name",
+            join_table="vn_publishers",
+            join_foreign_id_column="publisher_id",
+        )
         return vn_id
 
     def _build_lookup_filters(self, metadata):
         version_value = str(metadata.get("version") or "").strip()
-        language = metadata.get("language")
+        language = self._normalize_text_value(metadata.get("language"))
         build_type = metadata.get("build_type") or metadata.get("release_type")
-        platform = metadata.get("platform") or metadata.get("target_platform")
+        platform = self._normalize_text_value(metadata.get("platform") or metadata.get("target_platform"))
         return version_value, language, build_type, platform
 
     def find_build(self, vn_id, metadata):
@@ -277,11 +368,14 @@ class VnIngestionRepository:
             f"INSERT INTO {self.build_table} ({', '.join(insert_columns)}) VALUES ({placeholders})",
             tuple(values),
         )
-        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        build_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        self._sync_build_languages_if_supported(build_id, metadata.get("language"))
+        return build_id
 
     def get_or_create_build(self, vn_id, metadata):
         existing = self.find_build(vn_id, metadata)
         if existing:
+            self._sync_build_languages_if_supported(existing, metadata.get("language"))
             return existing
         return self.create_build(vn_id, metadata)
 
