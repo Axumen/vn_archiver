@@ -392,6 +392,30 @@ class VnIngestionRepository:
             insert_columns.append(build_column)
             values.append(normalized_value)
 
+        build_column_to_metadata = {
+            "distribution_model": "distribution_model",
+            "distribution_platform": "distribution_platform",
+            "translator": "translator",
+            "edition": "edition",
+            "release_date": "release_date",
+            "engine": "engine",
+            "engine_version": "engine_version",
+            "notes": "notes",
+            "change_note": "change_note",
+        }
+
+        for build_column, metadata_key in build_column_to_metadata.items():
+            if build_column not in columns:
+                continue
+            if metadata_key not in metadata:
+                continue
+            if build_column == "translator":
+                normalized_value = self._normalize_translator_value(metadata.get(metadata_key))
+            else:
+                normalized_value = self._normalize_text_value(metadata.get(metadata_key))
+            insert_columns.append(build_column)
+            values.append(normalized_value)
+
         placeholders = ", ".join(["?"] * len(insert_columns))
         self.conn.execute(
             f"INSERT INTO {self.build_table} ({', '.join(insert_columns)}) VALUES ({placeholders})",
