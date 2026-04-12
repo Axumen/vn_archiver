@@ -66,6 +66,28 @@ CREATE TABLE IF NOT EXISTS build_file (
     FOREIGN KEY (file_id) REFERENCES file(file_id) ON DELETE CASCADE
 );
 
+-- Parsed metadata captured at file-attachment time (VN > Build > File workflow)
+CREATE TABLE IF NOT EXISTS build_file_metadata (
+    metadata_id INTEGER PRIMARY KEY,
+    build_id INTEGER NOT NULL,
+    file_id INTEGER NOT NULL,
+    metadata_version INTEGER NOT NULL,
+    title TEXT,
+    version TEXT,
+    build_type TEXT,
+    distribution_platform TEXT,
+    language TEXT,
+    edition TEXT,
+    target_platform TEXT,
+    release_date TEXT,
+    source TEXT,
+    notes TEXT,
+    change_note TEXT,
+    raw_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (build_id, file_id) REFERENCES build_file(build_id, file_id) ON DELETE CASCADE
+);
+
 -- Build relationship semantics using metadata fields + explicit build linkage
 CREATE TABLE IF NOT EXISTS build_relation (
     relation_id INTEGER PRIMARY KEY,
@@ -146,6 +168,7 @@ CREATE TABLE IF NOT EXISTS metadata_raw_versions (
 CREATE INDEX IF NOT EXISTS idx_build_vn ON build(vn_id);
 CREATE INDEX IF NOT EXISTS idx_build_type ON build(build_type);
 CREATE INDEX IF NOT EXISTS idx_file_sha256 ON file(sha256);
+CREATE INDEX IF NOT EXISTS idx_build_file_metadata_pair ON build_file_metadata(build_id, file_id);
 CREATE INDEX IF NOT EXISTS idx_build_relation_from ON build_relation(from_build_id);
 CREATE INDEX IF NOT EXISTS idx_vn_tags_vn ON vn_tags(vn_id);
 CREATE INDEX IF NOT EXISTS idx_vn_tags_tag ON vn_tags(tag_id);
