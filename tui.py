@@ -19,6 +19,7 @@ from vn_archiver import (
     UPLOADING_DIR,
     sha256_file,
     load_metadata_template,
+    load_file_metadata_template,
     resolve_prompt_fields,
     get_available_metadata_template_versions,
     detect_latest_metadata_template_version,
@@ -414,13 +415,17 @@ def add_file_to_existing_build():
                 metadata_version INTEGER NOT NULL,
                 title TEXT,
                 version TEXT,
+                artifact_type TEXT,
                 build_type TEXT,
+                normalized_version TEXT,
                 distribution_platform TEXT,
+                platform TEXT,
                 language TEXT,
                 edition TEXT,
-                target_platform TEXT,
+                base_artifact_sha256 TEXT,
+                base_artifact_filename TEXT,
                 release_date TEXT,
-                source TEXT,
+                source_url TEXT,
                 notes TEXT,
                 change_note TEXT,
                 raw_json TEXT NOT NULL,
@@ -429,6 +434,20 @@ def add_file_to_existing_build():
             )
             """
         )
+        existing_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(build_file_metadata)").fetchall()
+        }
+        required_columns = (
+            "artifact_type",
+            "normalized_version",
+            "platform",
+            "base_artifact_sha256",
+            "base_artifact_filename",
+            "source_url",
+        )
+        for column_name in required_columns:
+            if column_name not in existing_columns:
+                conn.execute(f"ALTER TABLE build_file_metadata ADD COLUMN {column_name} TEXT")
 
         build_rows = conn.execute(
             """
@@ -477,12 +496,13 @@ def add_file_to_existing_build():
     archived_at = _dt.utcnow().isoformat() + "Z"
 
     metadata_version = get_active_metadata_template_version()
-    template = load_metadata_template(metadata_version)
+    template = load_file_metadata_template(metadata_version)
     prompt_fields = resolve_prompt_fields(template)
     file_metadata = {
         "metadata_version": metadata_version,
         "title": selected_build["title"] or "",
         "version": selected_build["version"] or "",
+        "artifact_type": "game_archive",
         "build_type": selected_build["build_type"] or "",
         "language": selected_build["language"] or "",
         "distribution_platform": selected_build["distribution_platform"] or "",
@@ -518,10 +538,11 @@ def add_file_to_existing_build():
         conn.execute(
             """
             INSERT INTO build_file_metadata (
-                build_id, file_id, metadata_version, title, version, build_type,
-                distribution_platform, language, edition, target_platform,
-                release_date, source, notes, change_note, raw_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                build_id, file_id, metadata_version, title, version, artifact_type,
+                build_type, normalized_version, distribution_platform, platform,
+                language, edition, base_artifact_sha256, base_artifact_filename,
+                release_date, source_url, notes, change_note, raw_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 build_id,
@@ -529,13 +550,17 @@ def add_file_to_existing_build():
                 int(file_metadata.get("metadata_version") or metadata_version),
                 str(file_metadata.get("title") or ""),
                 str(file_metadata.get("version") or ""),
+                str(file_metadata.get("artifact_type") or ""),
                 str(file_metadata.get("build_type") or ""),
+                str(file_metadata.get("normalized_version") or ""),
                 str(file_metadata.get("distribution_platform") or ""),
+                str(file_metadata.get("platform") or ""),
                 str(file_metadata.get("language") or ""),
                 str(file_metadata.get("edition") or ""),
-                str(file_metadata.get("target_platform") or ""),
+                str(file_metadata.get("base_artifact_sha256") or ""),
+                str(file_metadata.get("base_artifact_filename") or ""),
                 str(file_metadata.get("release_date") or ""),
-                str(file_metadata.get("source") or ""),
+                str(file_metadata.get("source_url") or ""),
                 str(file_metadata.get("notes") or ""),
                 str(file_metadata.get("change_note") or ""),
                 json.dumps(file_metadata, ensure_ascii=False, sort_keys=True),
