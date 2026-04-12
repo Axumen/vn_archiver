@@ -6,9 +6,9 @@ from datetime import datetime
 class VnIngestionRepository:
     """Repository adapter for VN/build/file ingestion on the canonical schema.
 
-    Strictly supports the new domain schema:
+    Strictly supports the canonical domain schema:
     - `vn`, `build`, `file`, `build_file`
-    - optional enrichments: `tags`, `vn_tags`, `developers`, `vn_developers`,
+    - enrichments: `tags`, `vn_tags`, `developers`, `vn_developers`,
       `publishers`, `vn_publishers`, `languages`, `build_languages`,
       `metadata_raw_versions`
     """
@@ -72,6 +72,45 @@ class VnIngestionRepository:
         self.build_version_column = "version"
         self.build_platform_column = "target_platform"
 
+        required_tables = (
+            "file",
+            "build_file",
+            "tags",
+            "vn_tags",
+            "developers",
+            "vn_developers",
+            "publishers",
+            "vn_publishers",
+            "languages",
+            "build_languages",
+            "metadata_raw_versions",
+        )
+        missing_tables = [name for name in required_tables if not self._table_exists(name)]
+        if missing_tables:
+            raise RuntimeError(
+                f"New schema required: missing canonical table(s): {', '.join(missing_tables)}."
+            )
+
+        required_build_columns = (
+            "language",
+            "build_type",
+            "target_platform",
+            "distribution_model",
+            "distribution_platform",
+            "translator",
+            "edition",
+            "release_date",
+            "engine",
+            "engine_version",
+            "notes",
+            "change_note",
+        )
+        missing_build_columns = [name for name in required_build_columns if name not in build_columns]
+        if missing_build_columns:
+            raise RuntimeError(
+                f"New schema required: missing canonical build column(s): {', '.join(missing_build_columns)}."
+            )
+
         self.has_file_link_tables = self._table_exists("file") and self._table_exists("build_file")
 
     @staticmethod
@@ -123,10 +162,7 @@ class VnIngestionRepository:
         normalized = str(value).strip().lower()
         return [normalized] if normalized else []
 
-    def _sync_vn_tags_if_supported(self, vn_id, tags_value):
-        if not self._table_exists("tags") or not self._table_exists("vn_tags"):
-            return
-
+    def _sync_vn_tags_tables(self, vn_id, tags_value):
         tags = self._normalize_tag_list(tags_value)
         self.conn.execute("DELETE FROM vn_tags WHERE vn_id = ?", (vn_id,))
         for tag in tags:
@@ -141,7 +177,7 @@ class VnIngestionRepository:
                 (vn_id, tag_id),
             )
 
-    def _sync_vn_people_if_supported(
+    def _sync_vn_people_tables(
         self,
         *,
         vn_id,
@@ -152,9 +188,6 @@ class VnIngestionRepository:
         join_table,
         join_foreign_id_column,
     ):
-        if not self._table_exists(dictionary_table) or not self._table_exists(join_table):
-            return
-
         values = self._normalize_tag_list(raw_value)
         self.conn.execute(f"DELETE FROM {join_table} WHERE vn_id = ?", (vn_id,))
         for name in values:
@@ -175,10 +208,7 @@ class VnIngestionRepository:
                 (vn_id, foreign_id),
             )
 
-    def _sync_build_languages_if_supported(self, build_id, language_value):
-        if not self._table_exists("languages") or not self._table_exists("build_languages"):
-            return
-
+    def _sync_build_languages_tables(self, build_id, language_value):
         values = self._normalize_tag_list(language_value)
         self.conn.execute("DELETE FROM build_languages WHERE build_id = ?", (build_id,))
         for code in values:
@@ -241,8 +271,8 @@ class VnIngestionRepository:
                     f"UPDATE {self.vn_table} SET {assignments} WHERE {self.vn_id_column} = ?",
                     tuple(vn_values.values()) + (vn_id,),
                 )
-            self._sync_vn_tags_if_supported(vn_id, metadata.get("tags"))
-            self._sync_vn_people_if_supported(
+            self._sync_vn_tags_tables(vn_id, metadata.get("tags"))
+            self._sync_vn_people_tables(
                 vn_id=vn_id,
                 raw_value=metadata.get("developer"),
                 dictionary_table="developers",
@@ -251,7 +281,7 @@ class VnIngestionRepository:
                 join_table="vn_developers",
                 join_foreign_id_column="developer_id",
             )
-            self._sync_vn_people_if_supported(
+            self._sync_vn_people_tables(
                 vn_id=vn_id,
                 raw_value=metadata.get("publisher"),
                 dictionary_table="publishers",
@@ -274,8 +304,8 @@ class VnIngestionRepository:
             tuple(insert_values),
         )
         vn_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        self._sync_vn_tags_if_supported(vn_id, metadata.get("tags"))
-        self._sync_vn_people_if_supported(
+        self._sync_vn_tags_tables(vn_id, metadata.get("tags"))
+        self._sync_vn_people_tables(
             vn_id=vn_id,
             raw_value=metadata.get("developer"),
             dictionary_table="developers",
@@ -284,7 +314,7 @@ class VnIngestionRepository:
             join_table="vn_developers",
             join_foreign_id_column="developer_id",
         )
-        self._sync_vn_people_if_supported(
+        self._sync_vn_people_tables(
             vn_id=vn_id,
             raw_value=metadata.get("publisher"),
             dictionary_table="publishers",
@@ -307,21 +337,17 @@ class VnIngestionRepository:
         if not version_value:
             return None
 
-        columns = self._table_columns(self.build_table)
         where_clauses = ["vn_id = ?", f"{self.build_version_column} = ?"]
         params = [vn_id, version_value]
 
-        if "language" in columns:
-            where_clauses.append("COALESCE(language, '') = COALESCE(?, '')")
-            params.append(language)
-        if "build_type" in columns:
-            where_clauses.append("COALESCE(build_type, '') = COALESCE(?, '')")
-            params.append(build_type)
-        if self.build_platform_column in columns:
-            where_clauses.append(
-                f"COALESCE({self.build_platform_column}, '') = COALESCE(?, '')"
-            )
-            params.append(platform)
+        where_clauses.append("COALESCE(language, '') = COALESCE(?, '')")
+        params.append(language)
+        where_clauses.append("COALESCE(build_type, '') = COALESCE(?, '')")
+        params.append(build_type)
+        where_clauses.append(
+            f"COALESCE({self.build_platform_column}, '') = COALESCE(?, '')"
+        )
+        params.append(platform)
 
         row = self.conn.execute(
             f"SELECT {self.build_id_column} FROM {self.build_table} WHERE {' AND '.join(where_clauses)} ORDER BY {self.build_id_column} DESC LIMIT 1",
@@ -334,19 +360,37 @@ class VnIngestionRepository:
         if not version_value:
             version_value = "1.0"
 
-        columns = self._table_columns(self.build_table)
         insert_columns = ["vn_id", self.build_version_column]
         values = [vn_id, version_value]
 
-        if "language" in columns:
-            insert_columns.append("language")
-            values.append(language)
-        if "build_type" in columns:
-            insert_columns.append("build_type")
-            values.append(build_type)
-        if self.build_platform_column in columns:
-            insert_columns.append(self.build_platform_column)
-            values.append(platform)
+        insert_columns.append("language")
+        values.append(language)
+        insert_columns.append("build_type")
+        values.append(build_type)
+        insert_columns.append(self.build_platform_column)
+        values.append(platform)
+
+        build_column_to_metadata = {
+            "distribution_model": "distribution_model",
+            "distribution_platform": "distribution_platform",
+            "translator": "translator",
+            "edition": "edition",
+            "release_date": "release_date",
+            "engine": "engine",
+            "engine_version": "engine_version",
+            "notes": "notes",
+            "change_note": "change_note",
+        }
+
+        for build_column, metadata_key in build_column_to_metadata.items():
+            if metadata_key not in metadata:
+                continue
+            if build_column == "translator":
+                normalized_value = self._normalize_translator_value(metadata.get(metadata_key))
+            else:
+                normalized_value = self._normalize_text_value(metadata.get(metadata_key))
+            insert_columns.append(build_column)
+            values.append(normalized_value)
 
         build_column_to_metadata = {
             "distribution_model": "distribution_model",
@@ -378,13 +422,13 @@ class VnIngestionRepository:
             tuple(values),
         )
         build_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        self._sync_build_languages_if_supported(build_id, metadata.get("language"))
+        self._sync_build_languages_tables(build_id, metadata.get("language"))
         return build_id
 
     def get_or_create_build(self, vn_id, metadata):
         existing = self.find_build(vn_id, metadata)
         if existing:
-            self._sync_build_languages_if_supported(existing, metadata.get("language"))
+            self._sync_build_languages_tables(existing, metadata.get("language"))
             return existing
         return self.create_build(vn_id, metadata)
 

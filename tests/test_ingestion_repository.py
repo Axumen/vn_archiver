@@ -106,8 +106,17 @@ def make_conn_new_schema():
             vn_id INTEGER NOT NULL,
             version TEXT NOT NULL,
             build_type TEXT,
+            distribution_model TEXT,
+            distribution_platform TEXT,
             language TEXT,
-            target_platform TEXT
+            translator TEXT,
+            edition TEXT,
+            release_date TEXT,
+            engine TEXT,
+            engine_version TEXT,
+            target_platform TEXT,
+            notes TEXT,
+            change_note TEXT
         )
         """
     )
