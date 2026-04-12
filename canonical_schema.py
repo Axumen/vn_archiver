@@ -80,6 +80,33 @@ FILE_TABLE = TableSpec(
     ),
 )
 
+BUILD_FILE_METADATA_TABLE = TableSpec(
+    name="build_file_metadata",
+    columns=(
+        ColumnSpec("metadata_id", "id", required=True),
+        ColumnSpec("build_id", "build_id", required=True),
+        ColumnSpec("file_id", "file_id", required=True),
+        ColumnSpec("metadata_version", "metadata_version", required=True),
+        ColumnSpec("title", "title"),
+        ColumnSpec("version", "version"),
+        ColumnSpec("artifact_type", "artifact_type"),
+        ColumnSpec("build_type", "build_type"),
+        ColumnSpec("normalized_version", "normalized_version"),
+        ColumnSpec("distribution_platform", "distribution_platform"),
+        ColumnSpec("platform", "platform"),
+        ColumnSpec("language", "language"),
+        ColumnSpec("edition", "edition"),
+        ColumnSpec("base_artifact_sha256", "base_artifact_sha256"),
+        ColumnSpec("base_artifact_filename", "base_artifact_filename"),
+        ColumnSpec("release_date", "release_date"),
+        ColumnSpec("source_url", "source_url"),
+        ColumnSpec("notes", "notes"),
+        ColumnSpec("change_note", "change_note"),
+        ColumnSpec("raw_json", "metadata_json", required=True),
+        ColumnSpec("created_at", "created_at", required=True),
+    ),
+)
+
 BUILD_RELATION_TABLE = TableSpec(
     name="build_relation",
     columns=(
@@ -90,7 +117,13 @@ BUILD_RELATION_TABLE = TableSpec(
     ),
 )
 
-DOMAIN_TABLES = (VN_TABLE, BUILD_TABLE, FILE_TABLE, BUILD_RELATION_TABLE)
+DOMAIN_TABLES = (
+    VN_TABLE,
+    BUILD_TABLE,
+    FILE_TABLE,
+    BUILD_FILE_METADATA_TABLE,
+    BUILD_RELATION_TABLE,
+)
 
 
 def table_names() -> list[str]:

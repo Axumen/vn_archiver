@@ -1,6 +1,6 @@
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class VnIngestionRepository:
@@ -12,6 +12,18 @@ class VnIngestionRepository:
       `publishers`, `vn_publishers`, `languages`, `build_languages`,
       `metadata_raw_versions`
     """
+
+    BUILD_METADATA_COLUMN_MAP = {
+        "distribution_model": "distribution_model",
+        "distribution_platform": "distribution_platform",
+        "translator": "translator",
+        "edition": "edition",
+        "release_date": "release_date",
+        "engine": "engine",
+        "engine_version": "engine_version",
+        "notes": "notes",
+        "change_note": "change_note",
+    }
 
     def __init__(
         self,
@@ -328,7 +340,7 @@ class VnIngestionRepository:
     def _build_lookup_filters(self, metadata):
         version_value = str(metadata.get("version") or "").strip()
         language = self._normalize_text_value(metadata.get("language"))
-        build_type = metadata.get("build_type")
+        build_type = self._normalize_text_value(metadata.get("build_type"))
         platform = self._normalize_text_value(metadata.get("target_platform"))
         return version_value, language, build_type, platform
 
@@ -370,43 +382,7 @@ class VnIngestionRepository:
         insert_columns.append(self.build_platform_column)
         values.append(platform)
 
-        build_column_to_metadata = {
-            "distribution_model": "distribution_model",
-            "distribution_platform": "distribution_platform",
-            "translator": "translator",
-            "edition": "edition",
-            "release_date": "release_date",
-            "engine": "engine",
-            "engine_version": "engine_version",
-            "notes": "notes",
-            "change_note": "change_note",
-        }
-
-        for build_column, metadata_key in build_column_to_metadata.items():
-            if metadata_key not in metadata:
-                continue
-            if build_column == "translator":
-                normalized_value = self._normalize_translator_value(metadata.get(metadata_key))
-            else:
-                normalized_value = self._normalize_text_value(metadata.get(metadata_key))
-            insert_columns.append(build_column)
-            values.append(normalized_value)
-
-        build_column_to_metadata = {
-            "distribution_model": "distribution_model",
-            "distribution_platform": "distribution_platform",
-            "translator": "translator",
-            "edition": "edition",
-            "release_date": "release_date",
-            "engine": "engine",
-            "engine_version": "engine_version",
-            "notes": "notes",
-            "change_note": "change_note",
-        }
-
-        for build_column, metadata_key in build_column_to_metadata.items():
-            if build_column not in columns:
-                continue
+        for build_column, metadata_key in self.BUILD_METADATA_COLUMN_MAP.items():
             if metadata_key not in metadata:
                 continue
             if build_column == "translator":
@@ -438,7 +414,8 @@ class VnIngestionRepository:
         return vn_id, build_id
 
     def _create_artifact_in_file_tables(self, build_id, metadata, archive_data):
-        artifact_sha = archive_data.get("sha256")
+        archive_data = archive_data or {}
+        artifact_sha = self._normalize_text_value(archive_data.get("sha256"))
         if not artifact_sha:
             return None
 
@@ -486,7 +463,7 @@ class VnIngestionRepository:
                 raw_json_value = json.dumps({"raw_value": str(raw_payload or "")}, ensure_ascii=False, sort_keys=True)
 
             raw_sha256 = hashlib.sha256(raw_json_value.encode("utf-8")).hexdigest()
-            created_at = datetime.utcnow().isoformat() + "Z"
+            created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
             next_version = self.conn.execute(
                 "SELECT COALESCE(MAX(version_number), 0) + 1 FROM metadata_raw_versions WHERE build_id = ?",

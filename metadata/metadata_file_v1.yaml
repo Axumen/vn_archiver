@@ -1,8 +1,7 @@
 metadata_version: 1
 
-# Artifact-focused sidecar baseline for Process Artifact workflows.
-# These files are inserted/validated through the same metadata
-# object/version pipelines used by other sidecars.
+# File-focused metadata baseline for VN > Build > File workflows.
+# This template is used when parsing/linking file metadata payloads.
 
 required:
   - title
@@ -33,4 +32,4 @@ optional:
 # base_artifact_sha256: "0123abcd..."
 # release_date: "2026-03-19"
 # artifact_type: "patch"
-# notes: "Standalone artifact sidecar baseline."
+# notes: "Standalone file metadata baseline."
