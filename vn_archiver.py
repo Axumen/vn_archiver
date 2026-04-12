@@ -198,8 +198,8 @@ def get_metadata_template_path(version=DEFAULT_METADATA_VERSION):
     return METADATA_TEMPLATE_DIR / f"metadata_v{version}.yaml"
 
 
-def get_artifact_metadata_template_path(version=DEFAULT_METADATA_VERSION):
-    return METADATA_TEMPLATE_DIR / f"metadata_artifact_v{version}.yaml"
+def get_file_metadata_template_path(version=DEFAULT_METADATA_VERSION):
+    return METADATA_TEMPLATE_DIR / f"metadata_file_v{version}.yaml"
 
 
 def get_available_metadata_template_versions():
@@ -247,14 +247,14 @@ def load_metadata_template(version=None):
         return yaml.safe_load(f) or {}
 
 
-def load_artifact_metadata_template(version=None):
+def load_file_metadata_template(version=None):
     if version is None:
         version = detect_latest_metadata_template_version()
 
-    template_path = get_artifact_metadata_template_path(version)
+    template_path = get_file_metadata_template_path(version)
     if not template_path.exists():
         raise FileNotFoundError(
-            f"Artifact metadata template not found for version {version}: {template_path}"
+            f"File metadata template not found for version {version}: {template_path}"
         )
 
     with open(template_path, "r", encoding="utf-8") as f:
@@ -1514,7 +1514,7 @@ def insert_visual_novel(metadata):
     metadata_version = int(metadata.get("metadata_version") or detect_latest_metadata_template_version())
     metadata_is_artifact = is_artifact_metadata(metadata)
     template = (
-        load_artifact_metadata_template(metadata_version)
+        load_file_metadata_template(metadata_version)
         if metadata_is_artifact
         else load_metadata_template(metadata_version)
     )

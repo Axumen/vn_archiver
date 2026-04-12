@@ -405,6 +405,31 @@ def add_file_to_existing_build():
             notify("Current schema does not support Add File workflow (requires build + file + build_file).", "error")
             return
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS build_file_metadata (
+                metadata_id INTEGER PRIMARY KEY,
+                build_id INTEGER NOT NULL,
+                file_id INTEGER NOT NULL,
+                metadata_version INTEGER NOT NULL,
+                title TEXT,
+                version TEXT,
+                build_type TEXT,
+                distribution_platform TEXT,
+                language TEXT,
+                edition TEXT,
+                target_platform TEXT,
+                release_date TEXT,
+                source TEXT,
+                notes TEXT,
+                change_note TEXT,
+                raw_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (build_id, file_id) REFERENCES build_file(build_id, file_id) ON DELETE CASCADE
+            )
+            """
+        )
+
         build_rows = conn.execute(
             """
             SELECT
@@ -446,9 +471,31 @@ def add_file_to_existing_build():
         return
 
     build_id = int(build_rows[build_idx]["build_id"])
+    selected_build = build_rows[build_idx]
     file_sha = sha256_file(selected_path)
     file_size = os.path.getsize(selected_path)
     archived_at = _dt.utcnow().isoformat() + "Z"
+
+    metadata_version = get_active_metadata_template_version()
+    template = load_metadata_template(metadata_version)
+    prompt_fields = resolve_prompt_fields(template)
+    file_metadata = {
+        "metadata_version": metadata_version,
+        "title": selected_build["title"] or "",
+        "version": selected_build["version"] or "",
+        "build_type": selected_build["build_type"] or "",
+        "language": selected_build["language"] or "",
+        "distribution_platform": selected_build["distribution_platform"] or "",
+    }
+
+    panel("Optional File Metadata (Template Fields)")
+    notify("Press Enter to keep defaults/blank for each field.", "info")
+    for field_name in prompt_fields:
+        default_value = file_metadata.get(field_name, "")
+        entered_value = prompt(f"{field_name} [{default_value}]: ")
+        file_metadata[field_name] = entered_value if entered_value else default_value
+
+    file_metadata["archives"] = [{"filename": selected_file, "sha256": file_sha}]
 
     with get_connection() as conn:
         file_row = conn.execute("SELECT file_id FROM file WHERE sha256 = ? LIMIT 1", (file_sha,)).fetchone()
@@ -467,6 +514,33 @@ def add_file_to_existing_build():
             VALUES (?, ?, ?, ?)
             """,
             (build_id, file_id, selected_file, archived_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO build_file_metadata (
+                build_id, file_id, metadata_version, title, version, build_type,
+                distribution_platform, language, edition, target_platform,
+                release_date, source, notes, change_note, raw_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                build_id,
+                file_id,
+                int(file_metadata.get("metadata_version") or metadata_version),
+                str(file_metadata.get("title") or ""),
+                str(file_metadata.get("version") or ""),
+                str(file_metadata.get("build_type") or ""),
+                str(file_metadata.get("distribution_platform") or ""),
+                str(file_metadata.get("language") or ""),
+                str(file_metadata.get("edition") or ""),
+                str(file_metadata.get("target_platform") or ""),
+                str(file_metadata.get("release_date") or ""),
+                str(file_metadata.get("source") or ""),
+                str(file_metadata.get("notes") or ""),
+                str(file_metadata.get("change_note") or ""),
+                json.dumps(file_metadata, ensure_ascii=False, sort_keys=True),
+                archived_at,
+            ),
         )
 
     notify(f"Linked file '{selected_file}' to build_id={build_id}.", "ok")
