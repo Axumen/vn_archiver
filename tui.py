@@ -19,18 +19,13 @@ from vn_archiver import (
     UPLOADING_DIR,
     sha256_file,
     load_metadata_template,
-    load_file_metadata_template,
     resolve_prompt_fields,
     get_available_metadata_template_versions,
     detect_latest_metadata_template_version,
     insert_visual_novel,
     get_latest_metadata_for_title,
-    get_current_metadata_version_number,
     stage_metadata_yaml_for_upload,
     order_metadata_for_yaml,
-    SUGGESTED_ARTIFACT_TYPE,
-    DERIVED_ARTIFACT_TYPES,
-    resolve_existing_build_for_artifact,
 )
 
 init(autoreset=True)
@@ -496,7 +491,7 @@ def add_file_to_existing_build():
     archived_at = _dt.utcnow().isoformat() + "Z"
 
     metadata_version = get_active_metadata_template_version()
-    template = load_file_metadata_template(metadata_version)
+    template = load_metadata_template(metadata_version)
     prompt_fields = resolve_prompt_fields(template)
     file_metadata = {
         "metadata_version": metadata_version,
@@ -964,15 +959,7 @@ def _prompt_artifact_metadata():
     edition = prompt("edition (optional): ")
     distribution_platform = prompt("distribution_platform (optional): ")
 
-    notify("Suggested artifact_type labels: " + ", ".join(SUGGESTED_ARTIFACT_TYPE), "info")
-    artifact_type = prompt("artifact_type: ")
-    if not artifact_type:
-        artifact_type = "game_archive"
-        notify("artifact_type not provided; defaulting to 'game_archive'.", "warn")
-
-    base_artifact_sha256 = prompt("base_artifact_sha256 (optional, recommended for patch/mod/hotfix): ")
-    base_artifact_filename = prompt("base_artifact_filename (optional fallback): ")
-    artifact_release_date = prompt("artifact_release_date (optional, YYYY-MM-DD): ")
+    release_date = prompt("release_date (optional, YYYY-MM-DD): ")
     notes = prompt("notes (optional): ")
     change_note = prompt("change_note (optional): ")
 
@@ -985,33 +972,15 @@ def _prompt_artifact_metadata():
         "distribution_platform": distribution_platform,
         "language": language,
         "edition": edition,
-        "artifact_type": artifact_type,
-        "base_artifact_sha256": base_artifact_sha256,
-        "base_artifact_filename": base_artifact_filename,
-        "release_date": artifact_release_date,
+        "release_date": release_date,
         "notes": notes,
         "change_note": change_note,
     }
     metadata = {k: v for k, v in metadata.items() if v not in ("", None)}
 
-    _validate_derived_artifact_base_reference(metadata)
 
     notify("Metadata captured. Build/VN resolution happens in the next stage.", "info")
     return metadata
-
-
-def _validate_derived_artifact_base_reference(metadata):
-    artifact_type_normalized = str(metadata.get("artifact_type") or "").strip().lower()
-    base_sha = str(metadata.get("base_artifact_sha256") or "").strip()
-    base_filename = str(metadata.get("base_artifact_filename") or "").strip()
-    if artifact_type_normalized in DERIVED_ARTIFACT_TYPES and not (base_sha or base_filename):
-        notify(
-            "Derived artifact type detected. base_artifact_sha256/base_artifact_filename not provided; "
-            "if multiple base archives exist on this build, ingestion may fail and ask for explicit base reference.",
-            "warn",
-        )
-        return True
-    return True
 
 
 # =============================
@@ -1026,13 +995,13 @@ def edit_metadata_only():
         # 1. List available Visual Novels
         print()
         panel("Select Visual Novel to Edit")
-        vns = conn.execute("SELECT id, title FROM visual_novels").fetchall()
+        vns = conn.execute("SELECT vn_id, title FROM vn").fetchall()
         if not vns:
             notify("No visual novels in the database yet.", "warn")
             return
 
         for vn in vns:
-            print(f"[{vn['id']}] {vn['title']}")
+            print(f"[{vn['vn_id']}] {vn['title']}")
 
         vn_id_str = prompt("Enter VN ID to edit (or press Enter to cancel): ")
         if not vn_id_str.isdigit():
@@ -1042,14 +1011,14 @@ def edit_metadata_only():
         # 2. List available builds for the selected VN
         print()
         panel("Select Build to Edit")
-        builds = conn.execute("SELECT id, version, build_type, language FROM builds WHERE vn_id = ?", (vn_id,)).fetchall()
+        builds = conn.execute("SELECT build_id, version, build_type, language FROM build WHERE vn_id = ?", (vn_id,)).fetchall()
         if not builds:
             notify("No builds found for this visual novel.", "warn")
             return
 
         for build in builds:
             lang = build['language'] or 'default'
-            print(f"[{build['id']}] Version: {build['version']} - Language: {lang} - Type: {build['build_type']}")
+            print(f"[{build['build_id']}] Version: {build['version']} - Language: {lang} - Type: {build['build_type']}")
 
         build_id_str = prompt("Enter Build ID to edit (or press Enter to cancel): ")
         if not build_id_str.isdigit():
@@ -1060,34 +1029,12 @@ def edit_metadata_only():
         # Prefer the canonical current metadata version first, then fall back to
         # archive-layer metadata for legacy rows, then VN-level metadata.
         row = conn.execute('''
-                    SELECT mo.metadata_json
-                    FROM metadata_versions mv
-                    JOIN metadata_objects mo ON mv.metadata_hash = mo.hash
-                    WHERE mv.build_id = ? AND mv.is_current = 1
-                    ORDER BY mv.created_at DESC, mv.id DESC
+                    SELECT raw_json AS metadata_json
+                    FROM metadata_raw_versions
+                    WHERE build_id = ? AND is_current = 1
+                    ORDER BY created_at DESC, metadata_raw_id DESC
                     LIMIT 1
                 ''', (build_id,)).fetchone()
-
-        if not row:
-            row = conn.execute('''
-                        SELECT metadata_json
-                        FROM archives
-                        WHERE build_id = ?
-                        ORDER BY created_at DESC, id DESC
-                        LIMIT 1
-                    ''', (build_id,)).fetchone()
-
-        if not row:
-            # FALLBACK: If "Create Metadata Only" was used, no archives exist.
-            # Fetch the active master metadata for the Visual Novel instead.
-            row = conn.execute('''
-                        SELECT mo.metadata_json
-                        FROM metadata_versions mv
-                        JOIN metadata_objects mo ON mv.metadata_hash = mo.hash
-                        WHERE mv.vn_id = ? AND mv.is_current = 1
-                        ORDER BY mv.created_at DESC, mv.id DESC
-                        LIMIT 1
-                    ''', (vn_id,)).fetchone()
 
         if not row:
             notify("No metadata found in the database for this Visual Novel.", "error")
@@ -1098,7 +1045,7 @@ def edit_metadata_only():
         # Ensure build-specific fields reflect the selected build so the user
         # confirms/edits against the exact build context they chose.
         build_info = conn.execute(
-            "SELECT version, build_type, language FROM builds WHERE id = ?",
+            "SELECT version, build_type, language FROM build WHERE build_id = ?",
             (build_id,)
         ).fetchone()
 
@@ -1121,7 +1068,7 @@ def edit_metadata_only():
         notify("Editing cancelled.", "warn")
         return
 
-    prior_metadata_revision = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
+    prior_metadata_revision = 1
 
     # 5. Open in System Text Editor
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as tf:
@@ -1150,7 +1097,7 @@ def edit_metadata_only():
         with get_connection() as conn:
             build_row = conn.execute(
                 """
-                SELECT id FROM builds
+                SELECT build_id FROM build
                 WHERE vn_id = ? AND version = ?
                   AND COALESCE(language, '') = COALESCE(?, '')
                   AND COALESCE(build_type, '') = COALESCE(?, '')
@@ -1167,11 +1114,10 @@ def edit_metadata_only():
                 )
             ).fetchone()
 
-        build_id = build_row["id"] if build_row else None
-        metadata_version_number = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
+        build_id = build_row["build_id"] if build_row else None
         next_metadata_revision = prior_metadata_revision + 1
         print()
-        panel(f"Updated Metadata Copy (db v{metadata_version_number}, staged v{next_metadata_revision})")
+        panel(f"Updated Metadata Copy (staged v{next_metadata_revision})")
         print(TEXT + yaml.dump(updated_metadata, sort_keys=False, allow_unicode=True))
 
         staged_path = stage_metadata_yaml_for_upload(updated_metadata, next_metadata_revision)
@@ -1209,7 +1155,7 @@ def upload_archives():
         elif rel_path.lower().endswith(".zip"):
             kind = "archive"
         else:
-            kind = "artifact"
+            kind = "file"
         print(TEXT + f"[{i}] ({kind}) {rel_path}")
 
     print(TEXT + "[A] Upload all files in uploading/")

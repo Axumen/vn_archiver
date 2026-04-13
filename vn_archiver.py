@@ -229,19 +229,6 @@ def load_metadata_template(version=None):
         return yaml.safe_load(f) or {}
 
 
-def load_file_metadata_template(version=None):
-    if version is None:
-        version = detect_latest_metadata_template_version()
-
-    template_path = get_file_metadata_template_path(version)
-    if not template_path.exists():
-        raise FileNotFoundError(
-            f"File metadata template not found for version {version}: {template_path}"
-        )
-
-    with open(template_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
 
 def set_nested_value(target, dotted_key, value):
     parts = dotted_key.split(".")
@@ -331,10 +318,6 @@ def load_b2_config(config_path=B2_CONFIG_FILE):
 
 
 def prompt_field(field_name, current_value):
-    if field_name == "artifact_type":
-        print("\nSuggested artifact_type:")
-        print(", ".join(SUGGESTED_ARTIFACT_TYPE))
-
     value = input(f"{field_name} [{current_value}]: ").strip()
     return value if value else current_value
 
@@ -1144,65 +1127,6 @@ def finalize_archive_creation(metadata, archives_data):
             build_id = build_row['build_id']
 
     metadata_version_number = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
-    if is_artifact_metadata(metadata):
-        with get_connection() as conn:
-            first_sha = archives_data[0].get("sha256") if archives_data else None
-            artifact_id = resolve_artifact_id_for_metadata(conn, build_id, metadata, fallback_sha=first_sha)
-        metadata_version_number = get_current_artifact_metadata_version_number(artifact_id)
-
-    if archives_data:
-        uploaded_dest_dir = os.path.join(UPLOADING_DIR)
-        os.makedirs(uploaded_dest_dir, exist_ok=True)
-
-        print(Fore.CYAN + f"\nMoving files to upload queue directory: {uploaded_dest_dir}...")
-
-        staged_meta_path = stage_metadata_yaml_for_upload(
-            metadata,
-            metadata_version_number,
-            target_dir=uploaded_dest_dir
-        )
-        print(Fore.GREEN + f"Staged metadata for upload: {staged_meta_path}")
-        mirror_metadata_for_rebuild(staged_meta_path, archives_data, build_id)
-
-        latest_meta_path = stage_metadata_yaml_for_upload(metadata, metadata_version_number)
-        print(Fore.GREEN + f"Staged metadata in latest upload folder: {latest_meta_path}")
-
-        # Move archives into uploading queue and mirror source assets into versioned vn archive/
-        vn_archive_version_dir = get_vn_archive_version_dir(metadata)
-        metadata_copy_name = Path(staged_meta_path).name
-        shutil.copy2(staged_meta_path, vn_archive_version_dir / metadata_copy_name)
-
-        for arch in archives_data:
-            original_ext = os.path.splitext(arch["filename"])[1].lower() or ".zip"
-            recommended_name = build_recommended_archive_name(
-                metadata,
-                arch.get("sha256"),
-                ext=original_ext
-            )
-
-            original_copy = vn_archive_version_dir / arch["filename"]
-            shutil.copy2(arch["original_path"], original_copy)
-
-            archive_stem = Path(arch["filename"]).stem
-            source_folder = Path(arch["original_path"]).parent / archive_stem
-            target_folder = vn_archive_version_dir / archive_stem
-            if source_folder.is_dir():
-                if target_folder.exists():
-                    shutil.rmtree(target_folder)
-                shutil.move(str(source_folder), str(target_folder))
-
-            dest_file = os.path.join(uploaded_dest_dir, recommended_name)
-            shutil.move(arch["original_path"], dest_file)
-
-            print(Fore.GREEN + f"Moved to uploading and mirrored to VN archive: {arch['filename']}")
-
-        print(Fore.GREEN + f"\nUpload queue prepared at: {uploaded_dest_dir}")
-        print(Fore.GREEN + f"VN archive updated at: {vn_archive_version_dir}")
-        print(Fore.GREEN + "Archive processing complete!")
-    else:
-        staged_meta_path = stage_metadata_yaml_for_upload(metadata, metadata_version_number)
-        print(Fore.GREEN + f"\nMetadata staged for upload: {staged_meta_path}")
-        print(Fore.GREEN + "Metadata creation complete!")
 
 
 def create_archive_from_metadata_file(archive_paths, metadata, raw_text=None, source_file=None):
@@ -1568,8 +1492,6 @@ def upload_archive(file_path):
     build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
-    is_artifact_content = is_artifact_metadata(metadata)
-
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
         return False
@@ -1591,7 +1513,7 @@ def upload_archive(file_path):
         if version:
             build_row = conn.execute(
                 """
-                SELECT id, version FROM builds
+                SELECT build_id, version FROM build
                 WHERE vn_id = ? AND version = ?
                   AND COALESCE(language, '') = COALESCE(?, '')
                   AND COALESCE(build_type, '') = COALESCE(?, '')
@@ -1608,7 +1530,7 @@ def upload_archive(file_path):
                 return False
         else:
             build_row = conn.execute(
-                "SELECT build_id, version FROM build WHERE vn_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+                "SELECT build_id, version FROM build WHERE vn_id = ? ORDER BY build_id DESC LIMIT 1",
                 (vn_id,)
             ).fetchone()
             if not build_row:
@@ -1624,33 +1546,16 @@ def upload_archive(file_path):
     # 3. Validate sidecar metadata revision against DB metadata history
     # -------------------------------------------------------------------
     with get_connection() as conn:
-        if is_artifact_metadata(metadata):
-            artifact_id = resolve_artifact_id_for_metadata(conn, build_id, metadata)
-            if not artifact_id:
-                print(Fore.RED + f"Upload Blocked: Could not resolve artifact row for build {build_id} from sidecar metadata sha256.")
-                return False
-            if requested_metadata_revision is not None:
-                metadata_row = conn.execute(
-                    "SELECT metadata_hash, version_number FROM artifact_metadata_versions WHERE artifact_id = ? AND version_number = ?",
-                    (artifact_id, requested_metadata_revision)
-                ).fetchone()
-            else:
-                metadata_row = conn.execute(
-                    "SELECT metadata_hash, version_number FROM artifact_metadata_versions WHERE artifact_id = ? AND is_current = 1",
-                    (artifact_id,)
-                ).fetchone()
-        else:
-            if requested_metadata_revision is not None:
-                metadata_row = conn.execute(
-                    "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND version_number = ?",
-                    (build_id, requested_metadata_revision)
-                ).fetchone()
-            else:
-                metadata_row = conn.execute(
-                    "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND is_current = 1",
-                    (build_id,)
-                ).fetchone()
-
+        if requested_metadata_revision is not None:
+            metadata_row = conn.execute(
+                "SELECT raw_sha256 AS metadata_hash, version_number FROM metadata_raw_versions WHERE build_id = ? AND version_number = ?",
+                (build_id, requested_metadata_revision)
+            ).fetchone()
+        else:
+            metadata_row = conn.execute(
+                "SELECT raw_sha256 AS metadata_hash, version_number FROM metadata_raw_versions WHERE build_id = ? AND is_current = 1",
+                (build_id,)
+            ).fetchone()
     if not metadata_row:
         if requested_metadata_revision is not None:
             print(Fore.RED + f"Upload Blocked: Build {build_id} has no metadata version v{requested_metadata_revision} in database.")
@@ -1945,8 +1850,6 @@ def upload_metadata_sidecar(sidecar_path):
     build_type = str(metadata.get("build_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
-    is_artifact_content = is_artifact_metadata(metadata)
-
     if not title:
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
         return False
@@ -1964,7 +1867,7 @@ def upload_metadata_sidecar(sidecar_path):
         if version:
             build_row = conn.execute(
                 """
-                SELECT id, version FROM builds
+                SELECT build_id, version FROM build
                 WHERE vn_id = ? AND version = ?
                   AND COALESCE(language, '') = COALESCE(?, '')
                   AND COALESCE(build_type, '') = COALESCE(?, '')
@@ -1978,7 +1881,7 @@ def upload_metadata_sidecar(sidecar_path):
                 return False
         else:
             build_row = conn.execute(
-                "SELECT build_id, version FROM build WHERE vn_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+                "SELECT build_id, version FROM build WHERE vn_id = ? ORDER BY build_id DESC LIMIT 1",
                 (vn_id,)
             ).fetchone()
             if not build_row:
@@ -1990,33 +1893,16 @@ def upload_metadata_sidecar(sidecar_path):
         build_id = build_row["build_id"]
 
     with get_connection() as conn:
-        if is_artifact_metadata(metadata):
-            artifact_id = resolve_artifact_id_for_metadata(conn, build_id, metadata)
-            if not artifact_id:
-                print(Fore.RED + f"Upload Blocked: Could not resolve artifact row for build {build_id} from sidecar metadata sha256.")
-                return False
-            if requested_metadata_revision is not None:
-                metadata_row = conn.execute(
-                    "SELECT metadata_hash, version_number FROM artifact_metadata_versions WHERE artifact_id = ? AND version_number = ?",
-                    (artifact_id, requested_metadata_revision)
-                ).fetchone()
-            else:
-                metadata_row = conn.execute(
-                    "SELECT metadata_hash, version_number FROM artifact_metadata_versions WHERE artifact_id = ? AND is_current = 1",
-                    (artifact_id,)
-                ).fetchone()
-        else:
-            if requested_metadata_revision is not None:
-                metadata_row = conn.execute(
-                    "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND version_number = ?",
-                    (build_id, requested_metadata_revision)
-                ).fetchone()
-            else:
-                metadata_row = conn.execute(
-                    "SELECT metadata_hash, version_number FROM metadata_versions WHERE build_id = ? AND is_current = 1",
-                    (build_id,)
-                ).fetchone()
-
+        if requested_metadata_revision is not None:
+            metadata_row = conn.execute(
+                "SELECT raw_sha256 AS metadata_hash, version_number FROM metadata_raw_versions WHERE build_id = ? AND version_number = ?",
+                (build_id, requested_metadata_revision)
+            ).fetchone()
+        else:
+            metadata_row = conn.execute(
+                "SELECT raw_sha256 AS metadata_hash, version_number FROM metadata_raw_versions WHERE build_id = ? AND is_current = 1",
+                (build_id,)
+            ).fetchone()
     if not metadata_row:
         print(Fore.RED + f"Upload Blocked: No matching metadata version found in database for build {build_id}.")
         return False

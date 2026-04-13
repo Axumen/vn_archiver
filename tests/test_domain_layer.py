@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from domain_layer import Artifact, Build, VN, Version, VisualNovelDomainService
+from domain_layer import Build, VN, Version, VisualNovelDomainService
 
 
 class FakeRepository:
@@ -22,7 +22,7 @@ class FakeRepository:
         self.calls.append(("build", vn_id, metadata["title"]))
         return 22
 
-    def create_artifact(self, build_id, metadata, archive_data):
+    def create_file_link(self, build_id, metadata, archive_data):
         self.created_artifacts.append(
             (
                 build_id,
@@ -41,9 +41,7 @@ def test_ingest_requires_title():
     service = VisualNovelDomainService(
         conn=object(),
         repository=repo,
-        is_artifact_metadata=lambda _: False,
         collect_archives_for_db=lambda _: ([], None),
-        process_archives_for_build=lambda *args, **kwargs: None,
     )
 
     with pytest.raises(ValueError, match="Title is required"):
@@ -56,9 +54,7 @@ def test_ingest_uses_build_branch_for_non_artifact():
     service = VisualNovelDomainService(
         conn=object(),
         repository=repo,
-        is_artifact_metadata=lambda _: False,
         collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
-        process_archives_for_build=lambda *args, **kwargs: None,
     )
 
     result = service.ingest({"title": "Sample VN", "version": "1.0"})
@@ -67,13 +63,10 @@ def test_ingest_uses_build_branch_for_non_artifact():
     assert result.build_id == 22
     assert repo.calls == [("vn", "Sample VN"), ("build", 11, "Sample VN")]
     assert repo.created_artifacts == [(22, "abc", "sample.zip")]
-    assert result.artifact is not None
-    assert result.artifact.file_sha256 == "abc"
     assert result.build is not None
     assert result.build.version.version_string == "1.0"
     assert result.vn is not None
     assert result.vn.canonical_title == "Sample VN"
-    assert result.artifact_status == "classified"
 
 
 def test_ingest_routes_all_ingests_through_get_or_create_vn_and_build():
@@ -83,9 +76,7 @@ def test_ingest_routes_all_ingests_through_get_or_create_vn_and_build():
     service = VisualNovelDomainService(
         conn=object(),
         repository=repo,
-        is_artifact_metadata=lambda _: True,
         collect_archives_for_db=lambda _: ([], None),
-        process_archives_for_build=lambda *args, **kwargs: called.update(processed=True),
     )
 
     result = service.ingest({"title": "Sample Patch", "sha256": "patch-sha"})
@@ -95,10 +86,8 @@ def test_ingest_routes_all_ingests_through_get_or_create_vn_and_build():
     assert repo.calls == [("vn", "Sample Patch"), ("build", 11, "Sample Patch")]
     assert called["processed"] is False
     assert repo.created_artifacts == []
-    assert result.artifact is not None
     assert result.build is not None
     assert result.vn is not None
-    assert result.artifact_status == "classified"
 
 
 def test_ingest_normalizes_version_language_and_creator_before_resolution():
@@ -118,9 +107,7 @@ def test_ingest_normalizes_version_language_and_creator_before_resolution():
     service = VisualNovelDomainService(
         conn=object(),
         repository=repo,
-        is_artifact_metadata=lambda _: False,
         collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
-        process_archives_for_build=lambda *args, **kwargs: None,
     )
 
     service.ingest(
@@ -144,9 +131,7 @@ def test_ingest_persists_raw_metadata_with_primary_artifact_id_when_present():
     service = VisualNovelDomainService(
         conn=object(),
         repository=repo,
-        is_artifact_metadata=lambda _: False,
         collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
-        process_archives_for_build=lambda *args, **kwargs: None,
     )
 
     service.ingest(
@@ -168,9 +153,7 @@ def test_ingest_skips_raw_metadata_persistence_when_no_artifact_id_available():
     service = VisualNovelDomainService(
         conn=object(),
         repository=repo,
-        is_artifact_metadata=lambda _: False,
         collect_archives_for_db=lambda _: ([], None),
-        process_archives_for_build=lambda *args, **kwargs: None,
     )
 
     with pytest.raises(ValueError, match="at least one Artifact sha256"):
@@ -186,13 +169,11 @@ def test_ingest_skips_raw_metadata_persistence_when_no_artifact_id_available():
     assert repo.raw_metadata_records == []
 
 
-def test_domain_entities_model_file_to_artifact_to_build_to_version_to_vn():
+def test_domain_entities_model_build_to_version_to_vn():
     vn = VN(canonical_title="Example VN", developer="Dev Team", publisher="Pub Team")
     version = Version(version_string="2.0", normalized_version="2.0")
     build = Build(build_id=10, vn_id=20, version=version, release_type="full")
-    artifact = Artifact(file_sha256="deadbeef", build_id=build.build_id, artifact_type="archive")
 
-    assert artifact.file_sha256 == "deadbeef"
     assert build.version.version_string == "2.0"
     assert build.release_type == "full"
     assert vn.canonical_title == "Example VN"
@@ -203,17 +184,12 @@ def test_artifact_uses_metadata_sha256_when_archive_list_is_empty():
     service = VisualNovelDomainService(
         conn=object(),
         repository=repo,
-        is_artifact_metadata=lambda _: True,
         collect_archives_for_db=lambda _: ([], None),
-        process_archives_for_build=lambda *args, **kwargs: None,
     )
 
     result = service.ingest({"title": "Patch", "sha256": "from-metadata"})
 
-    assert result.artifact is not None
-    assert result.artifact.file_sha256 == "from-metadata"
     assert result.build is not None
-    assert result.artifact.build_id == result.build.build_id
 
 
 def test_ingest_requires_artifact_sha256_to_satisfy_build_invariant():
@@ -221,9 +197,7 @@ def test_ingest_requires_artifact_sha256_to_satisfy_build_invariant():
     service = VisualNovelDomainService(
         conn=object(),
         repository=repo,
-        is_artifact_metadata=lambda _: True,
         collect_archives_for_db=lambda _: ([], None),
-        process_archives_for_build=lambda *args, **kwargs: None,
     )
 
     with pytest.raises(ValueError, match="at least one Artifact sha256"):
@@ -235,15 +209,13 @@ def test_ingest_rejects_duplicate_archive_sha256_values():
     service = VisualNovelDomainService(
         conn=object(),
         repository=repo,
-        is_artifact_metadata=lambda _: False,
         collect_archives_for_db=lambda _: (
             [{"sha256": "dup"}, {"sha256": "dup"}],
             "dup",
         ),
-        process_archives_for_build=lambda *args, **kwargs: None,
     )
 
-    with pytest.raises(ValueError, match="Duplicate artifact sha256"):
+    with pytest.raises(ValueError, match="Duplicate file sha256"):
         service.ingest({"title": "Duplicate SHA VN"})
 
 
@@ -286,7 +258,7 @@ def test_ingest_skips_legacy_archive_processing_when_files_table_is_absent():
             )
             return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-        def create_artifact(self, build_id, metadata, archive_data):
+        def create_file_link(self, build_id, metadata, archive_data):
             self.conn.execute(
                 "INSERT INTO artifacts (build_id, sha256, path, type) VALUES (?, ?, ?, ?)",
                 (build_id, archive_data["sha256"], archive_data.get("filename") or archive_data.get("filepath"), metadata.get("artifact_type") or "game_archive"),
@@ -304,9 +276,7 @@ def test_ingest_skips_legacy_archive_processing_when_files_table_is_absent():
     service = VisualNovelDomainService(
         conn=conn,
         repository=repo,
-        is_artifact_metadata=lambda _: False,
         collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
-        process_archives_for_build=lambda *args, **kwargs: called.update(processed=True),
     )
 
     result = service.ingest({"title": "Clannad", "version": "1.0"})

@@ -47,52 +47,19 @@ def make_conn():
 def test_repository_requires_new_schema_tables():
     conn = make_conn()
     with pytest.raises(RuntimeError, match="New schema required"):
-        VnIngestionRepository(
-            conn,
-            upsert_series=lambda *args, **kwargs: None,
-            upsert_visual_novel_record=lambda *args, **kwargs: None,
-            sync_vn_tags=lambda *args, **kwargs: None,
-            sync_canon_relationship=lambda *args, **kwargs: None,
-            upsert_build_record=lambda *args, **kwargs: None,
-            sync_build_target_platforms=lambda *args, **kwargs: None,
-            sync_build_relations=lambda *args, **kwargs: None,
-            resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
-            create_artifact_record=lambda *args, **kwargs: None,
-        )
+        VnIngestionRepository(conn)
 
 
 def test_create_artifact_fails_without_file_tables():
     conn = make_conn()
     with pytest.raises(RuntimeError, match="New schema required"):
-        VnIngestionRepository(
-            conn,
-            upsert_series=lambda *args, **kwargs: None,
-            upsert_visual_novel_record=lambda *args, **kwargs: None,
-            sync_vn_tags=lambda *args, **kwargs: None,
-            sync_canon_relationship=lambda *args, **kwargs: None,
-            upsert_build_record=lambda *args, **kwargs: None,
-            sync_build_target_platforms=lambda *args, **kwargs: None,
-            sync_build_relations=lambda *args, **kwargs: None,
-            resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
-            create_artifact_record=lambda *args, **kwargs: None,
-        )
+        VnIngestionRepository(conn)
 
 
 def test_create_artifact_fails_for_legacy_artifacts_schema():
     conn = make_conn()
     with pytest.raises(RuntimeError, match="New schema required"):
-        VnIngestionRepository(
-            conn,
-            upsert_series=lambda *args, **kwargs: None,
-            upsert_visual_novel_record=lambda *args, **kwargs: None,
-            sync_vn_tags=lambda *args, **kwargs: None,
-            sync_canon_relationship=lambda *args, **kwargs: None,
-            upsert_build_record=lambda *args, **kwargs: None,
-            sync_build_target_platforms=lambda *args, **kwargs: None,
-            sync_build_relations=lambda *args, **kwargs: None,
-            resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
-            create_artifact_record=lambda *args, **kwargs: None,
-        )
+        VnIngestionRepository(conn)
 
 
 def make_conn_new_schema():
@@ -226,25 +193,14 @@ def make_conn_new_schema():
 
 def test_repository_supports_new_build_file_schema():
     conn = make_conn_new_schema()
-    repo = VnIngestionRepository(
-        conn,
-        upsert_series=lambda *args, **kwargs: None,
-        upsert_visual_novel_record=lambda *args, **kwargs: None,
-        sync_vn_tags=lambda *args, **kwargs: None,
-        sync_canon_relationship=lambda *args, **kwargs: None,
-        upsert_build_record=lambda *args, **kwargs: None,
-        sync_build_target_platforms=lambda *args, **kwargs: None,
-        sync_build_relations=lambda *args, **kwargs: None,
-        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
-        create_artifact_record=lambda *args, **kwargs: None,
-    )
+    repo = VnIngestionRepository(conn)
 
     vn_id = repo.get_or_create_vn({"title": "Rewrite"})
     build_id = repo.get_or_create_build(
         vn_id,
         {"version": "1.0", "build_type": "full", "language": "JP", "target_platform": "windows"},
     )
-    file_id = repo.create_artifact(
+    file_id = repo.create_file_link(
         build_id,
         {"archived_at": "2026-04-10T00:00:00Z"},
         {"sha256": "abc123", "filename": "rewrite.zip"},
@@ -264,18 +220,7 @@ def test_repository_supports_new_build_file_schema():
 
 def test_repository_uses_canonical_build_keys_only():
     conn = make_conn_new_schema()
-    repo = VnIngestionRepository(
-        conn,
-        upsert_series=lambda *args, **kwargs: None,
-        upsert_visual_novel_record=lambda *args, **kwargs: None,
-        sync_vn_tags=lambda *args, **kwargs: None,
-        sync_canon_relationship=lambda *args, **kwargs: None,
-        upsert_build_record=lambda *args, **kwargs: None,
-        sync_build_target_platforms=lambda *args, **kwargs: None,
-        sync_build_relations=lambda *args, **kwargs: None,
-        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
-        create_artifact_record=lambda *args, **kwargs: None,
-    )
+    repo = VnIngestionRepository(conn)
 
     vn_id = repo.get_or_create_vn({"title": "AIR"})
     build_id = repo.get_or_create_build(
@@ -296,18 +241,7 @@ def test_repository_uses_canonical_build_keys_only():
 
 def test_repository_syncs_vn_tags_when_tables_exist():
     conn = make_conn_new_schema()
-    repo = VnIngestionRepository(
-        conn,
-        upsert_series=lambda *args, **kwargs: None,
-        upsert_visual_novel_record=lambda *args, **kwargs: None,
-        sync_vn_tags=lambda *args, **kwargs: None,
-        sync_canon_relationship=lambda *args, **kwargs: None,
-        upsert_build_record=lambda *args, **kwargs: None,
-        sync_build_target_platforms=lambda *args, **kwargs: None,
-        sync_build_relations=lambda *args, **kwargs: None,
-        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
-        create_artifact_record=lambda *args, **kwargs: None,
-    )
+    repo = VnIngestionRepository(conn)
 
     vn_id = repo.get_or_create_vn({"title": "Clannad", "tags": ["romance", "drama"]})
     rows = conn.execute(
@@ -338,18 +272,7 @@ def test_repository_syncs_vn_tags_when_tables_exist():
 
 def test_repository_syncs_vn_developers_and_publishers_when_tables_exist():
     conn = make_conn_new_schema()
-    repo = VnIngestionRepository(
-        conn,
-        upsert_series=lambda *args, **kwargs: None,
-        upsert_visual_novel_record=lambda *args, **kwargs: None,
-        sync_vn_tags=lambda *args, **kwargs: None,
-        sync_canon_relationship=lambda *args, **kwargs: None,
-        upsert_build_record=lambda *args, **kwargs: None,
-        sync_build_target_platforms=lambda *args, **kwargs: None,
-        sync_build_relations=lambda *args, **kwargs: None,
-        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
-        create_artifact_record=lambda *args, **kwargs: None,
-    )
+    repo = VnIngestionRepository(conn)
 
     vn_id = repo.get_or_create_vn(
         {"title": "Rewrite", "developer": ["Key", "VisualArt's"], "publisher": "Key"}
@@ -382,18 +305,7 @@ def test_repository_syncs_vn_developers_and_publishers_when_tables_exist():
 
 def test_repository_syncs_build_languages_when_tables_exist():
     conn = make_conn_new_schema()
-    repo = VnIngestionRepository(
-        conn,
-        upsert_series=lambda *args, **kwargs: None,
-        upsert_visual_novel_record=lambda *args, **kwargs: None,
-        sync_vn_tags=lambda *args, **kwargs: None,
-        sync_canon_relationship=lambda *args, **kwargs: None,
-        upsert_build_record=lambda *args, **kwargs: None,
-        sync_build_target_platforms=lambda *args, **kwargs: None,
-        sync_build_relations=lambda *args, **kwargs: None,
-        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
-        create_artifact_record=lambda *args, **kwargs: None,
-    )
+    repo = VnIngestionRepository(conn)
 
     vn_id = repo.get_or_create_vn({"title": "Clannad"})
     build_id = repo.get_or_create_build(
@@ -416,21 +328,10 @@ def test_repository_syncs_build_languages_when_tables_exist():
 
 def test_repository_tracks_raw_metadata_versions_per_build():
     conn = make_conn_new_schema()
-    repo = VnIngestionRepository(
-        conn,
-        upsert_series=lambda *args, **kwargs: None,
-        upsert_visual_novel_record=lambda *args, **kwargs: None,
-        sync_vn_tags=lambda *args, **kwargs: None,
-        sync_canon_relationship=lambda *args, **kwargs: None,
-        upsert_build_record=lambda *args, **kwargs: None,
-        sync_build_target_platforms=lambda *args, **kwargs: None,
-        sync_build_relations=lambda *args, **kwargs: None,
-        resolve_existing_build_for_artifact=lambda *args, **kwargs: None,
-        create_artifact_record=lambda *args, **kwargs: None,
-    )
+    repo = VnIngestionRepository(conn)
 
-    repo.create_metadata_raw({"title": "A", "version": "1.0"}, artifact_id=7, build_id=3)
-    repo.create_metadata_raw({"title": "A", "version": "1.1"}, artifact_id=8, build_id=3)
+    repo.create_metadata_raw({"title": "A", "version": "1.0"}, file_id=7, build_id=3)
+    repo.create_metadata_raw({"title": "A", "version": "1.1"}, file_id=8, build_id=3)
 
     rows = conn.execute(
         """

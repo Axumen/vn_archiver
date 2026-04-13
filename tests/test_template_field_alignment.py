@@ -9,7 +9,6 @@ pytest.importorskip("yaml")
 from vn_archiver import (
     CATEGORY_ALL_FIELDS,
     FIELD_SUGGESTIONS,
-    load_artifact_metadata_template,
     load_metadata_template,
 )
 
@@ -22,14 +21,11 @@ def _template_fields(template):
 
 def test_template_fields_are_known_to_normalizer():
     vn_fields = _template_fields(load_metadata_template(1))
-    artifact_fields = _template_fields(load_artifact_metadata_template(1))
-    for field in sorted(vn_fields | artifact_fields):
+    for field in sorted(vn_fields):
         assert field in CATEGORY_ALL_FIELDS, f"Template field not recognized by normalizer: {field}"
 
 
 def test_field_suggestions_match_template_fields():
     vn_fields = _template_fields(load_metadata_template(1))
-    artifact_fields = _template_fields(load_artifact_metadata_template(1))
-    valid_fields = vn_fields | artifact_fields
     for field in FIELD_SUGGESTIONS:
-        assert field in valid_fields, f"Suggestion field is not present in templates: {field}"
+        assert field in vn_fields, f"Suggestion field is not present in templates: {field}"

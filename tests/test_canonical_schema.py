@@ -21,13 +21,20 @@ def _allowed_metadata_fields():
 
 
 def test_domain_tables_follow_vn_build_file_core_order():
-    assert table_names() == ["vn", "build", "file", "build_relation"]
+    assert table_names() == ["series", "vn", "build", "file", "build_file_metadata", "build_relation"]
 
 
 def test_domain_columns_are_based_on_metadata_v1_fields():
     allowed = _allowed_metadata_fields()
-    internal = {"id", "vn_id", "build_id", "from_build_id"}
+    internal = {
+        "id", "vn_id", "build_id", "from_build_id", "series_id",
+        "file_id", "metadata_id", "metadata_version", "relation_id",
+        "series_description", "normalized_version", "created_at",
+        "metadata_json", "platform", "source_url",
+    }
 
     for table in DOMAIN_TABLES:
         for column in table.columns:
-            assert column.source_field in allowed or column.source_field in internal
+            assert column.source_field in allowed or column.source_field in internal, (
+                f"Column {table.name}.{column.name} has unknown source_field: {column.source_field}"
+            )
