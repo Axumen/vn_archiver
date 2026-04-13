@@ -461,7 +461,7 @@ def add_file_to_existing_build():
         repo = VnIngestionRepository(conn)
         file_id = repo.create_file_link(
             build_id,
-            {"archived_at": archived_at},
+            {"archived_at": archived_at, "artifact_type": file_metadata.get("artifact_type")},
             {
                 "sha256": file_sha,
                 "filename": selected_file,

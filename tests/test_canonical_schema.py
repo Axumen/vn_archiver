@@ -21,7 +21,7 @@ def _allowed_metadata_fields():
 
 
 def test_domain_tables_follow_vn_build_file_core_order():
-    assert table_names() == ["series", "vn", "build", "file", "build_file_metadata", "build_relation"]
+    assert table_names() == ["series", "vn", "build", "file", "build_file_metadata"]
 
 
 def test_domain_columns_are_based_on_metadata_v1_fields():

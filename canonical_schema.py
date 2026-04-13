@@ -112,15 +112,6 @@ BUILD_FILE_METADATA_TABLE = TableSpec(
     ),
 )
 
-BUILD_RELATION_TABLE = TableSpec(
-    name="build_relation",
-    columns=(
-        ColumnSpec("relation_id", "relation_id", required=True),
-        ColumnSpec("from_build_id", "from_build_id", required=True),
-        ColumnSpec("parent_vn_title", "parent_vn_title"),
-        ColumnSpec("relationship_type", "relationship_type", required=True),
-    ),
-)
 
 DOMAIN_TABLES = (
     SERIES_TABLE,
@@ -128,7 +119,6 @@ DOMAIN_TABLES = (
     BUILD_TABLE,
     FILE_TABLE,
     BUILD_FILE_METADATA_TABLE,
-    BUILD_RELATION_TABLE,
 )
 
 

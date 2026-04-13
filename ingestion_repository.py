@@ -417,9 +417,10 @@ class VnIngestionRepository:
             (build_id, file_id),
         ).fetchone()
         if not link_row:
+            artifact_type = self._normalize_text_value(metadata.get("artifact_type"))
             self.conn.execute(
-                "INSERT INTO build_file (build_id, file_id, original_filename, archived_at) VALUES (?, ?, ?, ?)",
-                (build_id, file_id, filename, metadata.get("archived_at")),
+                "INSERT INTO build_file (build_id, file_id, original_filename, artifact_type, archived_at) VALUES (?, ?, ?, ?, ?)",
+                (build_id, file_id, filename, artifact_type, metadata.get("archived_at")),
             )
 
         return file_id

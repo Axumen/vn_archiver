@@ -105,6 +105,7 @@ def make_conn_new_schema():
             build_id INTEGER NOT NULL,
             file_id INTEGER NOT NULL,
             original_filename TEXT,
+            artifact_type TEXT,
             archived_at TEXT,
             PRIMARY KEY (build_id, file_id)
         )

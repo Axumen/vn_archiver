@@ -23,7 +23,6 @@ CREATE TABLE IF NOT EXISTS vn (
     source TEXT,
     tags TEXT,
     original_release_date TEXT,
-    CHECK (original_release_date IS NULL OR original_release_date GLOB '????-??-??'),
     FOREIGN KEY (series_id) REFERENCES series(series_id) ON DELETE SET NULL
 );
 
@@ -45,9 +44,6 @@ CREATE TABLE IF NOT EXISTS build (
     target_platform TEXT,
     notes TEXT,
     change_note TEXT,
-    CHECK (release_date IS NULL OR release_date GLOB '????-??-??'),
-    CHECK (build_type IS NULL OR build_type IN ('full','patch','demo','trial','fandisc','hotfix','april_fools')),
-    CHECK (distribution_model IS NULL OR distribution_model IN ('free','paid','freemium','subscription')),
     FOREIGN KEY (vn_id) REFERENCES vn(vn_id) ON DELETE CASCADE
 );
 
@@ -67,6 +63,7 @@ CREATE TABLE IF NOT EXISTS build_file (
     build_id INTEGER NOT NULL,
     file_id INTEGER NOT NULL,
     original_filename TEXT,
+    artifact_type TEXT,
     archived_at TEXT,
     PRIMARY KEY (build_id, file_id),
     FOREIGN KEY (build_id) REFERENCES build(build_id) ON DELETE CASCADE,
@@ -96,17 +93,6 @@ CREATE TABLE IF NOT EXISTS build_file_metadata (
     FOREIGN KEY (build_id, file_id) REFERENCES build_file(build_id, file_id) ON DELETE CASCADE
 );
 
--- Build relationship semantics using metadata fields + explicit build linkage
-CREATE TABLE IF NOT EXISTS build_relation (
-    relation_id INTEGER PRIMARY KEY,
-    from_build_id INTEGER NOT NULL,
-    to_build_id INTEGER,
-    parent_vn_title TEXT,
-    relationship_type TEXT NOT NULL,
-    CHECK (relationship_type <> ''),
-    FOREIGN KEY (from_build_id) REFERENCES build(build_id) ON DELETE CASCADE,
-    FOREIGN KEY (to_build_id) REFERENCES build(build_id) ON DELETE SET NULL
-);
 
 CREATE TABLE IF NOT EXISTS tags (
     tag_id INTEGER PRIMARY KEY,
@@ -200,7 +186,6 @@ CREATE INDEX IF NOT EXISTS idx_build_vn ON build(vn_id);
 CREATE INDEX IF NOT EXISTS idx_build_type ON build(build_type);
 CREATE INDEX IF NOT EXISTS idx_file_sha256 ON file(sha256);
 CREATE INDEX IF NOT EXISTS idx_build_file_metadata_pair ON build_file_metadata(build_id, file_id);
-CREATE INDEX IF NOT EXISTS idx_build_relation_from ON build_relation(from_build_id);
 CREATE INDEX IF NOT EXISTS idx_vn_tags_vn ON vn_tags(vn_id);
 CREATE INDEX IF NOT EXISTS idx_vn_tags_tag ON vn_tags(tag_id);
 CREATE INDEX IF NOT EXISTS idx_vn_developers_vn ON vn_developers(vn_id);
