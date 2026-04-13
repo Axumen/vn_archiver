@@ -14,6 +14,7 @@ class VnIngestionRepository:
     """
 
     RELEASE_METADATA_COLUMN_MAP = {
+        "language": "language",
         "distribution_model": "distribution_model",
         "distribution_platform": "distribution_platform",
         "translator": "translator",
@@ -253,15 +254,12 @@ class VnIngestionRepository:
         title_columns = self._table_columns(self.title_table)
         title_updatable_columns = [
             "aliases",
-            "developer",
-            "publisher",
             "release_status",
             "content_rating",
             "content_mode",
             "content_type",
             "description",
             "source",
-            "tags",
             "original_release_date",
         ]
 

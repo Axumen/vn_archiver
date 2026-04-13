@@ -13,15 +13,12 @@ CREATE TABLE IF NOT EXISTS title (
     title TEXT NOT NULL UNIQUE,
     series_id INTEGER,
     aliases TEXT,
-    developer TEXT,
-    publisher TEXT,
     release_status TEXT,
     content_rating TEXT,
     content_mode TEXT,
     content_type TEXT,
     description TEXT,
     source TEXT,
-    tags TEXT,
     original_release_date TEXT,
     FOREIGN KEY (series_id) REFERENCES series(series_id) ON DELETE SET NULL
 );
