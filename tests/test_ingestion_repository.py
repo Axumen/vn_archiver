@@ -94,9 +94,7 @@ def make_conn_new_schema():
             file_id INTEGER PRIMARY KEY,
             sha256 TEXT NOT NULL UNIQUE,
             size_bytes INTEGER,
-            first_seen_at TEXT,
-            filename TEXT,
-            mime_type TEXT
+            filename TEXT
         )
         """
     )

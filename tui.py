@@ -466,7 +466,6 @@ def add_file_to_existing_build():
                 "sha256": file_sha,
                 "filename": selected_file,
                 "size_bytes": file_size,
-                "first_seen_at": archived_at,
             },
         )
         repo.create_file_attachment_metadata(build_id, file_id, file_metadata)

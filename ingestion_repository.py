@@ -436,11 +436,9 @@ class VnIngestionRepository:
             file_id = file_row["file_id"]
         else:
             size_bytes = archive_data.get("size_bytes")
-            first_seen_at = archive_data.get("first_seen_at")
-            mime_type = archive_data.get("mime_type")
             self.conn.execute(
-                "INSERT INTO file (sha256, filename, size_bytes, first_seen_at, mime_type) VALUES (?, ?, ?, ?, ?)",
-                (artifact_sha, filename, size_bytes, first_seen_at, mime_type),
+                "INSERT INTO file (sha256, filename, size_bytes) VALUES (?, ?, ?)",
+                (artifact_sha, filename, size_bytes),
             )
             file_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 

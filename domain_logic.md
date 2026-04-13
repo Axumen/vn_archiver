@@ -125,12 +125,10 @@ They are **not semantic entities** and carry no domain meaning beyond storage id
 - file_id
 - sha256
 - size_bytes
-- first_seen_at
 
 #### Optional fields:
 
 - filename
-- mime_type
 
 ---
 
