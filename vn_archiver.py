@@ -718,7 +718,7 @@ def insert_visual_novel(metadata):
 
 
 
-        return result.vn_id
+        return result
 
 
 
@@ -1098,8 +1098,8 @@ def create_archive_only(
 
 def finalize_archive_creation(metadata, archives_data):
     """Shared finalization flow for prompted and pre-filled metadata runs."""
-    vn_id = insert_visual_novel(metadata)
-    if not vn_id:
+    result = insert_visual_novel(metadata)
+    if not result:
         print(Fore.RED + "Failed to insert visual novel into database.")
         return
 

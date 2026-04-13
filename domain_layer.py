@@ -46,6 +46,7 @@ class Version:
 class IngestionResult:
     vn_id: int
     build_id: int
+    metadata_version_number: int | None = None
     build: Build | None = None
     vn: VN | None = None
 
@@ -182,12 +183,13 @@ class VisualNovelDomainService:
             if file_id is not None:
                 created_file_ids.append(file_id)
 
+        metadata_version_number = None
         raw_payload = dict(resolved_metadata)
         raw_payload.pop("_raw_text", None)
         raw_payload.pop("_source_file", None)
         primary_file_id = created_file_ids[0] if created_file_ids else None
         if raw_payload and primary_file_id is not None:
-            self.repository.create_metadata_raw(
+            metadata_version_number = self.repository.create_metadata_raw(
                 raw_payload,
                 primary_file_id,
                 build_id=build_id,
@@ -202,6 +204,7 @@ class VisualNovelDomainService:
         return IngestionResult(
             vn_id=vn_id,
             build_id=build_id,
+            metadata_version_number=metadata_version_number,
             build=build,
             vn=vn,
         )

@@ -648,8 +648,8 @@ def upsert_build_from_metadata_yaml():
     try:
         metadata["_raw_text"] = raw_metadata_text
         metadata["_source_file"] = metadata_path
-        vn_id = insert_visual_novel(metadata)
-        notify(f"Build/VN metadata upserted successfully (vn_id={vn_id}).", "ok")
+        result = insert_visual_novel(metadata)
+        notify(f"Build/VN metadata upserted successfully (vn_id={result.vn_id}, build_id={result.build_id}).", "ok")
     except Exception as exc:
         notify(f"Build/VN upsert failed: {exc}", "error")
         return
@@ -865,7 +865,7 @@ def edit_metadata_only():
         notify("Editing cancelled.", "warn")
         return
 
-    prior_metadata_revision = 1
+
 
     # 5. Open in System Text Editor
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as tf:
@@ -887,32 +887,11 @@ def edit_metadata_only():
             return
 
         # Pass the updated metadata back to the insert function
-        vn_id = insert_visual_novel(updated_metadata)
+        result = insert_visual_novel(updated_metadata)
         notify("Metadata successfully updated!", "ok")
 
-        build_row = None
-        with get_connection() as conn:
-            build_row = conn.execute(
-                """
-                SELECT build_id FROM build
-                WHERE vn_id = ? AND version = ?
-                  AND COALESCE(language, '') = COALESCE(?, '')
-                  AND COALESCE(build_type, '') = COALESCE(?, '')
-                  AND COALESCE(edition, '') = COALESCE(?, '')
-                  AND COALESCE(distribution_platform, '') = COALESCE(?, '')
-                """,
-                (
-                    vn_id,
-                    updated_metadata.get("version"),
-                    updated_metadata.get("language"),
-                    updated_metadata.get("build_type"),
-                    updated_metadata.get("edition"),
-                    updated_metadata.get("distribution_platform")
-                )
-            ).fetchone()
-
-        build_id = build_row["build_id"] if build_row else None
-        next_metadata_revision = prior_metadata_revision + 1
+        build_id = result.build_id
+        next_metadata_revision = result.metadata_version_number or 1
         print()
         panel(f"Updated Metadata Copy (staged v{next_metadata_revision})")
         print(TEXT + yaml.dump(updated_metadata, sort_keys=False, allow_unicode=True))

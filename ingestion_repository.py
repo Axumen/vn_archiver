@@ -458,4 +458,4 @@ class VnIngestionRepository:
                 """,
                 (build_id, file_id, raw_json_value, raw_sha256, next_version, created_at),
             )
-            return
+            return next_version
