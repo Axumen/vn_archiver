@@ -410,15 +410,12 @@ def add_file_to_existing_build():
                 metadata_version INTEGER NOT NULL,
                 title TEXT,
                 version TEXT,
-                artifact_type TEXT,
                 build_type TEXT,
                 normalized_version TEXT,
                 distribution_platform TEXT,
                 platform TEXT,
                 language TEXT,
                 edition TEXT,
-                base_artifact_sha256 TEXT,
-                base_artifact_filename TEXT,
                 release_date TEXT,
                 source_url TEXT,
                 notes TEXT,
@@ -433,11 +430,8 @@ def add_file_to_existing_build():
             row["name"] for row in conn.execute("PRAGMA table_info(build_file_metadata)").fetchall()
         }
         required_columns = (
-            "artifact_type",
             "normalized_version",
             "platform",
-            "base_artifact_sha256",
-            "base_artifact_filename",
             "source_url",
         )
         for column_name in required_columns:
@@ -497,7 +491,6 @@ def add_file_to_existing_build():
         "metadata_version": metadata_version,
         "title": selected_build["title"] or "",
         "version": selected_build["version"] or "",
-        "artifact_type": "game_archive",
         "build_type": selected_build["build_type"] or "",
         "language": selected_build["language"] or "",
         "distribution_platform": selected_build["distribution_platform"] or "",
@@ -533,11 +526,11 @@ def add_file_to_existing_build():
         conn.execute(
             """
             INSERT INTO build_file_metadata (
-                build_id, file_id, metadata_version, title, version, artifact_type,
+                build_id, file_id, metadata_version, title, version,
                 build_type, normalized_version, distribution_platform, platform,
-                language, edition, base_artifact_sha256, base_artifact_filename,
+                language, edition,
                 release_date, source_url, notes, change_note, raw_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 build_id,
@@ -545,15 +538,12 @@ def add_file_to_existing_build():
                 int(file_metadata.get("metadata_version") or metadata_version),
                 str(file_metadata.get("title") or ""),
                 str(file_metadata.get("version") or ""),
-                str(file_metadata.get("artifact_type") or ""),
                 str(file_metadata.get("build_type") or ""),
                 str(file_metadata.get("normalized_version") or ""),
                 str(file_metadata.get("distribution_platform") or ""),
                 str(file_metadata.get("platform") or ""),
                 str(file_metadata.get("language") or ""),
                 str(file_metadata.get("edition") or ""),
-                str(file_metadata.get("base_artifact_sha256") or ""),
-                str(file_metadata.get("base_artifact_filename") or ""),
                 str(file_metadata.get("release_date") or ""),
                 str(file_metadata.get("source_url") or ""),
                 str(file_metadata.get("notes") or ""),
@@ -653,12 +643,6 @@ def upsert_build_from_metadata_yaml():
         notify("Metadata must include non-empty title and version.", "error")
         return
 
-    if str(metadata.get("artifact_type") or "").strip():
-        notify(
-            "Artifact-focused YAML selected. This mode is build/VN only; remove artifact_type or use artifact processing flow.",
-            "error",
-        )
-        return
 
     metadata = order_metadata_for_yaml(metadata)
     try:
@@ -749,18 +733,6 @@ def quick_process_with_metadata_yaml():
             notify("Metadata must include 'version'.", "error")
             return
 
-        metadata_is_artifact = bool(str(metadata.get("artifact_type") or "").strip())
-        if metadata_is_artifact:
-            notify_pipeline("3", "Pairing artifact ↔ metadata.")
-            _validate_derived_artifact_base_reference(metadata)
-            try:
-                _, resolved_build_id = _ensure_build_context_for_artifact(metadata)
-            except ValueError as exc:
-                notify(f"Artifact status: unresolved ({exc})", "error")
-                return
-            notify_pipeline("4", "VN resolved from metadata title.", "ok")
-            notify_pipeline(f"5", f"Build resolved (build_id={resolved_build_id}).", "ok")
-
         selected_sha256 = [sha256_file(path) for path in selected_paths]
         yaml_sha256 = []
 
@@ -795,8 +767,8 @@ def quick_process_with_metadata_yaml():
             raw_text=raw_metadata_text,
             source_file=metadata_path,
         )
-        notify_pipeline("6", "Artifact linked and metadata routed to VN/Build fields.", "ok")
-        notify_pipeline("7", "Artifact workflow marked classified.", "ok")
+        notify_pipeline("3", "File linked and metadata routed to VN/Build fields.", "ok")
+        notify_pipeline("4", "Processing complete.", "ok")
 
         if os.path.exists(metadata_path):
             os.remove(metadata_path)
@@ -805,182 +777,7 @@ def quick_process_with_metadata_yaml():
         notify(f"Invalid input: {exc}", "error")
 
 
-def process_artifact_with_metadata():
-    print()
-    panel("Guided Artifact Process (No YAML)")
 
-    if not os.path.exists(INCOMING_DIR):
-        os.makedirs(INCOMING_DIR)
-
-    artifact_files = sorted([
-        f for f in os.listdir(INCOMING_DIR)
-        if os.path.isfile(os.path.join(INCOMING_DIR, f))
-        and not f.lower().endswith((".yaml", ".yml"))
-    ])
-
-    if not artifact_files:
-        notify(f"No artifact files found in '{INCOMING_DIR}' (zip/non-zip files, excluding yaml).", "error")
-        return
-
-    panel("Select Artifact File")
-    for i, filename in enumerate(artifact_files, 1):
-        print(TEXT + f"[{i}] {filename}")
-
-    selection = prompt("Select artifact number, or 0 to cancel: ")
-    if selection in ("", "0"):
-        return
-
-    try:
-        idx = int(selection) - 1
-    except ValueError:
-        notify("Invalid input.", "error")
-        return
-
-    if idx < 0 or idx >= len(artifact_files):
-        notify("Invalid artifact selection.", "error")
-        return
-
-    artifact_filename = artifact_files[idx]
-    artifact_path = os.path.join(INCOMING_DIR, artifact_filename)
-    show_file_info(artifact_filename)
-
-    notify_pipeline("1", "Artifact file ingested independently.")
-
-    metadata = _prompt_artifact_metadata()
-    if metadata is None:
-        return
-
-    notify_pipeline("2", "Metadata parsed independently (not resolved to VN/Build yet).")
-
-    try:
-        notify_pipeline("3", "Pairing artifact ↔ metadata.")
-        _, resolved_build_id = _ensure_build_context_for_artifact(metadata)
-    except ValueError as exc:
-        notify(f"Artifact status: unresolved ({exc})", "error")
-        return
-
-    notify_pipeline("4", "VN resolved from metadata title.", "ok")
-    notify_pipeline("5", f"Build resolved (build_id={resolved_build_id}).", "ok")
-
-    create_archive_from_metadata_file([artifact_path], metadata)
-    notify_pipeline("6", "Artifact linked and metadata routed to VN/Build fields.", "ok")
-    notify_pipeline("7", "Artifact workflow marked classified.", "ok")
-
-
-def _derive_build_metadata_from_artifact_metadata(metadata):
-    """Project artifact-side metadata into build/VN metadata for build upsert."""
-    build_metadata = {
-        "metadata_version": metadata.get("metadata_version", get_active_metadata_template_version()),
-        "title": metadata.get("title"),
-        "version": metadata.get("version"),
-    }
-
-    projected_fields = [
-        "series",
-        "series_description",
-        "aliases",
-        "developer",
-        "publisher",
-        "release_status",
-        "content_rating",
-        "content_mode",
-        "content_type",
-        "description",
-        "source",
-        "tags",
-        "build_type",
-        "release_type",
-        "normalized_version",
-        "distribution_model",
-        "distribution_platform",
-        "language",
-        "translator",
-        "edition",
-        "original_release_date",
-        "release_date",
-        "engine",
-        "engine_version",
-        "target_platform",
-        "build_relations",
-        "parent_vn_title",
-        "relationship_type",
-        "change_note",
-    ]
-
-    for field_name in projected_fields:
-        value = metadata.get(field_name)
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        build_metadata[field_name] = value
-
-    return build_metadata
-
-
-def _ensure_build_context_for_artifact(metadata):
-    """
-    Ensure artifact metadata resolves to exactly one build.
-    If no match exists, create/upsert build metadata first, then resolve again.
-    """
-    with get_connection() as conn:
-        try:
-            return resolve_existing_build_for_artifact(conn, metadata)
-        except ValueError as exc:
-            message = str(exc)
-            if "matched multiple builds" in message:
-                raise ValueError(
-                    "Artifact metadata matches multiple builds. Add release_type/language/edition/distribution_platform to disambiguate."
-                ) from exc
-            if "no build found" not in message:
-                raise
-
-    notify("No existing build match found. Creating/upserting build context before artifact ingestion.", "info")
-    build_metadata = _derive_build_metadata_from_artifact_metadata(metadata)
-    insert_visual_novel(build_metadata)
-
-    with get_connection() as conn:
-        return resolve_existing_build_for_artifact(conn, metadata)
-
-
-def _prompt_artifact_metadata():
-    panel("Artifact Metadata (Build Context + Artifact)")
-
-    title_input = prompt("title: ")
-    version_input = prompt("version: ")
-    if not title_input or not version_input:
-        notify("title and version are required.", "error")
-        return None
-
-    panel("Optional Build-Context Fields (Disambiguation)")
-    build_type = prompt("build_type (optional): ")
-    release_type = prompt("release_type (optional, defaults to build_type): ") or build_type
-    language = prompt("language (optional): ")
-    edition = prompt("edition (optional): ")
-    distribution_platform = prompt("distribution_platform (optional): ")
-
-    release_date = prompt("release_date (optional, YYYY-MM-DD): ")
-    notes = prompt("notes (optional): ")
-    change_note = prompt("change_note (optional): ")
-
-    metadata = {
-        "metadata_version": get_active_metadata_template_version(),
-        "title": title_input,
-        "version": version_input,
-        "build_type": build_type,
-        "release_type": release_type,
-        "distribution_platform": distribution_platform,
-        "language": language,
-        "edition": edition,
-        "release_date": release_date,
-        "notes": notes,
-        "change_note": change_note,
-    }
-    metadata = {k: v for k, v in metadata.items() if v not in ("", None)}
-
-
-    notify("Metadata captured. Build/VN resolution happens in the next stage.", "info")
-    return metadata
 
 
 # =============================
