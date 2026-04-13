@@ -473,6 +473,7 @@ PASSTHROUGH_FIELDS = {
     "sha256",
     "size_bytes",
     "original_filename",
+    "artifact_type",
     "archived_at",
     "_raw_text",
     "_source_file",
@@ -665,8 +666,9 @@ def collect_archives_for_db(metadata):
     if top_level_sha:
         archives_to_process.append({
             'sha256': top_level_sha,
-            'file_size': metadata.get('size_bytes', 0),
+            'size_bytes': metadata.get('size_bytes', 0),
             'filename': metadata.get('original_filename'),
+            'artifact_type': metadata.get('artifact_type'),
         })
 
     if 'archives' in metadata and isinstance(metadata['archives'], list):
@@ -674,8 +676,9 @@ def collect_archives_for_db(metadata):
             if isinstance(archive, dict) and archive.get('sha256'):
                 archives_to_process.append({
                     'sha256': archive.get('sha256'),
-                    'file_size': archive.get('size_bytes', 0),
+                    'size_bytes': archive.get('size_bytes', 0),
                     'filename': archive.get('filename'),
+                    'artifact_type': archive.get('artifact_type'),
                 })
 
     if not top_level_sha and archives_to_process:

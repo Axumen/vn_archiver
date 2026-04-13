@@ -441,6 +441,12 @@ class VnIngestionRepository:
 
         if file_row:
             file_id = file_row["file_id"]
+            size_bytes = archive_data.get("size_bytes")
+            if size_bytes is not None:
+                self.conn.execute(
+                    "UPDATE file SET size_bytes = ? WHERE file_id = ? AND size_bytes IS NULL",
+                    (size_bytes, file_id)
+                )
         else:
             size_bytes = archive_data.get("size_bytes")
             if size_bytes is None:
@@ -456,6 +462,10 @@ class VnIngestionRepository:
             "SELECT 1 FROM build_file WHERE build_id = ? AND file_id = ? LIMIT 1",
             (build_id, file_id),
         ).fetchone()
+        artifact_type = self._normalize_text_value(metadata.get("artifact_type"))
+        if not artifact_type:
+            artifact_type = self._normalize_text_value(archive_data.get("artifact_type"))
+
         if not link_row:
             archived_at = metadata.get("archived_at")
             if not archived_at:
@@ -463,11 +473,16 @@ class VnIngestionRepository:
             if not archived_at:
                 archived_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-            artifact_type = self._normalize_text_value(metadata.get("artifact_type"))
             self.conn.execute(
                 "INSERT INTO build_file (build_id, file_id, original_filename, artifact_type, archived_at) VALUES (?, ?, ?, ?, ?)",
                 (build_id, file_id, filename, artifact_type, archived_at),
             )
+        else:
+            if artifact_type is not None:
+                self.conn.execute(
+                    "UPDATE build_file SET artifact_type = ? WHERE build_id = ? AND file_id = ? AND (artifact_type IS NULL OR artifact_type = '')",
+                    (artifact_type, build_id, file_id)
+                )
 
         return file_id
 
