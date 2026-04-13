@@ -246,6 +246,11 @@ class VnIngestionRepository:
                 continue
             vn_values[column_name] = self._normalize_text_value(metadata.get(column_name))
 
+        if "series_id" in vn_columns:
+            series_id = self.get_or_create_series(metadata)
+            if series_id is not None:
+                vn_values["series_id"] = series_id
+
         existing = self.conn.execute(
             f"SELECT {self.vn_id_column} FROM {self.vn_table} WHERE TRIM(title) = TRIM(?) COLLATE NOCASE LIMIT 1",
             (title,),
