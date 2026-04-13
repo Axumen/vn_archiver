@@ -338,8 +338,6 @@ def create_metadata(zip_path):
         detect_latest_metadata_template_version()
     )
     required_fields, optional_fields = resolve_prompt_field_groups(template)
-    required_fields = [field for field in required_fields if field != "artifact_type"]
-    optional_fields = [field for field in optional_fields if field != "artifact_type"]
 
     metadata = {"metadata_version": metadata_version}
 
@@ -927,8 +925,6 @@ def create_archive_only(
     # -------------------------------------------------------------------
     base_template = load_metadata_template(metadata_version)
     required_fields, optional_fields = resolve_prompt_field_groups(base_template)
-    required_fields = [field for field in required_fields if field != "artifact_type"]
-    optional_fields = [field for field in optional_fields if field != "artifact_type"]
     prompt_fields = required_fields + optional_fields
 
     metadata = {"metadata_version": metadata_version}
@@ -1106,27 +1102,6 @@ def finalize_archive_creation(metadata, archives_data):
     if not vn_id:
         print(Fore.RED + "Failed to insert visual novel into database.")
         return
-
-    build_id = None
-    build_language = normalize_text_list_value(metadata.get('language'))
-    build_release_type = metadata.get('release_type') or metadata.get('build_type')
-    build_platform = metadata.get('platform') or metadata.get('distribution_platform')
-    with get_connection() as conn:
-        build_row = conn.execute(
-            '''
-            SELECT build_id FROM build
-            WHERE vn_id = ? AND version = ?
-              AND COALESCE(language, '') = COALESCE(?, '')
-              AND COALESCE(build_type, '') = COALESCE(?, '')
-              AND COALESCE(distribution_platform, '') = COALESCE(?, '')
-            LIMIT 1
-            ''',
-            (vn_id, metadata.get('version'), build_language, build_release_type, build_platform)
-        ).fetchone()
-        if build_row:
-            build_id = build_row['build_id']
-
-    metadata_version_number = get_current_metadata_version_number(vn_id=vn_id, build_id=build_id)
 
 
 def create_archive_from_metadata_file(archive_paths, metadata, raw_text=None, source_file=None):
