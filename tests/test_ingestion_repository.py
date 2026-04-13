@@ -65,7 +65,8 @@ def test_create_artifact_fails_for_legacy_artifacts_schema():
 def make_conn_new_schema():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    conn.execute("CREATE TABLE vn (vn_id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
+    conn.execute("CREATE TABLE series (series_id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT)")
+    conn.execute("CREATE TABLE vn (vn_id INTEGER PRIMARY KEY, title TEXT NOT NULL, series_id INTEGER)")
     conn.execute(
         """
         CREATE TABLE build (
@@ -381,3 +382,42 @@ def test_repository_tracks_raw_metadata_versions_per_build():
     assert '"version": "1.0"' in rows[0]["raw_json"]
     assert '"version": "1.1"' in rows[1]["raw_json"]
     assert rows[0]["raw_sha256"] != rows[1]["raw_sha256"]
+
+
+def test_repository_populates_series_and_maps_id():
+    conn = make_conn_new_schema()
+    repo = VnIngestionRepository(conn)
+
+    metadata = {
+        "title": "Series VN 1",
+        "version": "1.0",
+        "series": "Epic Saga",
+        "series_description": "The first book in the saga",
+    }
+    vn_id, _ = repo.upsert_vn_and_build(metadata)
+
+    # Verify series was created
+    series_row = conn.execute("SELECT series_id, name, description FROM series").fetchone()
+    assert series_row is not None
+    assert series_row["name"] == "Epic Saga"
+    assert series_row["description"] == "The first book in the saga"
+    series_id = series_row["series_id"]
+
+    # Verify VN is linked to the series
+    vn_row = conn.execute("SELECT series_id FROM vn WHERE vn_id = ?", (vn_id,)).fetchone()
+    assert vn_row["series_id"] == series_id
+
+    # Verify updating Description of the series with another release
+    metadata_2 = {
+        "title": "Series VN 2",
+        "version": "1.0",
+        "series": "Epic Saga",
+        "series_description": "Updated series description",
+    }
+    vn_id_2, _ = repo.upsert_vn_and_build(metadata_2)
+
+    series_row_2 = conn.execute("SELECT description FROM series WHERE series_id = ?", (series_id,)).fetchone()
+    assert series_row_2["description"] == "Updated series description"
+
+    vn_row_2 = conn.execute("SELECT series_id FROM vn WHERE vn_id = ?", (vn_id_2,)).fetchone()
+    assert vn_row_2["series_id"] == series_id

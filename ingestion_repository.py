@@ -218,6 +218,33 @@ class VnIngestionRepository:
 
 
 
+    def get_or_create_series(self, metadata):
+        series_name = self._normalize_text_value(metadata.get("series"))
+        if not series_name:
+            return None
+            
+        row = self.conn.execute(
+            "SELECT series_id FROM series WHERE TRIM(name) = TRIM(?) COLLATE NOCASE LIMIT 1",
+            (series_name,),
+        ).fetchone()
+        
+        description = self._normalize_text_value(metadata.get("series_description"))
+        
+        if row:
+            series_id = int(row["series_id"])
+            if description:
+                self.conn.execute(
+                    "UPDATE series SET description = ? WHERE series_id = ?",
+                    (description, series_id),
+                )
+            return series_id
+            
+        self.conn.execute(
+            "INSERT INTO series (name, description) VALUES (?, ?)",
+            (series_name, description),
+        )
+        return int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
     def get_or_create_vn(self, metadata):
         title = str(metadata.get("title") or "").strip()
         if not title:
