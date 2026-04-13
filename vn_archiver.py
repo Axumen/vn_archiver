@@ -563,51 +563,96 @@ def normalize_translator_value(value):
     return fallback or None
 
 
-def get_latest_metadata_for_title(title):
-    """Fetch metadata blob for the highest version build of a VN title, if present."""
-    if not title:
-        return {}
-    normalized_title = str(title).strip()
-    if not normalized_title:
-        return {}
-
-    with get_connection() as conn:
-        rows = conn.execute(
-            '''
-            SELECT
-                b.version AS build_version,
-                b.build_id AS build_id,
-                mrv.metadata_raw_id AS metadata_version_id,
-                mrv.raw_json AS metadata_json
-            FROM vn v
-            JOIN build b ON b.vn_id = v.vn_id
-            JOIN metadata_raw_versions mrv ON mrv.build_id = b.build_id AND mrv.is_current = 1
-            WHERE TRIM(v.title) = TRIM(?) COLLATE NOCASE
-            ''',
-            (normalized_title,)
-        ).fetchall()
-
-    if not rows:
-        return {}
-
-    latest_row = max(
-        rows,
-        key=lambda row: (
-            normalize_version_for_sort(row["build_version"]),
-            int(row["build_id"] or 0),
-            int(row["metadata_version_id"] or 0),
-        )
-    )
-
-    if not latest_row['metadata_json']:
-        return {}
-
-    try:
-        parsed = json.loads(latest_row['metadata_json'])
-        return parsed if isinstance(parsed, dict) else {}
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
+def get_latest_metadata_for_title(title):
+
+    """Fetch metadata blob for the highest version build of a VN title, if present."""
+
+    if not title:
+
+        return {}
+
+    normalized_title = str(title).strip()
+
+    if not normalized_title:
+
+        return {}
+
+
+
+    with get_connection() as conn:
+
+        rows = conn.execute(
+
+            '''
+
+            SELECT
+
+                b.version AS build_version,
+
+                b.build_id AS build_id,
+
+                mrv.metadata_raw_id AS metadata_version_id,
+
+                mrv.raw_json AS metadata_json
+
+            FROM vn v
+
+            JOIN build b ON b.vn_id = v.vn_id
+
+            JOIN metadata_raw_versions mrv ON mrv.build_id = b.build_id AND mrv.is_current = 1
+
+            WHERE TRIM(v.title) = TRIM(?) COLLATE NOCASE
+
+            ''',
+
+            (normalized_title,)
+
+        ).fetchall()
+
+
+
+    if not rows:
+
+        return {}
+
+
+
+    latest_row = max(
+
+        rows,
+
+        key=lambda row: (
+
+            normalize_version_for_sort(row["build_version"]),
+
+            int(row["build_id"] or 0),
+
+            int(row["metadata_version_id"] or 0),
+
+        )
+
+    )
+
+
+
+    if not latest_row['metadata_json']:
+
+        return {}
+
+
+
+    try:
+
+        parsed = json.loads(latest_row['metadata_json'])
+
+        return parsed if isinstance(parsed, dict) else {}
+
+    except (json.JSONDecodeError, TypeError):
+
+        return {}
+
+
+
 
 
 def collect_archives_for_db(metadata):
@@ -638,35 +683,64 @@ def collect_archives_for_db(metadata):
 
 
 
-def insert_visual_novel(metadata):
-    '''
-    Inserts or updates the normalized metadata into the SQLite database.
-    '''
-
-    metadata = normalize_metadata_fields(metadata)
-    raw_text = metadata.pop("_raw_text", None)
-    source_file = metadata.pop("_source_file", None)
-    metadata_version = int(metadata.get("metadata_version") or detect_latest_metadata_template_version())
-    template = load_metadata_template(metadata_version)
-    validate_metadata_contract(metadata, template, CATEGORY_ALL_FIELDS)
-
-    with get_connection() as conn:
-        repository = VnIngestionRepository(conn)
-        domain_service = VisualNovelDomainService(
-            conn,
-            repository=repository,
-            collect_archives_for_db=collect_archives_for_db,
-        )
-        ingest_payload = dict(metadata)
-        if raw_text is not None:
-            ingest_payload["_raw_text"] = raw_text
-        if source_file is not None:
-            ingest_payload["_source_file"] = source_file
-
-        result = domain_service.ingest(ingest_payload)
-
-        return result.vn_id
-
+def insert_visual_novel(metadata):
+
+    '''
+
+    Inserts or updates the normalized metadata into the SQLite database.
+
+    '''
+
+
+
+    metadata = normalize_metadata_fields(metadata)
+
+    raw_text = metadata.pop("_raw_text", None)
+
+    source_file = metadata.pop("_source_file", None)
+
+    metadata_version = int(metadata.get("metadata_version") or detect_latest_metadata_template_version())
+
+    template = load_metadata_template(metadata_version)
+
+    validate_metadata_contract(metadata, template, CATEGORY_ALL_FIELDS)
+
+
+
+    with get_connection() as conn:
+
+        repository = VnIngestionRepository(conn)
+
+        domain_service = VisualNovelDomainService(
+
+            conn,
+
+            repository=repository,
+
+            collect_archives_for_db=collect_archives_for_db,
+
+        )
+
+        ingest_payload = dict(metadata)
+
+        if raw_text is not None:
+
+            ingest_payload["_raw_text"] = raw_text
+
+        if source_file is not None:
+
+            ingest_payload["_source_file"] = source_file
+
+
+
+        result = domain_service.ingest(ingest_payload)
+
+
+
+        return result.vn_id
+
+
+
 
 # ==============================
 # BACKBLAZE
@@ -1506,13 +1580,13 @@ def upload_archive(file_path):
     vn_id = None
     build_id = None
     with get_connection() as conn:
-        vn_row = conn.execute("SELECT id FROM visual_novels WHERE title = ?", (title,)).fetchone()
+        vn_row = conn.execute("SELECT vn_id FROM vn WHERE title = ?", (title,)).fetchone()
         if not vn_row:
             print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' does not exist in the database.")
             print(Fore.YELLOW + "Please run '(1) Create Metadata' to register it before uploading.")
             return False
 
-        vn_id = vn_row[0]
+        vn_id = vn_row["vn_id"]
 
         if version:
             build_row = conn.execute(
@@ -1534,7 +1608,7 @@ def upload_archive(file_path):
                 return False
         else:
             build_row = conn.execute(
-                "SELECT id, version FROM builds WHERE vn_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+                "SELECT build_id, version FROM build WHERE vn_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
                 (vn_id,)
             ).fetchone()
             if not build_row:
@@ -1544,7 +1618,7 @@ def upload_archive(file_path):
             version = str(build_row["version"]).strip()
             print(Fore.YELLOW + f"No version supplied in sidecar metadata; using latest DB build version: {version}")
 
-        build_id = build_row["id"]
+        build_id = build_row["build_id"]
 
     # -------------------------------------------------------------------
     # 3. Validate sidecar metadata revision against DB metadata history
@@ -1579,9 +1653,9 @@ def upload_archive(file_path):
 
     if not metadata_row:
         if requested_metadata_revision is not None:
-            print(Fore.RED + f"Upload Blocked: {'Artifact' if is_artifact_metadata(metadata) else 'Build'} {build_id} has no metadata version v{requested_metadata_revision} in database.")
+            print(Fore.RED + f"Upload Blocked: Build {build_id} has no metadata version v{requested_metadata_revision} in database.")
         else:
-            print(Fore.RED + f"Upload Blocked: {'Artifact' if is_artifact_metadata(metadata) else 'Build'} {build_id} has no current metadata version in database.")
+            print(Fore.RED + f"Upload Blocked: Build {build_id} has no current metadata version in database.")
         print(Fore.YELLOW + "Please run '(1) Create Metadata' or update metadata before uploading.")
         return False
 
@@ -1880,12 +1954,12 @@ def upload_metadata_sidecar(sidecar_path):
     vn_id = None
     build_id = None
     with get_connection() as conn:
-        vn_row = conn.execute("SELECT id FROM visual_novels WHERE title = ?", (title,)).fetchone()
+        vn_row = conn.execute("SELECT vn_id FROM vn WHERE title = ?", (title,)).fetchone()
         if not vn_row:
             print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' does not exist in the database.")
             return False
 
-        vn_id = vn_row[0]
+        vn_id = vn_row["vn_id"]
 
         if version:
             build_row = conn.execute(
@@ -1904,7 +1978,7 @@ def upload_metadata_sidecar(sidecar_path):
                 return False
         else:
             build_row = conn.execute(
-                "SELECT id, version FROM builds WHERE vn_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+                "SELECT build_id, version FROM build WHERE vn_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
                 (vn_id,)
             ).fetchone()
             if not build_row:
@@ -1913,7 +1987,7 @@ def upload_metadata_sidecar(sidecar_path):
             version = str(build_row["version"]).strip()
             print(Fore.YELLOW + f"No version supplied in sidecar metadata; using latest DB build version: {version}")
 
-        build_id = build_row["id"]
+        build_id = build_row["build_id"]
 
     with get_connection() as conn:
         if is_artifact_metadata(metadata):
