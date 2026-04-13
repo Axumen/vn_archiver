@@ -265,12 +265,12 @@ def toggle_metadata_editor_mode():
 
 
 def process_incoming_pairs():
-    """Pair-processing submenu: paired ingest, build-only upsert, or file-to-build linking."""
+    """Pair-processing submenu: paired ingest, release-only upsert, or file-to-release linking."""
     print()
     panel("Process Incoming")
     print(PRIMARY + "  1) Process Incoming Pairs (File + YAML)")
-    print(PRIMARY + "  2) Create Build from Metadata YAML")
-    print(PRIMARY + "  3) Add File to Existing Build")
+    print(PRIMARY + "  2) Create Release from Metadata YAML")
+    print(PRIMARY + "  3) Add File to Existing Release")
     print(PRIMARY + "  0) Back\n")
 
     mode = prompt("Select option: ")
@@ -280,10 +280,10 @@ def process_incoming_pairs():
         _process_incoming_pairs()
         return
     if mode == "2":
-        upsert_build_from_metadata_yaml()
+        upsert_release_from_metadata_yaml()
         return
     if mode == "3":
-        add_file_to_existing_build()
+        add_file_to_existing_release()
         return
 
     notify("Invalid option.", "error")
