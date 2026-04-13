@@ -666,7 +666,7 @@ def collect_archives_for_db(metadata):
     if top_level_sha:
         archives_to_process.append({
             'sha256': top_level_sha,
-            'size_bytes': metadata.get('size_bytes', 0),
+            'size_bytes': metadata.get('size_bytes') or None,
             'filename': metadata.get('original_filename'),
             'artifact_type': metadata.get('artifact_type'),
         })
@@ -676,7 +676,7 @@ def collect_archives_for_db(metadata):
             if isinstance(archive, dict) and archive.get('sha256'):
                 archives_to_process.append({
                     'sha256': archive.get('sha256'),
-                    'size_bytes': archive.get('size_bytes', 0),
+                    'size_bytes': archive.get('size_bytes') or None,
                     'filename': archive.get('filename'),
                     'artifact_type': archive.get('artifact_type'),
                 })

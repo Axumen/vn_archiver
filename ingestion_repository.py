@@ -442,14 +442,14 @@ class VnIngestionRepository:
         if file_row:
             file_id = file_row["file_id"]
             size_bytes = archive_data.get("size_bytes")
-            if size_bytes is not None:
+            if size_bytes:
                 self.conn.execute(
-                    "UPDATE file SET size_bytes = ? WHERE file_id = ? AND size_bytes IS NULL",
+                    "UPDATE file SET size_bytes = ? WHERE file_id = ? AND (size_bytes IS NULL OR size_bytes = 0)",
                     (size_bytes, file_id)
                 )
         else:
             size_bytes = archive_data.get("size_bytes")
-            if size_bytes is None:
+            if not size_bytes:
                 path_to_check = archive_data.get("filepath") or archive_data.get("original_path") or archive_data.get("filename")
                 size_bytes = self._get_file_size_from_disk(path_to_check)
             self.conn.execute(
