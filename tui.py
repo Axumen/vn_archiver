@@ -20,6 +20,7 @@ from vn_archiver import (
     UPLOADING_DIR,
     sha256_file,
     load_metadata_template,
+    load_file_metadata_template,
     resolve_prompt_fields,
     get_available_metadata_template_versions,
     detect_latest_metadata_template_version,
@@ -436,7 +437,7 @@ def add_file_to_existing_build():
     archived_at = _dt.utcnow().isoformat() + "Z"
 
     metadata_version = get_active_metadata_template_version()
-    template = load_metadata_template(metadata_version)
+    template = load_file_metadata_template(metadata_version)
     prompt_fields = resolve_prompt_fields(template)
     file_metadata = {
         "metadata_version": metadata_version,

@@ -229,6 +229,27 @@ def load_metadata_template(version=None):
         return yaml.safe_load(f) or {}
 
 
+def load_file_metadata_template(version=None):
+    """Load the file-level metadata template (metadata_file_v*.yaml).
+
+    This template defines the fields prompted when attaching a file to an
+    existing build, as opposed to the build-level template used for full
+    build/VN ingestion.
+    """
+    if version is None:
+        version = detect_latest_metadata_template_version()
+
+    template_path = get_file_metadata_template_path(version)
+
+    if not template_path.exists():
+        raise FileNotFoundError(
+            f"File metadata template not found for version {version}: {template_path}"
+        )
+
+    with open(template_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
 
 def set_nested_value(target, dotted_key, value):
     parts = dotted_key.split(".")
