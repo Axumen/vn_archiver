@@ -25,31 +25,8 @@ class VnIngestionRepository:
         "change_note": "change_note",
     }
 
-    def __init__(
-        self,
-        conn,
-        *,
-        upsert_series,
-        upsert_visual_novel_record,
-        sync_vn_tags,
-        sync_canon_relationship,
-        upsert_build_record,
-        sync_build_target_platforms,
-        sync_build_relations,
-        resolve_existing_build_for_artifact,
-        create_artifact_record,
-    ):
+    def __init__(self, conn):
         self.conn = conn
-        self._upsert_series = upsert_series
-        self._upsert_visual_novel_record = upsert_visual_novel_record
-        self._sync_vn_tags = sync_vn_tags
-        self._sync_canon_relationship = sync_canon_relationship
-        self._upsert_build_record = upsert_build_record
-        self._sync_build_target_platforms = sync_build_target_platforms
-        self._sync_build_relations = sync_build_relations
-        self._resolve_existing_build_for_artifact = resolve_existing_build_for_artifact
-        self._create_artifact_record = create_artifact_record
-
         self._resolve_schema()
 
     def _table_exists(self, table_name):
@@ -238,8 +215,7 @@ class VnIngestionRepository:
                 (build_id, language_id),
             )
 
-    def resolve_existing_build_for_artifact(self, metadata):
-        return self._resolve_existing_build_for_artifact(self.conn, metadata)
+
 
     def get_or_create_vn(self, metadata):
         title = str(metadata.get("title") or "").strip()
@@ -248,8 +224,6 @@ class VnIngestionRepository:
 
         vn_columns = self._table_columns(self.vn_table)
         vn_updatable_columns = [
-            "series",
-            "series_description",
             "aliases",
             "developer",
             "publisher",
@@ -413,7 +387,7 @@ class VnIngestionRepository:
         build_id = self.get_or_create_build(vn_id, metadata)
         return vn_id, build_id
 
-    def _create_artifact_in_file_tables(self, build_id, metadata, archive_data):
+    def _create_file_in_tables(self, build_id, metadata, archive_data):
         archive_data = archive_data or {}
         artifact_sha = self._normalize_text_value(archive_data.get("sha256"))
         if not artifact_sha:
@@ -446,12 +420,12 @@ class VnIngestionRepository:
 
         return file_id
 
-    def create_artifact(self, build_id, metadata, archive_data):
+    def create_file_link(self, build_id, metadata, archive_data):
         if self.has_file_link_tables:
-            return self._create_artifact_in_file_tables(build_id, metadata, archive_data)
-        raise RuntimeError("No supported artifact/file persistence tables found in current schema.")
+            return self._create_file_in_tables(build_id, metadata, archive_data)
+        raise RuntimeError("No supported file persistence tables found in current schema.")
 
-    def create_metadata_raw(self, raw_payload, artifact_id, build_id=None):
+    def create_metadata_raw(self, raw_payload, file_id, build_id=None):
         if self._table_exists("metadata_raw_versions"):
             if build_id is None:
                 return
@@ -465,6 +439,12 @@ class VnIngestionRepository:
             raw_sha256 = hashlib.sha256(raw_json_value.encode("utf-8")).hexdigest()
             created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
+            # Mark all previous versions as not current
+            self.conn.execute(
+                "UPDATE metadata_raw_versions SET is_current = 0 WHERE build_id = ? AND is_current = 1",
+                (build_id,),
+            )
+
             next_version = self.conn.execute(
                 "SELECT COALESCE(MAX(version_number), 0) + 1 FROM metadata_raw_versions WHERE build_id = ?",
                 (build_id,),
@@ -473,9 +453,9 @@ class VnIngestionRepository:
             self.conn.execute(
                 """
                 INSERT INTO metadata_raw_versions (
-                    build_id, file_id, raw_json, raw_sha256, version_number, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    build_id, file_id, raw_json, raw_sha256, version_number, is_current, created_at
+                ) VALUES (?, ?, ?, ?, ?, 1, ?)
                 """,
-                (build_id, artifact_id, raw_json_value, raw_sha256, next_version, created_at),
+                (build_id, file_id, raw_json_value, raw_sha256, next_version, created_at),
             )
             return

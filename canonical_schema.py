@@ -28,13 +28,21 @@ class TableSpec:
     columns: tuple[ColumnSpec, ...]
 
 
+SERIES_TABLE = TableSpec(
+    name="series",
+    columns=(
+        ColumnSpec("series_id", "series_id", required=True),
+        ColumnSpec("name", "series", required=True),
+        ColumnSpec("description", "series_description"),
+    ),
+)
+
 VN_TABLE = TableSpec(
     name="vn",
     columns=(
-        ColumnSpec("id", "id", required=True),
+        ColumnSpec("vn_id", "vn_id", required=True),
         ColumnSpec("title", "title", required=True),
-        ColumnSpec("series", "series"),
-        ColumnSpec("series_description", "series_description"),
+        ColumnSpec("series_id", "series_id"),
         ColumnSpec("aliases", "aliases"),
         ColumnSpec("developer", "developer"),
         ColumnSpec("publisher", "publisher"),
@@ -52,7 +60,7 @@ VN_TABLE = TableSpec(
 BUILD_TABLE = TableSpec(
     name="build",
     columns=(
-        ColumnSpec("id", "id", required=True),
+        ColumnSpec("build_id", "build_id", required=True),
         ColumnSpec("vn_id", "vn_id", required=True),
         ColumnSpec("version", "version", required=True),
         ColumnSpec("build_type", "build_type"),
@@ -73,31 +81,28 @@ BUILD_TABLE = TableSpec(
 FILE_TABLE = TableSpec(
     name="file",
     columns=(
-        ColumnSpec("id", "id", required=True),
-        ColumnSpec("build_id", "build_id", required=True),
-        ColumnSpec("filename", "archives.filename", required=True),
+        ColumnSpec("file_id", "file_id", required=True),
         ColumnSpec("sha256", "archives.sha256", required=True),
+        ColumnSpec("size_bytes", "archives.file_size_bytes"),
+        ColumnSpec("filename", "archives.filename"),
     ),
 )
 
 BUILD_FILE_METADATA_TABLE = TableSpec(
     name="build_file_metadata",
     columns=(
-        ColumnSpec("metadata_id", "id", required=True),
+        ColumnSpec("metadata_id", "metadata_id", required=True),
         ColumnSpec("build_id", "build_id", required=True),
         ColumnSpec("file_id", "file_id", required=True),
         ColumnSpec("metadata_version", "metadata_version", required=True),
         ColumnSpec("title", "title"),
         ColumnSpec("version", "version"),
-        ColumnSpec("artifact_type", "artifact_type"),
         ColumnSpec("build_type", "build_type"),
         ColumnSpec("normalized_version", "normalized_version"),
         ColumnSpec("distribution_platform", "distribution_platform"),
         ColumnSpec("platform", "platform"),
         ColumnSpec("language", "language"),
         ColumnSpec("edition", "edition"),
-        ColumnSpec("base_artifact_sha256", "base_artifact_sha256"),
-        ColumnSpec("base_artifact_filename", "base_artifact_filename"),
         ColumnSpec("release_date", "release_date"),
         ColumnSpec("source_url", "source_url"),
         ColumnSpec("notes", "notes"),
@@ -110,7 +115,7 @@ BUILD_FILE_METADATA_TABLE = TableSpec(
 BUILD_RELATION_TABLE = TableSpec(
     name="build_relation",
     columns=(
-        ColumnSpec("id", "id", required=True),
+        ColumnSpec("relation_id", "relation_id", required=True),
         ColumnSpec("from_build_id", "from_build_id", required=True),
         ColumnSpec("parent_vn_title", "parent_vn_title"),
         ColumnSpec("relationship_type", "relationship_type", required=True),
@@ -118,6 +123,7 @@ BUILD_RELATION_TABLE = TableSpec(
 )
 
 DOMAIN_TABLES = (
+    SERIES_TABLE,
     VN_TABLE,
     BUILD_TABLE,
     FILE_TABLE,

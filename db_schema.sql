@@ -1,11 +1,17 @@
 PRAGMA foreign_keys = ON;
 
+-- Series identity
+CREATE TABLE IF NOT EXISTS series (
+    series_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT
+);
+
 -- VN identity (title-level)
 CREATE TABLE IF NOT EXISTS vn (
     vn_id INTEGER PRIMARY KEY,
     title TEXT NOT NULL UNIQUE,
-    series TEXT,
-    series_description TEXT,
+    series_id INTEGER,
     aliases TEXT,
     developer TEXT,
     publisher TEXT,
@@ -17,7 +23,8 @@ CREATE TABLE IF NOT EXISTS vn (
     source TEXT,
     tags TEXT,
     original_release_date TEXT,
-    CHECK (original_release_date IS NULL OR original_release_date GLOB '????-??-??')
+    CHECK (original_release_date IS NULL OR original_release_date GLOB '????-??-??'),
+    FOREIGN KEY (series_id) REFERENCES series(series_id) ON DELETE SET NULL
 );
 
 -- Build identity (version-level)
@@ -74,15 +81,12 @@ CREATE TABLE IF NOT EXISTS build_file_metadata (
     metadata_version INTEGER NOT NULL,
     title TEXT,
     version TEXT,
-    artifact_type TEXT,
     build_type TEXT,
     normalized_version TEXT,
     distribution_platform TEXT,
     platform TEXT,
     language TEXT,
     edition TEXT,
-    base_artifact_sha256 TEXT,
-    base_artifact_filename TEXT,
     release_date TEXT,
     source_url TEXT,
     notes TEXT,
@@ -156,6 +160,7 @@ CREATE TABLE IF NOT EXISTS build_languages (
     FOREIGN KEY (language_id) REFERENCES languages(language_id) ON DELETE CASCADE
 );
 
+-- Content-addressed metadata versioning with version chains
 CREATE TABLE IF NOT EXISTS metadata_raw_versions (
     metadata_raw_id INTEGER PRIMARY KEY,
     build_id INTEGER NOT NULL,
@@ -163,12 +168,34 @@ CREATE TABLE IF NOT EXISTS metadata_raw_versions (
     raw_json TEXT NOT NULL,
     raw_sha256 TEXT NOT NULL,
     version_number INTEGER NOT NULL,
+    is_current INTEGER NOT NULL DEFAULT 0,
+    parent_version_id INTEGER,
+    change_note TEXT,
     created_at TEXT NOT NULL,
     FOREIGN KEY (build_id) REFERENCES build(build_id) ON DELETE CASCADE,
     FOREIGN KEY (file_id) REFERENCES file(file_id) ON DELETE SET NULL,
+    FOREIGN KEY (parent_version_id) REFERENCES metadata_raw_versions(metadata_raw_id) ON DELETE SET NULL,
     UNIQUE (build_id, version_number)
 );
 
+-- Upload tracking: content-addressed archive objects in cloud storage
+CREATE TABLE IF NOT EXISTS archive_objects (
+    sha256 TEXT PRIMARY KEY,
+    file_size INTEGER NOT NULL,
+    storage_path TEXT NOT NULL UNIQUE,
+    CHECK (length(sha256) = 64)
+);
+
+-- Upload tracking: content-addressed metadata sidecar objects in cloud storage
+CREATE TABLE IF NOT EXISTS metadata_file_objects (
+    sha256 TEXT PRIMARY KEY,
+    file_size INTEGER NOT NULL,
+    storage_path TEXT NOT NULL UNIQUE,
+    CHECK (length(sha256) = 64)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_vn_series ON vn(series_id);
 CREATE INDEX IF NOT EXISTS idx_build_vn ON build(vn_id);
 CREATE INDEX IF NOT EXISTS idx_build_type ON build(build_type);
 CREATE INDEX IF NOT EXISTS idx_file_sha256 ON file(sha256);
@@ -184,5 +211,6 @@ CREATE INDEX IF NOT EXISTS idx_build_languages_build ON build_languages(build_id
 CREATE INDEX IF NOT EXISTS idx_build_languages_lang ON build_languages(language_id);
 CREATE INDEX IF NOT EXISTS idx_metadata_raw_build ON metadata_raw_versions(build_id, version_number DESC);
 CREATE INDEX IF NOT EXISTS idx_metadata_raw_sha ON metadata_raw_versions(raw_sha256);
+CREATE INDEX IF NOT EXISTS idx_metadata_raw_current ON metadata_raw_versions(build_id, is_current) WHERE is_current = 1;
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_build_identity ON build(vn_id, normalized_version, language, edition, distribution_platform);

@@ -42,23 +42,6 @@ SUGGESTED_TAGS = [
     "school", "adult", "nakige", "utsuge"
 ]
 
-SUGGESTED_ARTIFACT_TYPE = [
-    "base_game",
-    "game_archive",
-    "patch",
-    "mod",
-    "hotfix",
-    "translation_patch",
-    "instructions",
-    "readme",
-    "manual",
-    "soundtrack",
-    "bonus",
-    "checksum",
-]
-
-BASE_ARTIFACT_TYPES = {"base_game", "game_archive"}
-DERIVED_ARTIFACT_TYPES = {"patch", "mod", "hotfix", "translation_patch"}
 
 METADATA_LIST_FIELDS = {"tags", "target_platform", "aliases", "developer", "publisher"}
 
@@ -74,7 +57,6 @@ FIELD_SUGGESTIONS = {
     "content_mode": ["sfw", "nsfw", "selectable", "patchable", "mixed", "unknown"],
     "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story", "non_canon_special"],
     "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
-    "artifact_type": SUGGESTED_ARTIFACT_TYPE,
     "tags": [
         "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
         "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
@@ -408,14 +390,6 @@ def create_metadata(zip_path):
 # DATABASE
 # ==============================
 
-def sha_exists(build_id, sha256):
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT id FROM archives WHERE build_id = ? AND sha256 = ?",
-            (build_id, sha256)
-        ).fetchone()
-        return row is not None
-
 def get_metadata_value(metadata, key, fallback=None):
     value = metadata.get(key)
     if value is not None:
@@ -493,9 +467,6 @@ PASSTHROUGH_FIELDS = {
     "notes",
     "change_note",
     "content_type",
-    "artifact_type",
-    "base_artifact_sha256",
-    "base_artifact_filename",
     "archives",
     "sha256",
     "file_size_bytes",
@@ -547,13 +518,6 @@ def normalize_metadata_fields(metadata):
     return normalized
 
 
-def is_artifact_metadata(metadata):
-    """Return True when metadata payload represents an artifact-sidecar record."""
-    if not isinstance(metadata, dict):
-        return False
-    artifact_type = str(metadata.get("artifact_type") or "").strip().lower()
-    return bool(artifact_type)
-
 
 def normalize_translator_value(value):
     """Normalize translator metadata into a storable TEXT value.
@@ -599,468 +563,51 @@ def normalize_translator_value(value):
     return fallback or None
 
 
-def get_latest_metadata_for_title(title):
-    """Fetch metadata blob for the highest version build of a VN title, if present."""
-    if not title:
-        return {}
-    normalized_title = str(title).strip()
-    if not normalized_title:
-        return {}
-
-    with get_connection() as conn:
-        rows = conn.execute(
-            '''
-            SELECT
-                b.version AS build_version,
-                b.id AS build_id,
-                mv.id AS metadata_version_id,
-                mo.metadata_json
-            FROM visual_novels v
-            JOIN builds b ON b.vn_id = v.id
-            JOIN metadata_versions mv ON mv.build_id = b.id AND mv.is_current = 1
-            JOIN metadata_objects mo ON mo.hash = mv.metadata_hash
-            WHERE TRIM(v.title) = TRIM(?) COLLATE NOCASE
-            ''',
-            (normalized_title,)
-        ).fetchall()
-
-    if not rows:
-        return {}
-
-    latest_row = max(
-        rows,
-        key=lambda row: (
-            normalize_version_for_sort(row["build_version"]),
-            int(row["build_id"] or 0),
-            int(row["metadata_version_id"] or 0),
-        )
-    )
-
-    if not latest_row['metadata_json']:
-        return {}
-
-    try:
-        parsed = json.loads(latest_row['metadata_json'])
-        return parsed if isinstance(parsed, dict) else {}
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-
-def upsert_series(conn, metadata):
-    if not metadata.get('series'):
-        return None
-
-    series_name = metadata['series'].strip()
-    series_description = get_metadata_value(metadata, 'series_description')
-    series_row = conn.execute(
-        'SELECT id, description FROM series WHERE name = ?',
-        (series_name,)
-    ).fetchone()
-
-    if series_row:
-        if series_description is not None and series_description != series_row['description']:
-            conn.execute(
-                'UPDATE series SET description = ? WHERE id = ?',
-                (series_description, series_row['id'])
-            )
-        return series_row['id']
-
-    conn.execute(
-        'INSERT INTO series (name, description) VALUES (?, ?)',
-        (series_name, series_description)
-    )
-    return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
-
-
-def upsert_visual_novel_record(conn, metadata, series_id):
-    title = metadata['title']
-
-    vn_exists = conn.execute(
-        '''
-        SELECT id, series_id, aliases, developer, publisher, description,
-               release_status, content_rating, source
-        FROM visual_novels
-        WHERE title = ?
-        ''',
-        (title,)
-    ).fetchone()
-
-    slug = slugify_component(title, 'unknown-title')
-
-    def effective_vn(field_name):
-        if field_name in metadata:
-            incoming_value = metadata.get(field_name)
-            if field_name == 'description' and vn_exists and vn_exists['description'] and incoming_value:
-                # Keep work-level synopsis stable across builds unless no description exists yet.
-                return vn_exists['description']
-            return incoming_value
-        return vn_exists[field_name] if vn_exists else None
-
-    def effective_aliases():
-        if 'aliases' in metadata:
-            return normalize_metadata_list(metadata, 'aliases')
-
-        if not vn_exists:
-            return []
-
-        existing_aliases_raw = vn_exists['aliases']
-        if not existing_aliases_raw:
-            return []
-
-        try:
-            parsed = json.loads(existing_aliases_raw)
-            if isinstance(parsed, list):
-                return [str(item).strip() for item in parsed if str(item).strip()]
-        except (json.JSONDecodeError, TypeError):
-            pass
-        return []
-
-    def effective_series_id():
-        if 'series' in metadata:
-            return series_id
-        return vn_exists['series_id'] if vn_exists else series_id
-
-    if vn_exists:
-        vn_id = vn_exists['id']
-        conn.execute('''
-            UPDATE visual_novels SET
-                series_id = ?, canonical_slug = ?, aliases = ?,
-                developer = ?, publisher = ?, description = ?, release_status = ?,
-                content_rating = ?, source = ?
-            WHERE id = ?
-        ''', (
-            effective_series_id(),
-            slug,
-            json.dumps(effective_aliases()),
-            normalize_text_list_value(effective_vn('developer')),
-            normalize_text_list_value(effective_vn('publisher')),
-            effective_vn('description'),
-            effective_vn('release_status'),
-            normalize_text_list_value(effective_vn('content_rating')),
-            effective_vn('source'),
-            vn_id
-        ))
-        return vn_id
-
-    conn.execute('''
-        INSERT INTO visual_novels (
-            series_id, title, canonical_slug, aliases,
-            developer, publisher, description, release_status, content_rating, source
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        series_id,
-        title,
-        slug,
-        json.dumps(effective_aliases()),
-        normalize_text_list_value(metadata.get('developer')),
-        normalize_text_list_value(metadata.get('publisher')),
-        metadata.get('description'),
-        metadata.get('release_status'),
-        normalize_text_list_value(metadata.get('content_rating')),
-        metadata.get('source')
-    ))
-    return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
-
-
-def sync_vn_tags(conn, vn_id, metadata):
-    tags = normalize_metadata_list(metadata, 'tags')
-
-    conn.execute('DELETE FROM vn_tags WHERE vn_id = ?', (vn_id,))
-    for tag in tags:
-        tag_id = conn.execute('SELECT id FROM tags WHERE name = ?', (tag,)).fetchone()
-        if not tag_id:
-            conn.execute('INSERT INTO tags (name) VALUES (?)', (tag,))
-            tag_id = {'id': conn.execute('SELECT last_insert_rowid()').fetchone()[0]}
-
-        conn.execute('INSERT INTO vn_tags (vn_id, tag_id) VALUES (?, ?)', (vn_id, tag_id['id']))
-
-
-def sync_visual_novel_upload_status(conn, vn_id):
-    """Set visual_novels.status based on the newest main build status."""
-    main_build_row = conn.execute(
-        """
-        SELECT status
-        FROM builds
-        WHERE vn_id = ?
-          AND (
-              build_type IS NULL
-              OR TRIM(build_type) = ''
-              OR LOWER(build_type) IN ('full', 'standalone')
-          )
-        ORDER BY created_at DESC, id DESC
-        LIMIT 1
-        """,
-        (vn_id,)
-    ).fetchone()
-
-    if main_build_row is None:
-        # Fallback for libraries that only contain non-main build types.
-        main_build_row = conn.execute(
-            """
-            SELECT status
-            FROM builds
-            WHERE vn_id = ?
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1
-            """,
-            (vn_id,)
-        ).fetchone()
-
-    target_status = 'uploaded' if (main_build_row and main_build_row['status'] == 'uploaded') else 'local'
-    conn.execute('UPDATE visual_novels SET status = ? WHERE id = ?', (target_status, vn_id))
-
-
-def upsert_build_record(conn, vn_id, metadata):
-    build_version = metadata.get('version') or metadata.get('version_string') or '1.0'
-    normalized_version = str(metadata.get('normalized_version') or build_version).strip().lower()
-    build_language = normalize_text_list_value(metadata.get('language'))
-    release_type = metadata.get('release_type') or metadata.get('build_type')
-    build_type = metadata.get('build_type') or release_type
-    build_edition = metadata.get('edition')
-    build_distribution_platform = metadata.get('distribution_platform')
-    metadata_is_artifact = is_artifact_metadata(metadata)
-    build_exists = conn.execute(
-        '''
-        SELECT id, build_type, release_type, distribution_model, distribution_platform,
-               language, translator, edition, original_release_date, release_date, engine,
-               engine_version, source
-        FROM builds
-        WHERE vn_id = ? AND normalized_version = ?
-          AND COALESCE(language, '') = COALESCE(?, '')
-          AND COALESCE(release_type, COALESCE(build_type, '')) = COALESCE(?, '')
-          AND COALESCE(edition, '') = COALESCE(?, '')
-          AND COALESCE(distribution_platform, '') = COALESCE(?, '')
-        ''',
-        (vn_id, normalized_version, build_language, release_type, build_edition, build_distribution_platform)
-    ).fetchone()
-
-    existing = build_exists if build_exists else {}
-
-    missing = object()
-
-    def metadata_value_for_field(field_name):
-        if field_name not in metadata:
-            return missing
-
-        value = metadata.get(field_name)
-        if metadata_is_artifact:
-            # Artifact sidecars can include optional build-identifying keys as blank
-            # values. Treat blank values as "not provided" so they do not wipe build
-            # columns during artifact processing.
-            if value is None:
-                return missing
-            if isinstance(value, str) and not value.strip():
-                return missing
-
-        return value
-
-    def effective(field_name):
-        field_value = metadata_value_for_field(field_name)
-        if field_value is not missing:
-            return field_value
-        return existing[field_name] if build_exists else None
-
-    values = (
-        build_version,
-        normalized_version,
-        effective('build_type'),
-        effective('release_type') if metadata.get('release_type') is not None else release_type,
-        effective('distribution_model'),
-        effective('distribution_platform'),
-        normalize_text_list_value(effective('language')),
-        normalize_translator_value(effective('translator')),
-        effective('edition'),
-        effective('original_release_date'),
-        effective('release_date'),
-        effective('engine'),
-        effective('engine_version'),
-        effective('source'),
-    )
-
-    if build_exists:
-        build_id = build_exists['id']
-        conn.execute('''
-            UPDATE builds SET
-                version = ?, normalized_version = ?, build_type = ?, release_type = ?, distribution_model = ?, distribution_platform = ?,
-                language = ?, translator = ?, edition = ?, original_release_date = ?, release_date = ?,
-                engine = ?, engine_version = ?, source = ?
-            WHERE id = ?
-        ''', values + (build_id,))
-        return build_id
-
-    conn.execute('''
-        INSERT INTO builds (
-            vn_id, version, normalized_version, build_type, release_type, distribution_model,
-            distribution_platform, language, translator, edition,
-            original_release_date, release_date, engine, engine_version, source
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        vn_id,
-        *values
-    ))
-    return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
-
-
-def resolve_existing_build_for_artifact(conn, metadata):
-    """Resolve an existing build for artifact-sidecar processing.
-
-    Artifact workflows must link to an existing build and must not mutate
-    non-artifact tables/columns as a side effect.
-    """
-    title = str(metadata.get("title") or "").strip()
-    version = str(metadata.get("version") or metadata.get("version_string") or "").strip()
-    if not title or not version:
-        raise ValueError("Artifact metadata must include non-empty title and version.")
-
-    def normalized_optional(field_name):
-        value = metadata.get(field_name)
-        if value is None:
-            return None
-        if isinstance(value, str):
-            value = value.strip()
-            return value or None
-        return str(value).strip() or None
-
-    language = normalize_text_list_value(metadata.get("language"))
-    release_type = normalized_optional("release_type") or normalized_optional("build_type")
-    edition = normalized_optional("edition")
-    distribution_platform = normalized_optional("distribution_platform")
-    normalized_version = str(metadata.get("normalized_version") or version).strip().lower()
-
-    def get_table_columns(table_name):
-        return {
-            row[1]
-            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-        }
-
-    vn_columns = get_table_columns("vn")
-    if "title" not in vn_columns:
-        raise ValueError("Current schema requires vn.title for artifact resolution.")
-
-    where_clauses = [
-        "TRIM(v.title) = TRIM(?) COLLATE NOCASE",
-        "b.version_string = ?",
-        "(? IS NULL OR COALESCE(b.language, '') = ?)",
-        "(? IS NULL OR COALESCE(b.release_type, '') = ?)",
-        "(? IS NULL OR COALESCE(b.platform, '') = ?)",
-    ]
-    params = [
-        title,
-        normalized_version,
-        language, language or "",
-        release_type, release_type or "",
-        distribution_platform, distribution_platform or "",
-    ]
-
-    sql = f"""
-        SELECT b.id AS build_id, b.vn_id
-        FROM builds b
-        JOIN vn v ON v.id = b.vn_id
-        WHERE {' AND '.join(where_clauses)}
-        ORDER BY b.id DESC
-    """
-    rows = conn.execute(sql, tuple(params)).fetchall()
-
-    if not rows:
-        raise ValueError(
-            "Artifact processing requires an existing build match; no build found for the provided title/version/context."
-        )
-    if len(rows) > 1:
-        raise ValueError(
-            "Artifact processing matched multiple builds; provide release_type/language/edition/distribution_platform to disambiguate."
-        )
-
-    row = rows[0]
-    return row["vn_id"], row["build_id"]
-
-
-def sync_canon_relationship(conn, vn_id, metadata):
-    parent_title = (metadata.get('parent_vn_title') or '').strip()
-    relationship_type = (metadata.get('relationship_type') or '').strip()
-
-    # Keep behavior explicit: only write relationship rows when both values are provided.
-    conn.execute('DELETE FROM canon_relationships WHERE child_vn_id = ?', (vn_id,))
-
-    if not parent_title or not relationship_type:
-        return
-
-    parent_row = conn.execute(
-        'SELECT id FROM visual_novels WHERE title = ?',
-        (parent_title,)
-    ).fetchone()
-
-    if not parent_row:
-        print(Fore.YELLOW + f"[DEBUG] Parent VN '{parent_title}' not found; skipping canon_relationship insert.")
-        return
-
-    conn.execute(
-        '''
-        INSERT INTO canon_relationships (parent_vn_id, child_vn_id, relationship_type)
-        VALUES (?, ?, ?)
-        ''',
-        (parent_row['id'], vn_id, relationship_type)
-    )
-
-
-def sync_build_target_platforms(conn, build_id, metadata):
-    target_platforms = normalize_metadata_list(metadata, 'target_platform')
-
-    conn.execute('DELETE FROM build_target_platforms WHERE build_id = ?', (build_id,))
-    for platform in target_platforms:
-        platform_id = conn.execute('SELECT id FROM target_platforms WHERE name = ?', (platform,)).fetchone()
-        if not platform_id:
-            conn.execute('INSERT INTO target_platforms (name) VALUES (?)', (platform,))
-            platform_id = {'id': conn.execute('SELECT last_insert_rowid()').fetchone()[0]}
-
-        conn.execute(
-            'INSERT INTO build_target_platforms (build_id, platform_id) VALUES (?, ?)',
-            (build_id, platform_id['id'])
-        )
-
-
-def sync_build_relations(conn, build_id, metadata):
-    relations = metadata.get("build_relations") or []
-    if not isinstance(relations, list):
-        return
-
-    conn.execute("DELETE FROM build_relations WHERE from_build_id = ?", (build_id,))
-
-    for rel in relations:
-        if not isinstance(rel, dict):
-            continue
-        relation_type = str(rel.get("relation_type") or "").strip().lower()
-        to_version = str(rel.get("to_version") or "").strip()
-        if not relation_type or not to_version:
-            continue
-
-        target_normalized_version = str(rel.get("to_normalized_version") or to_version).strip().lower()
-        target_build = conn.execute(
-            """
-            SELECT id
-            FROM builds
-            WHERE vn_id = (SELECT vn_id FROM builds WHERE id = ?)
-              AND normalized_version = ?
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (build_id, target_normalized_version),
-        ).fetchone()
-        if not target_build:
-            continue
-
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO build_relations (from_build_id, to_build_id, relation_type, confidence, source)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                build_id,
-                target_build["id"],
-                relation_type,
-                rel.get("confidence"),
-                rel.get("source") or "metadata",
-            ),
-        )
+def get_latest_metadata_for_title(title):
+    """Fetch metadata blob for the highest version build of a VN title, if present."""
+    if not title:
+        return {}
+    normalized_title = str(title).strip()
+    if not normalized_title:
+        return {}
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            '''
+            SELECT
+                b.version AS build_version,
+                b.build_id AS build_id,
+                mrv.metadata_raw_id AS metadata_version_id,
+                mrv.raw_json AS metadata_json
+            FROM vn v
+            JOIN build b ON b.vn_id = v.vn_id
+            JOIN metadata_raw_versions mrv ON mrv.build_id = b.build_id AND mrv.is_current = 1
+            WHERE TRIM(v.title) = TRIM(?) COLLATE NOCASE
+            ''',
+            (normalized_title,)
+        ).fetchall()
+
+    if not rows:
+        return {}
+
+    latest_row = max(
+        rows,
+        key=lambda row: (
+            normalize_version_for_sort(row["build_version"]),
+            int(row["build_id"] or 0),
+            int(row["metadata_version_id"] or 0),
+        )
+    )
+
+    if not latest_row['metadata_json']:
+        return {}
+
+    try:
+        parsed = json.loads(latest_row['metadata_json'])
+        return parsed if isinstance(parsed, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
 
 
 def collect_archives_for_db(metadata):
@@ -1090,466 +637,36 @@ def collect_archives_for_db(metadata):
     return archives_to_process, top_level_sha
 
 
-def _resolve_base_artifact_id(conn, build_id, metadata, artifact_type):
-    base_sha256 = str(metadata.get("base_artifact_sha256") or "").strip().lower() or None
-    base_filename = str(metadata.get("base_artifact_filename") or "").strip() or None
 
-    if base_sha256:
-        row = conn.execute(
-            """
-            SELECT artifact_id
-            FROM artifacts
-            WHERE build_id = ?
-              AND LOWER(sha256) = ?
-            """,
-            (build_id, base_sha256),
-        ).fetchone()
-        if not row:
-            raise ValueError("base_artifact_sha256 does not match any artifact on the selected build.")
-        return row["artifact_id"]
-
-    if base_filename:
-        rows = conn.execute(
-            """
-            SELECT artifact_id
-            FROM artifacts
-            WHERE build_id = ?
-              AND filename = ?
-            ORDER BY artifact_id DESC
-            """,
-            (build_id, base_filename),
-        ).fetchall()
-        if not rows:
-            raise ValueError("base_artifact_filename does not match any artifact on the selected build.")
-        if len(rows) > 1:
-            raise ValueError("base_artifact_filename matched multiple artifacts; use base_artifact_sha256.")
-        return rows[0]["artifact_id"]
-
-    if artifact_type in DERIVED_ARTIFACT_TYPES:
-        base_rows = conn.execute(
-            """
-            SELECT artifact_id
-            FROM artifacts
-            WHERE build_id = ?
-              AND LOWER(artifact_type) IN ({})
-            ORDER BY artifact_id DESC
-            """.format(",".join("?" for _ in BASE_ARTIFACT_TYPES)),
-            (build_id, *sorted(BASE_ARTIFACT_TYPES)),
-        ).fetchall()
-        if len(base_rows) == 1:
-            return base_rows[0]["artifact_id"]
-        if not base_rows:
-            raise ValueError(
-                "Derived artifact types require a base artifact. Provide base_artifact_sha256 or ingest a base_game/game_archive first."
-            )
-        raise ValueError(
-            "Derived artifact type matched multiple base artifacts; provide base_artifact_sha256 to disambiguate."
-        )
-
-    return None
-
-
-def upsert_artifact_record(conn, build_id, metadata, archive_data):
-    artifact_sha256 = archive_data.get('sha256')
-    if not artifact_sha256:
-        return
-
-    artifact_type = str(metadata.get('artifact_type') or '').strip().lower() or "game_archive"
-    filename = archive_data.get('filename') or metadata.get('original_filename')
-    notes = metadata.get('notes')
-    release_date = metadata.get('release_date')
-    platform = metadata.get("platform") or metadata.get("distribution_platform")
-    source_url = metadata.get("source_url") or metadata.get("source")
-    base_artifact_id = _resolve_base_artifact_id(conn, build_id, metadata, artifact_type)
-    file_size = int(archive_data.get("file_size") or metadata.get("file_size_bytes") or 0)
-    file_row = conn.execute(
-        """
-        INSERT INTO files (sha256, size_bytes)
-        VALUES (?, ?)
-        ON CONFLICT(sha256) DO UPDATE SET size_bytes = excluded.size_bytes
-        RETURNING id
-        """,
-        (artifact_sha256, file_size),
-    ).fetchone()
-    file_id = file_row["id"]
-
-    existing_row = conn.execute(
-        '''
-        SELECT artifact_id, base_artifact_id, file_object_sha256
-        FROM artifacts
-        WHERE build_id = ? AND sha256 = ?
-        ''',
-        (build_id, artifact_sha256)
-    ).fetchone()
-
-    if existing_row:
-        resolved_base_artifact_id = base_artifact_id if base_artifact_id is not None else existing_row["base_artifact_id"]
-        if resolved_base_artifact_id == existing_row["artifact_id"]:
-            raise ValueError("Artifact cannot reference itself as base_artifact_id.")
-        conn.execute(
-                '''
-                UPDATE artifacts
-                SET artifact_type = COALESCE(NULLIF(?, ''), artifact_type),
-                    platform = COALESCE(?, platform),
-                    source_url = COALESCE(?, source_url),
-                    filename = COALESCE(?, filename),
-                    file_id = COALESCE(?, file_id),
-                    file_object_sha256 = COALESCE(file_object_sha256, ?),
-                    base_artifact_id = ?,
-                    release_date = COALESCE(?, release_date),
-                    notes = COALESCE(?, notes)
-                WHERE artifact_id = ?
-                ''',
-            (
-                artifact_type,
-                platform,
-                source_url,
-                filename,
-                file_id,
-                artifact_sha256,
-                resolved_base_artifact_id,
-                release_date,
-                notes,
-                existing_row['artifact_id'],
-            )
-        )
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO artifact_files (artifact_id, file_id, path_in_artifact, is_primary)
-            VALUES (?, ?, '', 1)
-            """,
-            (existing_row["artifact_id"], file_id),
-        )
-        return existing_row['artifact_id']
-
-    if artifact_type in DERIVED_ARTIFACT_TYPES and base_artifact_id is None:
-        raise ValueError(
-            "Derived artifact types require base artifact linkage. Provide base_artifact_sha256."
-        )
-
-    conn.execute(
-        '''
-        INSERT INTO artifacts (
-            build_id, artifact_type, platform, source_url,
-            filename, sha256, file_id, file_object_sha256, base_artifact_id, release_date, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''',
-        (
-            build_id,
-            artifact_type,
-            platform,
-            source_url,
-            filename,
-            artifact_sha256,
-            file_id,
-            None,
-            base_artifact_id,
-            release_date,
-            notes,
-        )
-    )
-    artifact_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO artifact_files (artifact_id, file_id, path_in_artifact, is_primary)
-        VALUES (?, ?, '', 1)
-        """,
-        (artifact_id, file_id),
-    )
-    return artifact_id
-
-
-def link_artifact_to_file_object(conn, build_id, artifact_sha256):
-    conn.execute(
-        """
-        UPDATE artifacts
-        SET file_object_sha256 = ?
-        WHERE build_id = ?
-          AND LOWER(sha256) = LOWER(?)
-        """,
-        (artifact_sha256, build_id, artifact_sha256),
-    )
-
-
-def finalize_metadata_objects(conn, metadata, vn_id, build_id):
-    try:
-        schema_version = int(metadata.get('metadata_version') or 1)
-    except (ValueError, TypeError):
-        schema_version = 1
-
-    # Keep hash canonical for dedup/version comparisons, but preserve human-friendly
-    # metadata field order when storing metadata_json for history/export readability.
-    canonical_json = json.dumps(
-        metadata,
-        default=safe_json_serialize,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":")
-    )
-    stored_metadata = order_metadata_for_yaml(metadata)
-    stored_metadata_json = json.dumps(
-        stored_metadata,
-        default=safe_json_serialize,
-        ensure_ascii=False,
-        separators=(",", ":")
-    )
-    metadata_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
-
-    conn.execute('''
-        INSERT OR IGNORE INTO metadata_objects (hash, schema_version, metadata_json)
-        VALUES (?, ?, ?)
-    ''', (metadata_hash, schema_version, stored_metadata_json))
-
-    current_row = conn.execute(
-        'SELECT id, metadata_hash FROM metadata_versions WHERE build_id = ? AND is_current = 1',
-        (build_id,)
-    ).fetchone()
-
-    if current_row and current_row['metadata_hash'] == metadata_hash:
-        print(Fore.MAGENTA + f'[DEBUG] Metadata version unchanged for build {build_id}; current pointer retained.')
-        return
-
-    parent_version_id = current_row['id'] if current_row else None
-    next_version_number = conn.execute(
-        'SELECT COALESCE(MAX(version_number), 0) + 1 FROM metadata_versions WHERE build_id = ?',
-        (build_id,)
-    ).fetchone()[0]
-
-    conn.execute(
-        'UPDATE metadata_versions SET is_current = 0 WHERE build_id = ? AND is_current = 1',
-        (build_id,)
-    )
-
-    conn.execute('''
-        INSERT INTO metadata_versions (
-            vn_id, build_id, metadata_hash, parent_version_id, version_number, change_note, is_current
-        ) VALUES (?, ?, ?, ?, ?, ?, 1)
-    ''', (
-        vn_id,
-        build_id,
-        metadata_hash,
-        parent_version_id,
-        next_version_number,
-        metadata.get('change_note')
-    ))
-
-    print(Fore.GREEN + f'[DEBUG] Metadata version v{next_version_number} recorded for build {build_id}.')
-
-
-def finalize_artifact_metadata_objects(conn, metadata, artifact_id):
-    try:
-        schema_version = int(metadata.get('metadata_version') or 1)
-    except (ValueError, TypeError):
-        schema_version = 1
-
-    canonical_json = json.dumps(
-        metadata,
-        default=safe_json_serialize,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":")
-    )
-    stored_metadata = order_metadata_for_yaml(metadata)
-    stored_metadata_json = json.dumps(
-        stored_metadata,
-        default=safe_json_serialize,
-        ensure_ascii=False,
-        separators=(",", ":")
-    )
-    metadata_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
-
-    conn.execute(
-        '''
-        INSERT OR IGNORE INTO artifact_metadata_objects (hash, schema_version, metadata_json)
-        VALUES (?, ?, ?)
-        ''',
-        (metadata_hash, schema_version, stored_metadata_json)
-    )
-
-    current_row = conn.execute(
-        'SELECT id, metadata_hash FROM artifact_metadata_versions WHERE artifact_id = ? AND is_current = 1',
-        (artifact_id,)
-    ).fetchone()
-
-    if current_row and current_row['metadata_hash'] == metadata_hash:
-        print(Fore.MAGENTA + f'[DEBUG] Artifact metadata unchanged for artifact {artifact_id}; current pointer retained.')
-        return
-
-    parent_version_id = current_row['id'] if current_row else None
-    next_version_number = conn.execute(
-        'SELECT COALESCE(MAX(version_number), 0) + 1 FROM artifact_metadata_versions WHERE artifact_id = ?',
-        (artifact_id,)
-    ).fetchone()[0]
-
-    conn.execute(
-        'UPDATE artifact_metadata_versions SET is_current = 0 WHERE artifact_id = ? AND is_current = 1',
-        (artifact_id,)
-    )
-
-    conn.execute(
-        '''
-        INSERT INTO artifact_metadata_versions (
-            artifact_id, metadata_hash, parent_version_id, version_number, change_note, is_current
-        ) VALUES (?, ?, ?, ?, ?, 1)
-        ''',
-        (artifact_id, metadata_hash, parent_version_id, next_version_number, metadata.get('change_note'))
-    )
-
-    print(Fore.GREEN + f'[DEBUG] Artifact metadata version v{next_version_number} recorded for artifact {artifact_id}.')
-
-
-def process_archives_for_build(conn, build_id, metadata, vn_id, archives_to_process):
-    print(Fore.CYAN + f'\n[DEBUG] Found {len(archives_to_process)} archive(s) to process for DB.')
-    metadata_is_artifact = is_artifact_metadata(metadata)
-    artifact_ids = []
-
-    for arch_data in archives_to_process:
-        sha256 = arch_data.get('sha256')
-        file_size = arch_data.get('file_size', 0)
-
-        if not sha256:
-            print(Fore.RED + '[DEBUG] Skipping archive insertion - missing SHA256.')
-            continue
-
-        if metadata_is_artifact:
-            artifact_id = upsert_artifact_record(conn, build_id, metadata, arch_data)
-            if artifact_id is not None:
-                artifact_ids.append(artifact_id)
-
-        if not metadata_is_artifact:
-            archive_exists = conn.execute(
-                'SELECT id FROM archives WHERE build_id = ? AND sha256 = ?',
-                (build_id, sha256)
-            ).fetchone()
-
-            if not archive_exists:
-                print(Fore.YELLOW + f'[DEBUG] Executing SQL INSERT INTO archives for {sha256[:8]}...')
-                try:
-                    conn.execute('''
-                        INSERT INTO archives (
-                            build_id, sha256, file_size_bytes,
-                            metadata_json, metadata_version
-                        ) VALUES (?, ?, ?, ?, ?)
-                    ''', (
-                        build_id,
-                        sha256,
-                        file_size,
-                        json.dumps(metadata),
-                        metadata.get('metadata_version', 1)
-                    ))
-                    print(Fore.GREEN + f'[DEBUG] Successfully queued archive {sha256[:8]} for commit.')
-                except Exception as ex:
-                    print(Fore.RED + f'[CRITICAL] SQL Archive Insert Failed: {ex}')
-                continue
-
-            print(Fore.MAGENTA + f'[DEBUG] Archive {sha256[:8]} is already in DB. Skipping insert.')
-
-    try:
-        if metadata_is_artifact:
-            for artifact_id in sorted(set(artifact_ids)):
-                finalize_artifact_metadata_objects(conn, metadata, artifact_id)
-        else:
-            finalize_metadata_objects(conn, metadata, vn_id, build_id)
-    except Exception as e:
-        print(Fore.RED + f'[CRITICAL] Final DB commit failed: {e}')
-        raise e
-
-    try:
-        conn.commit()
-        print(Fore.GREEN + '[DEBUG] Database transaction committed successfully!')
-    except Exception as e:
-        print(Fore.RED + f'[CRITICAL] SQLite Commit Failed: {e}')
-        raise e
-
-    return vn_id
-
-    return None
-
-
-class VNService:
-    """Title-level service for VN identity and work-level metadata."""
-
-    def __init__(self, conn):
-        self.conn = conn
-
-    def upsert_vn(self, metadata):
-        series_id = upsert_series(self.conn, metadata)
-        vn_id = upsert_visual_novel_record(self.conn, metadata, series_id)
-        sync_vn_tags(self.conn, vn_id, metadata)
-        sync_canon_relationship(self.conn, vn_id, metadata)
-        return vn_id
-
-
-class VersionService:
-    """Version/build-level service for release records and build metadata."""
-
-    def __init__(self, conn):
-        self.conn = conn
-
-    def upsert_build(self, vn_id, metadata):
-        build_id = upsert_build_record(self.conn, vn_id, metadata)
-        sync_build_target_platforms(self.conn, build_id, metadata)
-        sync_build_relations(self.conn, build_id, metadata)
-        return build_id
-
-
-class ArtifactService:
-    """Artifact-level service for linking file artifacts to existing builds."""
-
-    def __init__(self, conn):
-        self.conn = conn
-
-    def resolve_target_build(self, metadata):
-        return resolve_existing_build_for_artifact(self.conn, metadata)
-
-
-def insert_visual_novel(metadata):
-    '''
-    Inserts or updates the normalized metadata into the SQLite database.
-    '''
-
-    metadata = normalize_metadata_fields(metadata)
-    raw_text = metadata.pop("_raw_text", None)
-    source_file = metadata.pop("_source_file", None)
-    metadata_version = int(metadata.get("metadata_version") or detect_latest_metadata_template_version())
-    metadata_is_artifact = is_artifact_metadata(metadata)
-    template = (
-        load_file_metadata_template(metadata_version)
-        if metadata_is_artifact
-        else load_metadata_template(metadata_version)
-    )
-    validate_metadata_contract(metadata, template, CATEGORY_ALL_FIELDS)
-
-    with get_connection() as conn:
-        repository = VnIngestionRepository(
-            conn,
-            upsert_series=upsert_series,
-            upsert_visual_novel_record=upsert_visual_novel_record,
-            sync_vn_tags=sync_vn_tags,
-            sync_canon_relationship=sync_canon_relationship,
-            upsert_build_record=upsert_build_record,
-            sync_build_target_platforms=sync_build_target_platforms,
-            sync_build_relations=sync_build_relations,
-            resolve_existing_build_for_artifact=resolve_existing_build_for_artifact,
-            create_artifact_record=upsert_artifact_record,
-        )
-        domain_service = VisualNovelDomainService(
-            conn,
-            repository=repository,
-            is_artifact_metadata=is_artifact_metadata,
-            collect_archives_for_db=collect_archives_for_db,
-            process_archives_for_build=process_archives_for_build,
-        )
-        ingest_payload = dict(metadata)
-        if raw_text is not None:
-            ingest_payload["_raw_text"] = raw_text
-        if source_file is not None:
-            ingest_payload["_source_file"] = source_file
-
-        result = domain_service.ingest(ingest_payload)
-
-        return result.vn_id
-
+def insert_visual_novel(metadata):
+    '''
+    Inserts or updates the normalized metadata into the SQLite database.
+    '''
+
+    metadata = normalize_metadata_fields(metadata)
+    raw_text = metadata.pop("_raw_text", None)
+    source_file = metadata.pop("_source_file", None)
+    metadata_version = int(metadata.get("metadata_version") or detect_latest_metadata_template_version())
+    template = load_metadata_template(metadata_version)
+    validate_metadata_contract(metadata, template, CATEGORY_ALL_FIELDS)
+
+    with get_connection() as conn:
+        repository = VnIngestionRepository(conn)
+        domain_service = VisualNovelDomainService(
+            conn,
+            repository=repository,
+            collect_archives_for_db=collect_archives_for_db,
+        )
+        ingest_payload = dict(metadata)
+        if raw_text is not None:
+            ingest_payload["_raw_text"] = raw_text
+        if source_file is not None:
+            ingest_payload["_source_file"] = source_file
+
+        result = domain_service.ingest(ingest_payload)
+
+        return result.vn_id
+
 
 # ==============================
 # BACKBLAZE
@@ -2053,52 +1170,6 @@ def format_uploaded_component(value, fallback):
     return text or fallback
 
 
-def get_current_metadata_version_number(vn_id=None, build_id=None):
-    """Minimal-schema flow uses a single active metadata payload per ingest run."""
-    return 1
-
-
-def get_current_artifact_metadata_version_number(artifact_id):
-    return 1
-
-
-def resolve_artifact_id_for_metadata(conn, build_id, metadata, fallback_sha=None):
-    if not build_id:
-        return None
-
-    sha_candidates = []
-    if fallback_sha:
-        sha_candidates.append(str(fallback_sha).strip().lower())
-
-    top_sha = str(metadata.get('sha256') or '').strip().lower()
-    if top_sha:
-        sha_candidates.append(top_sha)
-
-    archives = metadata.get('archives')
-    if isinstance(archives, list):
-        for archive in archives:
-            if isinstance(archive, dict) and archive.get('sha256'):
-                sha_candidates.append(str(archive.get('sha256')).strip().lower())
-
-    for sha in sha_candidates:
-        if not sha:
-            continue
-
-        if _table_exists(conn, "file") and _table_exists(conn, "build_file"):
-            row = conn.execute(
-                """
-                SELECT f.file_id
-                FROM build_file bf
-                JOIN file f ON f.file_id = bf.file_id
-                WHERE bf.build_id = ? AND LOWER(f.sha256) = LOWER(?)
-                LIMIT 1
-                """,
-                (build_id, sha),
-            ).fetchone()
-            if row:
-                return row["file_id"]
-
-    return None
 
 
 def build_recommended_archive_name(metadata, sha256, ext='.zip'):

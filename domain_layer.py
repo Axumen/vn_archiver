@@ -16,11 +16,11 @@ class Build:
     version: "Version"
     release_type: str | None = None
     release_status: str | None = None
-    artifact_count: int = 1
+    file_count: int = 1
 
     def __post_init__(self):
-        if self.artifact_count < 1:
-            raise ValueError("A Build must have at least one Artifact.")
+        if self.file_count < 1:
+            raise ValueError("A Build must have at least one file.")
 
 
 @dataclass(frozen=True)
@@ -43,37 +43,13 @@ class Version:
 
 
 @dataclass(frozen=True)
-class Artifact:
-    """
-    File-carrying artifact linked to a Build.
-
-    Files are modeled as artifacts linked to builds through this object.
-    """
-
-    file_sha256: str
-    build_id: int
-    artifact_type: str | None = None
-    platform: str | None = None
-    source_url: str | None = None
-
-    def __post_init__(self):
-        if not self.file_sha256:
-            raise ValueError("Artifact sha256 is required.")
-
-
-@dataclass(frozen=True)
 class IngestionResult:
     vn_id: int
     build_id: int
-    artifact: Artifact | None = None
     build: Build | None = None
     vn: VN | None = None
-    artifact_status: str | None = None
 
     def __post_init__(self):
-        if self.build is not None and self.artifact is not None:
-            if self.artifact.build_id != self.build.build_id:
-                raise ValueError("Artifact must belong to the returned Build.")
         if self.build is not None:
             if self.build.vn_id != self.vn_id:
                 raise ValueError("Build must belong to exactly one VN.")
@@ -86,16 +62,16 @@ class IngestionRepository(Protocol):
 
     def get_or_create_build(self, vn_id, metadata): ...
 
-    def create_artifact(self, build_id, metadata, archive_data): ...
+    def create_file_link(self, build_id, metadata, archive_data): ...
 
-    def create_metadata_raw(self, raw_payload, artifact_id, build_id=None): ...
+    def create_metadata_raw(self, raw_payload, file_id, build_id=None): ...
 
 
 class VisualNovelDomainService:
     """
     Domain-layer orchestration for VN archiving.
 
-    This service centralizes the file -> Artifact -> Build -> VN flow so callers do
+    This service centralizes the file -> Build -> VN flow so callers do
     not need to coordinate low-level SQL-oriented helper functions directly.
     """
 
@@ -104,16 +80,11 @@ class VisualNovelDomainService:
         conn,
         repository: IngestionRepository,
         *,
-        is_artifact_metadata,
         collect_archives_for_db,
-        process_archives_for_build=None,
     ):
         self.conn = conn
         self.repository = repository
-        self.is_artifact_metadata = is_artifact_metadata
         self.collect_archives_for_db = collect_archives_for_db
-        # Deprecated legacy hook (files-table pipeline); intentionally unused.
-        self.process_archives_for_build = process_archives_for_build
 
     def _build_domain_graph(self, metadata, archives_to_process, *, build_id=None, vn_id=None):
         if build_id is None or vn_id is None:
@@ -134,20 +105,9 @@ class VisualNovelDomainService:
             version=version,
             release_type=metadata.get("release_type"),
             release_status=metadata.get("release_status"),
-            artifact_count=max(1, len(archives_to_process)),
+            file_count=max(1, len(archives_to_process)),
         )
-        primary_archive = archives_to_process[0] if archives_to_process else {}
-        file_sha256 = primary_archive.get("sha256") or metadata.get("sha256")
-        if not file_sha256:
-            raise ValueError("A Build must have at least one Artifact sha256.")
-        artifact = Artifact(
-            file_sha256=file_sha256,
-            build_id=build_id,
-            artifact_type=metadata.get("artifact_type"),
-            platform=metadata.get("platform"),
-            source_url=metadata.get("url"),
-        )
-        return artifact, build, vn
+        return build, vn
 
     @staticmethod
     def normalize_version(version_value):
@@ -206,34 +166,34 @@ class VisualNovelDomainService:
                 if not sha:
                     continue
                 if sha in seen:
-                    raise ValueError(f"Duplicate artifact sha256 in ingest payload: {sha}")
+                    raise ValueError(f"Duplicate file sha256 in ingest payload: {sha}")
                 seen.add(sha)
             candidate_sha256 = archives_to_process[0].get("sha256")
         if not candidate_sha256:
             candidate_sha256 = metadata.get("sha256")
 
-        created_artifact_ids = []
+        created_file_ids = []
         for archive_data in archives_to_process:
             sha = archive_data.get("sha256")
             path = archive_data.get("filepath") or archive_data.get("filename")
             if not sha or not path:
                 continue
-            artifact_id = self.repository.create_artifact(build_id, resolved_metadata, archive_data)
-            if artifact_id is not None:
-                created_artifact_ids.append(artifact_id)
+            file_id = self.repository.create_file_link(build_id, resolved_metadata, archive_data)
+            if file_id is not None:
+                created_file_ids.append(file_id)
 
         raw_payload = dict(resolved_metadata)
         raw_payload.pop("_raw_text", None)
         raw_payload.pop("_source_file", None)
-        primary_artifact_id = created_artifact_ids[0] if created_artifact_ids else None
-        if raw_payload and primary_artifact_id is not None:
+        primary_file_id = created_file_ids[0] if created_file_ids else None
+        if raw_payload and primary_file_id is not None:
             self.repository.create_metadata_raw(
                 raw_payload,
-                primary_artifact_id,
+                primary_file_id,
                 build_id=build_id,
             )
 
-        artifact, build, vn = self._build_domain_graph(
+        build, vn = self._build_domain_graph(
             resolved_metadata,
             archives_to_process,
             build_id=build_id,
@@ -242,8 +202,6 @@ class VisualNovelDomainService:
         return IngestionResult(
             vn_id=vn_id,
             build_id=build_id,
-            artifact=artifact,
             build=build,
             vn=vn,
-            artifact_status="classified",
         )
