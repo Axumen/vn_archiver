@@ -184,6 +184,9 @@ def make_conn_new_schema():
             raw_json TEXT NOT NULL,
             raw_sha256 TEXT NOT NULL,
             version_number INTEGER NOT NULL,
+            is_current INTEGER NOT NULL DEFAULT 0,
+            parent_version_id INTEGER,
+            change_note TEXT,
             created_at TEXT NOT NULL
         )
         """

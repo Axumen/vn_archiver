@@ -30,7 +30,7 @@ def test_domain_columns_are_based_on_metadata_v1_fields():
         "id", "vn_id", "build_id", "from_build_id", "series_id",
         "file_id", "metadata_id", "metadata_version", "relation_id",
         "series_description", "normalized_version", "created_at",
-        "metadata_json", "platform", "source_url",
+        "metadata_json", "platform", "source_url", "size_bytes",
     }
 
     for table in DOMAIN_TABLES:

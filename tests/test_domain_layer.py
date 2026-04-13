@@ -156,16 +156,19 @@ def test_ingest_skips_raw_metadata_persistence_when_no_artifact_id_available():
         collect_archives_for_db=lambda _: ([], None),
     )
 
-    with pytest.raises(ValueError, match="at least one Artifact sha256"):
-        service.ingest(
-            {
-                "title": "MetadataOnly",
-                "version": "1.0",
-                "_raw_text": "title: MetadataOnly\nversion: 1.0\n",
-                "_source_file": "incoming/metadata_only.yaml",
-            }
-        )
+    # With no archives and no sha256 in metadata, ingest should succeed
+    # but skip raw metadata persistence (no file_id available).
+    result = service.ingest(
+        {
+            "title": "MetadataOnly",
+            "version": "1.0",
+            "_raw_text": "title: MetadataOnly\nversion: 1.0\n",
+            "_source_file": "incoming/metadata_only.yaml",
+        }
+    )
 
+    assert result.vn_id == 11
+    assert result.build_id == 22
     assert repo.raw_metadata_records == []
 
 
@@ -192,7 +195,7 @@ def test_artifact_uses_metadata_sha256_when_archive_list_is_empty():
     assert result.build is not None
 
 
-def test_ingest_requires_artifact_sha256_to_satisfy_build_invariant():
+def test_ingest_succeeds_without_files_when_no_sha256_available():
     repo = FakeRepository()
     service = VisualNovelDomainService(
         conn=object(),
@@ -200,8 +203,13 @@ def test_ingest_requires_artifact_sha256_to_satisfy_build_invariant():
         collect_archives_for_db=lambda _: ([], None),
     )
 
-    with pytest.raises(ValueError, match="at least one Artifact sha256"):
-        service.ingest({"title": "Patch Without Files"})
+    # Ingest should succeed even without any files or sha256.
+    # The build is created but no file links or raw metadata are persisted.
+    result = service.ingest({"title": "Patch Without Files"})
+    assert result.vn_id == 11
+    assert result.build_id == 22
+    assert repo.created_artifacts == []
+    assert repo.raw_metadata_records == []
 
 
 def test_ingest_rejects_duplicate_archive_sha256_values():

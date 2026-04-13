@@ -83,7 +83,7 @@ FILE_TABLE = TableSpec(
     columns=(
         ColumnSpec("file_id", "file_id", required=True),
         ColumnSpec("sha256", "archives.sha256", required=True),
-        ColumnSpec("size_bytes", "archives.file_size_bytes"),
+        ColumnSpec("size_bytes", "size_bytes"),
         ColumnSpec("filename", "archives.filename"),
     ),
 )
