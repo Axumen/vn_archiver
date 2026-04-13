@@ -67,6 +67,8 @@ class IngestionRepository(Protocol):
 
     def create_metadata_raw(self, raw_payload, file_id, build_id=None): ...
 
+    def create_file_attachment_metadata(self, build_id, file_id, metadata_dict): ...
+
 
 class VisualNovelDomainService:
     """

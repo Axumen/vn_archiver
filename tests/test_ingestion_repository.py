@@ -92,7 +92,10 @@ def make_conn_new_schema():
         CREATE TABLE file (
             file_id INTEGER PRIMARY KEY,
             sha256 TEXT NOT NULL UNIQUE,
-            filename TEXT
+            size_bytes INTEGER,
+            first_seen_at TEXT,
+            filename TEXT,
+            mime_type TEXT
         )
         """
     )
@@ -188,6 +191,31 @@ def make_conn_new_schema():
             parent_version_id INTEGER,
             change_note TEXT,
             created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE build_file_metadata (
+            metadata_id INTEGER PRIMARY KEY,
+            build_id INTEGER NOT NULL,
+            file_id INTEGER NOT NULL,
+            metadata_version INTEGER NOT NULL,
+            title TEXT,
+            version TEXT,
+            build_type TEXT,
+            normalized_version TEXT,
+            distribution_platform TEXT,
+            platform TEXT,
+            language TEXT,
+            edition TEXT,
+            release_date TEXT,
+            source_url TEXT,
+            notes TEXT,
+            change_note TEXT,
+            raw_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (build_id, file_id) REFERENCES build_file(build_id, file_id) ON DELETE CASCADE
         )
         """
     )

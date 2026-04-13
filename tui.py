@@ -8,6 +8,7 @@ import tempfile
 import json
 import re
 from db_manager import initialize_database, get_connection
+from ingestion_repository import VnIngestionRepository
 from pathlib import Path
 from colorama import init, Fore, Style
 from vn_archiver import (
@@ -388,56 +389,6 @@ def add_file_to_existing_build():
     selected_path = os.path.join(INCOMING_DIR, selected_file)
 
     with get_connection() as conn:
-        has_build_table = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='build'"
-        ).fetchone() is not None
-        has_link_tables = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='file'"
-        ).fetchone() is not None and conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='build_file'"
-        ).fetchone() is not None
-
-        if not has_build_table or not has_link_tables:
-            notify("Current schema does not support Add File workflow (requires build + file + build_file).", "error")
-            return
-
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS build_file_metadata (
-                metadata_id INTEGER PRIMARY KEY,
-                build_id INTEGER NOT NULL,
-                file_id INTEGER NOT NULL,
-                metadata_version INTEGER NOT NULL,
-                title TEXT,
-                version TEXT,
-                build_type TEXT,
-                normalized_version TEXT,
-                distribution_platform TEXT,
-                platform TEXT,
-                language TEXT,
-                edition TEXT,
-                release_date TEXT,
-                source_url TEXT,
-                notes TEXT,
-                change_note TEXT,
-                raw_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (build_id, file_id) REFERENCES build_file(build_id, file_id) ON DELETE CASCADE
-            )
-            """
-        )
-        existing_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(build_file_metadata)").fetchall()
-        }
-        required_columns = (
-            "normalized_version",
-            "platform",
-            "source_url",
-        )
-        for column_name in required_columns:
-            if column_name not in existing_columns:
-                conn.execute(f"ALTER TABLE build_file_metadata ADD COLUMN {column_name} TEXT")
-
         build_rows = conn.execute(
             """
             SELECT
@@ -506,52 +457,18 @@ def add_file_to_existing_build():
     file_metadata["archives"] = [{"filename": selected_file, "sha256": file_sha}]
 
     with get_connection() as conn:
-        file_row = conn.execute("SELECT file_id FROM file WHERE sha256 = ? LIMIT 1", (file_sha,)).fetchone()
-        if file_row:
-            file_id = int(file_row["file_id"])
-        else:
-            conn.execute(
-                "INSERT INTO file (sha256, size_bytes, first_seen_at, filename, mime_type) VALUES (?, ?, ?, ?, ?)",
-                (file_sha, file_size, archived_at, selected_file, None),
-            )
-            file_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO build_file (build_id, file_id, original_filename, archived_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (build_id, file_id, selected_file, archived_at),
+        repo = VnIngestionRepository(conn)
+        file_id = repo.create_file_link(
+            build_id,
+            {"archived_at": archived_at},
+            {
+                "sha256": file_sha,
+                "filename": selected_file,
+                "size_bytes": file_size,
+                "first_seen_at": archived_at,
+            },
         )
-        conn.execute(
-            """
-            INSERT INTO build_file_metadata (
-                build_id, file_id, metadata_version, title, version,
-                build_type, normalized_version, distribution_platform, platform,
-                language, edition,
-                release_date, source_url, notes, change_note, raw_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                build_id,
-                file_id,
-                int(file_metadata.get("metadata_version") or metadata_version),
-                str(file_metadata.get("title") or ""),
-                str(file_metadata.get("version") or ""),
-                str(file_metadata.get("build_type") or ""),
-                str(file_metadata.get("normalized_version") or ""),
-                str(file_metadata.get("distribution_platform") or ""),
-                str(file_metadata.get("platform") or ""),
-                str(file_metadata.get("language") or ""),
-                str(file_metadata.get("edition") or ""),
-                str(file_metadata.get("release_date") or ""),
-                str(file_metadata.get("source_url") or ""),
-                str(file_metadata.get("notes") or ""),
-                str(file_metadata.get("change_note") or ""),
-                json.dumps(file_metadata, ensure_ascii=False, sort_keys=True),
-                archived_at,
-            ),
-        )
+        repo.create_file_attachment_metadata(build_id, file_id, file_metadata)
 
     notify(f"Linked file '{selected_file}' to build_id={build_id}.", "ok")
 

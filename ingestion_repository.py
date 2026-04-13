@@ -64,6 +64,7 @@ class VnIngestionRepository:
         required_tables = (
             "file",
             "build_file",
+            "build_file_metadata",
             "tags",
             "vn_tags",
             "developers",
@@ -402,9 +403,12 @@ class VnIngestionRepository:
         if file_row:
             file_id = file_row["file_id"]
         else:
+            size_bytes = archive_data.get("size_bytes")
+            first_seen_at = archive_data.get("first_seen_at")
+            mime_type = archive_data.get("mime_type")
             self.conn.execute(
-                "INSERT INTO file (sha256, filename) VALUES (?, ?)",
-                (artifact_sha, filename),
+                "INSERT INTO file (sha256, filename, size_bytes, first_seen_at, mime_type) VALUES (?, ?, ?, ?, ?)",
+                (artifact_sha, filename, size_bytes, first_seen_at, mime_type),
             )
             file_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -459,3 +463,42 @@ class VnIngestionRepository:
                 (build_id, file_id, raw_json_value, raw_sha256, next_version, created_at),
             )
             return next_version
+
+    def create_file_attachment_metadata(self, build_id, file_id, metadata_dict):
+        """Record a metadata snapshot at the time a file is attached to a build.
+
+        This writes to ``build_file_metadata`` — a provenance table distinct from
+        ``metadata_raw_versions`` (which tracks the build-level metadata version chain).
+        """
+        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        raw_json = json.dumps(metadata_dict, ensure_ascii=False, sort_keys=True)
+
+        self.conn.execute(
+            """
+            INSERT INTO build_file_metadata (
+                build_id, file_id, metadata_version, title, version,
+                build_type, normalized_version, distribution_platform, platform,
+                language, edition,
+                release_date, source_url, notes, change_note, raw_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                build_id,
+                file_id,
+                int(metadata_dict.get("metadata_version") or 1),
+                str(metadata_dict.get("title") or ""),
+                str(metadata_dict.get("version") or ""),
+                str(metadata_dict.get("build_type") or ""),
+                str(metadata_dict.get("normalized_version") or ""),
+                str(metadata_dict.get("distribution_platform") or ""),
+                str(metadata_dict.get("platform") or ""),
+                str(metadata_dict.get("language") or ""),
+                str(metadata_dict.get("edition") or ""),
+                str(metadata_dict.get("release_date") or ""),
+                str(metadata_dict.get("source_url") or ""),
+                str(metadata_dict.get("notes") or ""),
+                str(metadata_dict.get("change_note") or ""),
+                raw_json,
+                created_at,
+            ),
+        )
