@@ -420,6 +420,12 @@ class VnIngestionRepository:
         build_id = self.get_or_create_build(vn_id, metadata)
         return vn_id, build_id
 
+    def _get_file_size_from_disk(self, file_path):
+        import os
+        if file_path and os.path.exists(file_path):
+            return os.path.getsize(file_path)
+        return None
+
     def _create_file_in_tables(self, build_id, metadata, archive_data):
         archive_data = archive_data or {}
         artifact_sha = self._normalize_text_value(archive_data.get("sha256"))
@@ -432,12 +438,14 @@ class VnIngestionRepository:
             "SELECT file_id FROM file WHERE sha256 = ? LIMIT 1",
             (artifact_sha,),
         ).fetchone()
+
         if file_row:
             file_id = file_row["file_id"]
         else:
             size_bytes = archive_data.get("size_bytes")
             if size_bytes is None:
-                size_bytes = archive_data.get("file_size_bytes")
+                path_to_check = archive_data.get("filepath") or archive_data.get("original_path") or archive_data.get("filename")
+                size_bytes = self._get_file_size_from_disk(path_to_check)
             self.conn.execute(
                 "INSERT INTO file (sha256, filename, size_bytes) VALUES (?, ?, ?)",
                 (artifact_sha, filename, size_bytes),

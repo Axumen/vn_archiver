@@ -67,7 +67,7 @@ FIELD_SUGGESTIONS = {
 
 AUTO_METADATA_FIELDS = {
     "original_filename": lambda zip_path: os.path.basename(zip_path),
-    "file_size_bytes": lambda zip_path: os.path.getsize(zip_path),
+    "size_bytes": lambda zip_path: os.path.getsize(zip_path),
     "sha256": lambda zip_path: sha256_file(zip_path),
     "archived_at": lambda _: datetime.utcnow().isoformat() + "Z",
 }
@@ -471,7 +471,7 @@ PASSTHROUGH_FIELDS = {
     "content_type",
     "archives",
     "sha256",
-    "file_size_bytes",
+    "size_bytes",
     "original_filename",
     "archived_at",
     "_raw_text",
@@ -665,7 +665,7 @@ def collect_archives_for_db(metadata):
     if top_level_sha:
         archives_to_process.append({
             'sha256': top_level_sha,
-            'file_size': metadata.get('file_size_bytes', 0),
+            'file_size': metadata.get('size_bytes', 0),
             'filename': metadata.get('original_filename'),
         })
 
@@ -674,7 +674,7 @@ def collect_archives_for_db(metadata):
             if isinstance(archive, dict) and archive.get('sha256'):
                 archives_to_process.append({
                     'sha256': archive.get('sha256'),
-                    'file_size': archive.get('file_size_bytes', 0),
+                    'file_size': archive.get('size_bytes', 0),
                     'filename': archive.get('filename'),
                 })
 
@@ -937,7 +937,7 @@ def create_archive_only(
         archives_data.append({
             "original_path": path,
             "filename": os.path.basename(path),
-            "file_size_bytes": file_size,
+            "size_bytes": file_size,
             "sha256": sha256
         })
 
@@ -1109,7 +1109,7 @@ def create_archive_only(
         for a in archives_data:
             archives_list.append({
                 "filename": a.get("filename"),
-                "file_size_bytes": a.get("file_size_bytes"),
+                "size_bytes": a.get("size_bytes"),
                 "sha256": a.get("sha256")
             })
         metadata["archives"] = archives_list
@@ -1135,7 +1135,7 @@ def create_archive_from_metadata_file(archive_paths, metadata, raw_text=None, so
         archives_data.append({
             "original_path": path,
             "filename": os.path.basename(path),
-            "file_size_bytes": file_size,
+            "size_bytes": file_size,
             "sha256": sha256
         })
 
@@ -1149,7 +1149,7 @@ def create_archive_from_metadata_file(archive_paths, metadata, raw_text=None, so
         prepared["archives"] = [
             {
                 "filename": a["filename"],
-                "file_size_bytes": a["file_size_bytes"],
+                "size_bytes": a["size_bytes"],
                 "sha256": a["sha256"]
             }
             for a in archives_data
