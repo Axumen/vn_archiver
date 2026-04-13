@@ -1,8 +1,8 @@
 """Domain schema derived from domain_logic.md using metadata_v1.yaml fields.
 
 Core principles applied:
-- VN -> Build -> File hierarchy
-- Build as primary release unit
+- Title -> Release -> File hierarchy
+- Release as primary release unit
 - Explicit relation table for link semantics
 
 Constraint applied:
@@ -37,10 +37,10 @@ SERIES_TABLE = TableSpec(
     ),
 )
 
-VN_TABLE = TableSpec(
-    name="vn",
+TITLE_TABLE = TableSpec(
+    name="title",
     columns=(
-        ColumnSpec("vn_id", "vn_id", required=True),
+        ColumnSpec("title_id", "title_id", required=True),
         ColumnSpec("title", "title", required=True),
         ColumnSpec("series_id", "series_id"),
         ColumnSpec("aliases", "aliases"),
@@ -57,11 +57,11 @@ VN_TABLE = TableSpec(
     ),
 )
 
-BUILD_TABLE = TableSpec(
-    name="build",
+RELEASE_TABLE = TableSpec(
+    name="release",
     columns=(
-        ColumnSpec("build_id", "build_id", required=True),
-        ColumnSpec("vn_id", "vn_id", required=True),
+        ColumnSpec("release_id", "release_id", required=True),
+        ColumnSpec("title_id", "title_id", required=True),
         ColumnSpec("version", "version", required=True),
         ColumnSpec("build_type", "build_type"),
         ColumnSpec("distribution_model", "distribution_model"),
@@ -88,11 +88,11 @@ FILE_TABLE = TableSpec(
     ),
 )
 
-BUILD_FILE_METADATA_TABLE = TableSpec(
-    name="build_file_metadata",
+FILE_SNAPSHOT_TABLE = TableSpec(
+    name="file_snapshot",
     columns=(
         ColumnSpec("metadata_id", "metadata_id", required=True),
-        ColumnSpec("build_id", "build_id", required=True),
+        ColumnSpec("release_id", "release_id", required=True),
         ColumnSpec("file_id", "file_id", required=True),
         ColumnSpec("metadata_version", "metadata_version", required=True),
         ColumnSpec("title", "title"),
@@ -115,10 +115,10 @@ BUILD_FILE_METADATA_TABLE = TableSpec(
 
 DOMAIN_TABLES = (
     SERIES_TABLE,
-    VN_TABLE,
-    BUILD_TABLE,
+    TITLE_TABLE,
+    RELEASE_TABLE,
     FILE_TABLE,
-    BUILD_FILE_METADATA_TABLE,
+    FILE_SNAPSHOT_TABLE,
 )
 
 

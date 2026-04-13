@@ -13,6 +13,6 @@ def test_db_schema_sql_initializes_core_tables():
         row[0]
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
-    assert {"vn", "build", "file", "build_file"}.issubset(tables)
+    assert {"title", "release", "file", "release_file"}.issubset(tables)
 
 

@@ -590,21 +590,21 @@ def get_latest_metadata_for_title(title):
 
             SELECT
 
-                b.version AS build_version,
+                r.version AS release_version,
 
-                b.build_id AS build_id,
+                r.release_id AS release_id,
 
-                mrv.metadata_raw_id AS metadata_version_id,
+                rev.revision_id AS revision_id,
 
-                mrv.raw_json AS metadata_json
+                rev.raw_json AS metadata_json
 
-            FROM vn v
+            FROM title t
 
-            JOIN build b ON b.vn_id = v.vn_id
+            JOIN release r ON r.title_id = t.title_id
 
-            JOIN metadata_raw_versions mrv ON mrv.build_id = b.build_id AND mrv.is_current = 1
+            JOIN revision rev ON rev.release_id = r.release_id AND rev.is_current = 1
 
-            WHERE TRIM(v.title) = TRIM(?) COLLATE NOCASE
+            WHERE TRIM(t.title) = TRIM(?) COLLATE NOCASE
 
             ''',
 
@@ -626,11 +626,11 @@ def get_latest_metadata_for_title(title):
 
         key=lambda row: (
 
-            normalize_version_for_sort(row["build_version"]),
+            normalize_version_for_sort(row["release_version"]),
 
-            int(row["build_id"] or 0),
+            int(row["release_id"] or 0),
 
-            int(row["metadata_version_id"] or 0),
+            int(row["revision_id"] or 0),
 
         )
 
@@ -1344,31 +1344,31 @@ def get_vn_archive_version_dir(metadata):
     return target_version_dir
 
 
-def mirror_metadata_for_rebuild(staged_meta_path, archives_data, build_id):
+def mirror_metadata_for_rebuild(staged_meta_path, archives_data, release_id):
     """Mirror staged sidecar metadata into rebuild_metadata/ with archive-id-prefixed names."""
     metadata_dir = Path(REBUILD_METADATA_DIR)
     metadata_dir.mkdir(parents=True, exist_ok=True)
 
-    if not build_id:
-        print(Fore.YELLOW + "[WARN] Rebuild metadata mirror skipped: missing build ID.")
+    if not release_id:
+        print(Fore.YELLOW + "[WARN] Rebuild metadata mirror skipped: missing release ID.")
         return []
 
     archive_id_by_sha = {}
     with get_connection() as conn:
-        if _table_exists(conn, "file") and _table_exists(conn, "build_file"):
+        if _table_exists(conn, "file") and _table_exists(conn, "release_file"):
             rows = conn.execute(
                 """
                 SELECT f.file_id AS id, f.sha256 AS sha256
-                FROM build_file bf
-                JOIN file f ON f.file_id = bf.file_id
-                WHERE bf.build_id = ?
+                FROM release_file rf
+                JOIN file f ON f.file_id = rf.file_id
+                WHERE rf.release_id = ?
                 """,
-                (build_id,),
+                (release_id,),
             ).fetchall()
             for row in rows:
                 archive_id_by_sha[str(row["sha256"]).strip().lower()] = int(row["id"])
         else:
-            print(Fore.YELLOW + "[WARN] Rebuild metadata mirror skipped: missing file/build_file tables.")
+            print(Fore.YELLOW + "[WARN] Rebuild metadata mirror skipped: missing file/release_file tables.")
             return []
 
     staged_name = Path(staged_meta_path).name
@@ -1498,68 +1498,68 @@ def upload_archive(file_path):
     # -------------------------------------------------------------------
     # 2. Block upload if it wasn't inserted into the Database
     # -------------------------------------------------------------------
-    vn_id = None
-    build_id = None
+    title_id = None
+    release_id = None
     with get_connection() as conn:
-        vn_row = conn.execute("SELECT vn_id FROM vn WHERE title = ?", (title,)).fetchone()
-        if not vn_row:
+        title_row = conn.execute("SELECT title_id FROM title WHERE title = ?", (title,)).fetchone()
+        if not title_row:
             print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' does not exist in the database.")
             print(Fore.YELLOW + "Please run '(1) Create Metadata' to register it before uploading.")
             return False
 
-        vn_id = vn_row["vn_id"]
+        title_id = title_row["title_id"]
 
         if version:
-            build_row = conn.execute(
+            release_row = conn.execute(
                 """
-                SELECT build_id, version FROM build
-                WHERE vn_id = ? AND version = ?
+                SELECT release_id, version FROM release
+                WHERE title_id = ? AND version = ?
                   AND COALESCE(language, '') = COALESCE(?, '')
                   AND COALESCE(build_type, '') = COALESCE(?, '')
                   AND COALESCE(edition, '') = COALESCE(?, '')
                   AND COALESCE(distribution_platform, '') = COALESCE(?, '')
                 """,
-                (vn_id, version, language, build_type, edition, distribution_platform)
+                (title_id, version, language, build_type, edition, distribution_platform)
             ).fetchone()
-            if not build_row:
+            if not release_row:
                 lang_label = language if language else "default"
                 edition_label = edition if edition else "default"
                 print(Fore.RED + f"Upload Blocked: Version '{version}' (language={lang_label}, edition={edition_label}) for '{title}' does not exist in the database.")
-                print(Fore.YELLOW + "Please run '(1) Create Metadata' to register this build before uploading.")
+                print(Fore.YELLOW + "Please run '(1) Create Metadata' to register this release before uploading.")
                 return False
         else:
-            build_row = conn.execute(
-                "SELECT build_id, version FROM build WHERE vn_id = ? ORDER BY build_id DESC LIMIT 1",
-                (vn_id,)
+            release_row = conn.execute(
+                "SELECT release_id, version FROM release WHERE title_id = ? ORDER BY release_id DESC LIMIT 1",
+                (title_id,)
             ).fetchone()
-            if not build_row:
-                print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' has no builds in the database.")
-                print(Fore.YELLOW + "Please run '(1) Create Metadata' to register a build before uploading.")
+            if not release_row:
+                print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' has no releases in the database.")
+                print(Fore.YELLOW + "Please run '(1) Create Metadata' to register a release before uploading.")
                 return False
-            version = str(build_row["version"]).strip()
-            print(Fore.YELLOW + f"No version supplied in sidecar metadata; using latest DB build version: {version}")
+            version = str(release_row["version"]).strip()
+            print(Fore.YELLOW + f"No version supplied in sidecar metadata; using latest DB release version: {version}")
 
-        build_id = build_row["build_id"]
+        release_id = release_row["release_id"]
 
     # -------------------------------------------------------------------
     # 3. Validate sidecar metadata revision against DB metadata history
     # -------------------------------------------------------------------
     with get_connection() as conn:
-        if requested_metadata_revision is not None:
-            metadata_row = conn.execute(
-                "SELECT raw_sha256 AS metadata_hash, version_number FROM metadata_raw_versions WHERE build_id = ? AND version_number = ?",
-                (build_id, requested_metadata_revision)
-            ).fetchone()
-        else:
-            metadata_row = conn.execute(
-                "SELECT raw_sha256 AS metadata_hash, version_number FROM metadata_raw_versions WHERE build_id = ? AND is_current = 1",
-                (build_id,)
+        if requested_metadata_revision is not None:
+            metadata_row = conn.execute(
+                "SELECT raw_sha256 AS metadata_hash, version_number FROM revision WHERE release_id = ? AND version_number = ?",
+                (release_id, requested_metadata_revision)
+            ).fetchone()
+        else:
+            metadata_row = conn.execute(
+                "SELECT raw_sha256 AS metadata_hash, version_number FROM revision WHERE release_id = ? AND is_current = 1",
+                (release_id,)
             ).fetchone()
     if not metadata_row:
         if requested_metadata_revision is not None:
-            print(Fore.RED + f"Upload Blocked: Build {build_id} has no metadata version v{requested_metadata_revision} in database.")
+            print(Fore.RED + f"Upload Blocked: Release {release_id} has no metadata version v{requested_metadata_revision} in database.")
         else:
-            print(Fore.RED + f"Upload Blocked: Build {build_id} has no current metadata version in database.")
+            print(Fore.RED + f"Upload Blocked: Release {release_id} has no current metadata version in database.")
         print(Fore.YELLOW + "Please run '(1) Create Metadata' or update metadata before uploading.")
         return False
 
@@ -1595,14 +1595,14 @@ def upload_archive(file_path):
     file_name = build_recommended_archive_name(metadata, archive_sha256, ext=ext)
     metadata_file_name = Path(metadata_source).name
 
-    cloud_path = f"archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{file_name}"
-    metadata_cloud_path = f"metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{metadata_file_name}"
+    cloud_path = f"archives/{title_slug}/t-{title_id:05d}/{version_slug}/{file_name}"
+    metadata_cloud_path = f"metadata/{title_slug}/t-{title_id:05d}/{version_slug}/{metadata_file_name}"
 
     if db_version_number > 1:
         parent_metadata_cloud_path = re.sub(r"_meta_v\d+(\.ya?ml)$", f"_meta_v{db_version_number - 1}\\1", metadata_cloud_path)
         with get_connection() as conn:
             parent_uploaded_row = conn.execute(
-                "SELECT 1 FROM metadata_file_objects WHERE storage_path = ?",
+                "SELECT 1 FROM cloud_sidecar WHERE storage_path = ?",
                 (parent_metadata_cloud_path,)
             ).fetchone()
         if not parent_uploaded_row:
@@ -1610,7 +1610,7 @@ def upload_archive(file_path):
             print(Fore.YELLOW + f"Expected parent path: {parent_metadata_cloud_path}")
             return False
 
-    print(Fore.GREEN + f"Database verification passed (VN ID: {vn_id}, metadata v{db_version_number})")
+    print(Fore.GREEN + f"Database verification passed (Title ID: {title_id}, metadata v{db_version_number})")
 
     # Ensure queued local file uses the same recommended naming scheme
     current_name = os.path.basename(file_path)
@@ -1629,7 +1629,7 @@ def upload_archive(file_path):
     # -------------------------------------------------------------------
     with get_connection() as conn:
         existing_obj = conn.execute(
-            "SELECT storage_path FROM archive_objects WHERE sha256 = ?",
+            "SELECT storage_path FROM cloud_archive WHERE sha256 = ?",
             (archive_sha256,)
         ).fetchone()
 
@@ -1646,13 +1646,13 @@ def upload_archive(file_path):
                 UPDATE archives
                 SET status = 'uploaded',
                     uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
-                WHERE build_id = ? AND sha256 = ?
+                WHERE release_id = ? AND sha256 = ?
                 """,
-                (build_id, archive_sha256)
+                (release_id, archive_sha256)
             )
-            link_artifact_to_file_object(conn, build_id, archive_sha256)
-            conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", archive_sha256, build_id))
-            sync_visual_novel_upload_status(conn, vn_id)
+            link_artifact_to_file_object(conn, release_id, archive_sha256)
+            conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", archive_sha256, release_id))
+            sync_visual_novel_upload_status(conn, title_id)
 
     # -------------------------------------------------------------------
     # 6. Backblaze B2 Authentication via Config
@@ -1732,7 +1732,7 @@ def upload_archive(file_path):
             try:
                 conn.execute(
                     '''
-                    INSERT OR IGNORE INTO archive_objects (sha256, file_size, storage_path)
+                    INSERT OR IGNORE INTO cloud_archive (sha256, file_size, storage_path)
                     VALUES (?, ?, ?)
                     ''',
                     (archive_sha256, file_size, cloud_path)
@@ -1743,14 +1743,14 @@ def upload_archive(file_path):
                     UPDATE archives
                     SET status = 'uploaded',
                         uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
-                    WHERE build_id = ? AND sha256 = ?
+                    WHERE release_id = ? AND sha256 = ?
                     """,
-                    (build_id, archive_sha256)
+                    (release_id, archive_sha256)
                 )
-                link_artifact_to_file_object(conn, build_id, archive_sha256)
+                link_artifact_to_file_object(conn, release_id, archive_sha256)
 
-                conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", archive_sha256, build_id))
-                sync_visual_novel_upload_status(conn, vn_id)
+                conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", archive_sha256, release_id))
+                sync_visual_novel_upload_status(conn, title_id)
             except Exception as e:
                 print(Fore.RED + f"Database update failed after upload verification: {e}")
                 return False
@@ -1763,7 +1763,7 @@ def upload_archive(file_path):
 
     with get_connection() as conn:
         existing_meta_obj = conn.execute(
-            "SELECT storage_path FROM metadata_file_objects WHERE sha256 = ?",
+            "SELECT storage_path FROM cloud_sidecar WHERE sha256 = ?",
             (metadata_sha256,)
         ).fetchone()
 
@@ -1809,7 +1809,7 @@ def upload_archive(file_path):
 
     with get_connection() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO metadata_file_objects (sha256, file_size, storage_path) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO cloud_sidecar (sha256, file_size, storage_path) VALUES (?, ?, ?)",
             (metadata_sha256, metadata_local_size, metadata_cloud_path)
         )
 
@@ -1853,57 +1853,57 @@ def upload_metadata_sidecar(sidecar_path):
         print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
         return False
 
-    vn_id = None
-    build_id = None
+    title_id = None
+    release_id = None
     with get_connection() as conn:
-        vn_row = conn.execute("SELECT vn_id FROM vn WHERE title = ?", (title,)).fetchone()
-        if not vn_row:
+        title_row = conn.execute("SELECT title_id FROM title WHERE title = ?", (title,)).fetchone()
+        if not title_row:
             print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' does not exist in the database.")
             return False
 
-        vn_id = vn_row["vn_id"]
+        title_id = title_row["title_id"]
 
         if version:
-            build_row = conn.execute(
+            release_row = conn.execute(
                 """
-                SELECT build_id, version FROM build
-                WHERE vn_id = ? AND version = ?
+                SELECT release_id, version FROM release
+                WHERE title_id = ? AND version = ?
                   AND COALESCE(language, '') = COALESCE(?, '')
                   AND COALESCE(build_type, '') = COALESCE(?, '')
                   AND COALESCE(edition, '') = COALESCE(?, '')
                   AND COALESCE(distribution_platform, '') = COALESCE(?, '')
                 """,
-                (vn_id, version, language, build_type, edition, distribution_platform)
+                (title_id, version, language, build_type, edition, distribution_platform)
             ).fetchone()
-            if not build_row:
+            if not release_row:
                 print(Fore.RED + f"Upload Blocked: Version '{version}' for '{title}' does not exist in the database.")
                 return False
         else:
-            build_row = conn.execute(
-                "SELECT build_id, version FROM build WHERE vn_id = ? ORDER BY build_id DESC LIMIT 1",
-                (vn_id,)
+            release_row = conn.execute(
+                "SELECT release_id, version FROM release WHERE title_id = ? ORDER BY release_id DESC LIMIT 1",
+                (title_id,)
             ).fetchone()
-            if not build_row:
-                print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' has no builds in the database.")
+            if not release_row:
+                print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' has no releases in the database.")
                 return False
-            version = str(build_row["version"]).strip()
-            print(Fore.YELLOW + f"No version supplied in sidecar metadata; using latest DB build version: {version}")
+            version = str(release_row["version"]).strip()
+            print(Fore.YELLOW + f"No version supplied in sidecar metadata; using latest DB release version: {version}")
 
-        build_id = build_row["build_id"]
+        release_id = release_row["release_id"]
 
     with get_connection() as conn:
-        if requested_metadata_revision is not None:
-            metadata_row = conn.execute(
-                "SELECT raw_sha256 AS metadata_hash, version_number FROM metadata_raw_versions WHERE build_id = ? AND version_number = ?",
-                (build_id, requested_metadata_revision)
-            ).fetchone()
-        else:
-            metadata_row = conn.execute(
-                "SELECT raw_sha256 AS metadata_hash, version_number FROM metadata_raw_versions WHERE build_id = ? AND is_current = 1",
-                (build_id,)
+        if requested_metadata_revision is not None:
+            metadata_row = conn.execute(
+                "SELECT raw_sha256 AS metadata_hash, version_number FROM revision WHERE release_id = ? AND version_number = ?",
+                (release_id, requested_metadata_revision)
+            ).fetchone()
+        else:
+            metadata_row = conn.execute(
+                "SELECT raw_sha256 AS metadata_hash, version_number FROM revision WHERE release_id = ? AND is_current = 1",
+                (release_id,)
             ).fetchone()
     if not metadata_row:
-        print(Fore.RED + f"Upload Blocked: No matching metadata version found in database for build {build_id}.")
+        print(Fore.RED + f"Upload Blocked: No matching metadata version found in database for release {release_id}.")
         return False
 
     db_metadata_hash = metadata_row["metadata_hash"]
@@ -1925,13 +1925,13 @@ def upload_metadata_sidecar(sidecar_path):
     title_slug = slugify_component(title, "unknown")
     version_slug = slugify_component(version, "unknown")
     metadata_file_name = sidecar_file.name
-    metadata_cloud_path = f"metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{metadata_file_name}"
+    metadata_cloud_path = f"metadata/{title_slug}/t-{title_id:05d}/{version_slug}/{metadata_file_name}"
 
     if db_version_number > 1:
         parent_metadata_cloud_path = re.sub(r"_meta_v\d+(\.ya?ml)$", f"_meta_v{db_version_number - 1}\\1", metadata_cloud_path)
         with get_connection() as conn:
             parent_uploaded_row = conn.execute(
-                "SELECT 1 FROM metadata_file_objects WHERE storage_path = ?",
+                "SELECT 1 FROM cloud_sidecar WHERE storage_path = ?",
                 (parent_metadata_cloud_path,)
             ).fetchone()
         if not parent_uploaded_row:
@@ -1944,7 +1944,7 @@ def upload_metadata_sidecar(sidecar_path):
 
     with get_connection() as conn:
         existing_meta_obj = conn.execute(
-            "SELECT storage_path FROM metadata_file_objects WHERE sha256 = ?",
+            "SELECT storage_path FROM cloud_sidecar WHERE sha256 = ?",
             (metadata_sha256,)
         ).fetchone()
 
@@ -2001,7 +2001,7 @@ def upload_metadata_sidecar(sidecar_path):
 
     with get_connection() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO metadata_file_objects (sha256, file_size, storage_path) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO cloud_sidecar (sha256, file_size, storage_path) VALUES (?, ?, ?)",
             (metadata_sha256, metadata_local_size, metadata_cloud_path)
         )
 

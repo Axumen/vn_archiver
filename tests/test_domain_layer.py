@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from domain_layer import Build, VN, Version, VisualNovelDomainService
+from domain_layer import Release, Title, Version, VisualNovelDomainService
 
 
 class FakeRepository:
@@ -14,26 +14,26 @@ class FakeRepository:
         self.created_artifacts = []
         self.raw_metadata_records = []
 
-    def get_or_create_vn(self, metadata):
-        self.calls.append(("vn", metadata["title"]))
+    def get_or_create_title(self, metadata):
+        self.calls.append(("title", metadata["title"]))
         return 11
 
-    def get_or_create_build(self, vn_id, metadata):
-        self.calls.append(("build", vn_id, metadata["title"]))
+    def get_or_create_release(self, title_id, metadata):
+        self.calls.append(("release", title_id, metadata["title"]))
         return 22
 
-    def create_file_link(self, build_id, metadata, archive_data):
+    def create_file_link(self, release_id, metadata, archive_data):
         self.created_artifacts.append(
             (
-                build_id,
+                release_id,
                 archive_data.get("sha256"),
                 archive_data.get("filepath") or archive_data.get("filename"),
             )
         )
         return 999
 
-    def create_metadata_raw(self, raw_payload, artifact_id, build_id=None):
-        self.raw_metadata_records.append((raw_payload, artifact_id, build_id))
+    def create_metadata_raw(self, raw_payload, artifact_id, release_id=None):
+        self.raw_metadata_records.append((raw_payload, artifact_id, release_id))
 
 
 def test_ingest_requires_title():
@@ -48,7 +48,7 @@ def test_ingest_requires_title():
         service.ingest({})
 
 
-def test_ingest_uses_build_branch_for_non_artifact():
+def test_ingest_uses_release_branch_for_non_artifact():
     repo = FakeRepository()
 
     service = VisualNovelDomainService(
@@ -59,17 +59,17 @@ def test_ingest_uses_build_branch_for_non_artifact():
 
     result = service.ingest({"title": "Sample VN", "version": "1.0"})
 
-    assert result.vn_id == 11
-    assert result.build_id == 22
-    assert repo.calls == [("vn", "Sample VN"), ("build", 11, "Sample VN")]
+    assert result.title_id == 11
+    assert result.release_id == 22
+    assert repo.calls == [("title", "Sample VN"), ("release", 11, "Sample VN")]
     assert repo.created_artifacts == [(22, "abc", "sample.zip")]
-    assert result.build is not None
-    assert result.build.version.version_string == "1.0"
-    assert result.vn is not None
-    assert result.vn.canonical_title == "Sample VN"
+    assert result.release is not None
+    assert result.release.version.version_string == "1.0"
+    assert result.title is not None
+    assert result.title.canonical_title == "Sample VN"
 
 
-def test_ingest_routes_all_ingests_through_get_or_create_vn_and_build():
+def test_ingest_routes_all_ingests_through_get_or_create_title_and_release():
     repo = FakeRepository()
     called = {"processed": False}
 
@@ -81,28 +81,28 @@ def test_ingest_routes_all_ingests_through_get_or_create_vn_and_build():
 
     result = service.ingest({"title": "Sample Patch", "sha256": "patch-sha"})
 
-    assert result.vn_id == 11
-    assert result.build_id == 22
-    assert repo.calls == [("vn", "Sample Patch"), ("build", 11, "Sample Patch")]
+    assert result.title_id == 11
+    assert result.release_id == 22
+    assert repo.calls == [("title", "Sample Patch"), ("release", 11, "Sample Patch")]
     assert called["processed"] is False
     assert repo.created_artifacts == []
-    assert result.build is not None
-    assert result.vn is not None
+    assert result.release is not None
+    assert result.title is not None
 
 
 def test_ingest_normalizes_version_language_and_creator_before_resolution():
     repo = FakeRepository()
     captured = {}
 
-    def get_or_create_vn(metadata):
+    def get_or_create_title(metadata):
         captured["metadata"] = metadata
         return 1
 
-    def get_or_create_build(vn_id, metadata):
+    def get_or_create_release(title_id, metadata):
         return 2
 
-    repo.get_or_create_vn = get_or_create_vn
-    repo.get_or_create_build = get_or_create_build
+    repo.get_or_create_title = get_or_create_title
+    repo.get_or_create_release = get_or_create_release
 
     service = VisualNovelDomainService(
         conn=object(),
@@ -167,19 +167,19 @@ def test_ingest_skips_raw_metadata_persistence_when_no_artifact_id_available():
         }
     )
 
-    assert result.vn_id == 11
-    assert result.build_id == 22
+    assert result.title_id == 11
+    assert result.release_id == 22
     assert repo.raw_metadata_records == []
 
 
-def test_domain_entities_model_build_to_version_to_vn():
-    vn = VN(canonical_title="Example VN", developer="Dev Team", publisher="Pub Team")
+def test_domain_entities_model_release_to_version_to_title():
+    title = Title(canonical_title="Example VN", developer="Dev Team", publisher="Pub Team")
     version = Version(version_string="2.0", normalized_version="2.0")
-    build = Build(build_id=10, vn_id=20, version=version, release_type="full")
+    release = Release(release_id=10, title_id=20, version=version, release_type="full")
 
-    assert build.version.version_string == "2.0"
-    assert build.release_type == "full"
-    assert vn.canonical_title == "Example VN"
+    assert release.version.version_string == "2.0"
+    assert release.release_type == "full"
+    assert title.canonical_title == "Example VN"
 
 
 def test_artifact_uses_metadata_sha256_when_archive_list_is_empty():
@@ -192,7 +192,7 @@ def test_artifact_uses_metadata_sha256_when_archive_list_is_empty():
 
     result = service.ingest({"title": "Patch", "sha256": "from-metadata"})
 
-    assert result.build is not None
+    assert result.release is not None
 
 
 def test_ingest_succeeds_without_files_when_no_sha256_available():
@@ -204,10 +204,10 @@ def test_ingest_succeeds_without_files_when_no_sha256_available():
     )
 
     # Ingest should succeed even without any files or sha256.
-    # The build is created but no file links or raw metadata are persisted.
+    # The release is created but no file links or raw metadata are persisted.
     result = service.ingest({"title": "Patch Without Files"})
-    assert result.vn_id == 11
-    assert result.build_id == 22
+    assert result.title_id == 11
+    assert result.release_id == 22
     assert repo.created_artifacts == []
     assert repo.raw_metadata_records == []
 
@@ -246,34 +246,34 @@ def test_ingest_skips_legacy_archive_processing_when_files_table_is_absent():
             super().__init__()
             self.conn = conn
 
-        def get_or_create_vn(self, metadata):
+        def get_or_create_title(self, metadata):
             row = self.conn.execute("SELECT id FROM vn WHERE title = ?", (metadata["title"],)).fetchone()
             if row:
                 return row["id"]
             self.conn.execute("INSERT INTO vn (title) VALUES (?)", (metadata["title"],))
             return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-        def get_or_create_build(self, vn_id, metadata):
+        def get_or_create_release(self, title_id, metadata):
             row = self.conn.execute(
                 "SELECT id FROM builds WHERE vn_id = ? AND version_string = ?",
-                (vn_id, metadata.get("version") or "1.0"),
+                (title_id, metadata.get("version") or "1.0"),
             ).fetchone()
             if row:
                 return row["id"]
             self.conn.execute(
                 "INSERT INTO builds (vn_id, version_string, release_type, language, platform) VALUES (?, ?, ?, ?, ?)",
-                (vn_id, metadata.get("version") or "1.0", metadata.get("release_type"), metadata.get("language"), metadata.get("platform")),
+                (title_id, metadata.get("version") or "1.0", metadata.get("release_type"), metadata.get("language"), metadata.get("platform")),
             )
             return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-        def create_file_link(self, build_id, metadata, archive_data):
+        def create_file_link(self, release_id, metadata, archive_data):
             self.conn.execute(
                 "INSERT INTO artifacts (build_id, sha256, path, type) VALUES (?, ?, ?, ?)",
-                (build_id, archive_data["sha256"], archive_data.get("filename") or archive_data.get("filepath"), metadata.get("artifact_type") or "game_archive"),
+                (release_id, archive_data["sha256"], archive_data.get("filename") or archive_data.get("filepath"), metadata.get("artifact_type") or "game_archive"),
             )
             return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-        def create_metadata_raw(self, raw_payload, artifact_id, build_id=None):
+        def create_metadata_raw(self, raw_payload, artifact_id, release_id=None):
             self.conn.execute(
                 "INSERT INTO metadata_raw (artifact_id, source_file, raw_text) VALUES (?, ?, ?)",
                 (artifact_id, None, str(raw_payload)),
@@ -288,5 +288,5 @@ def test_ingest_skips_legacy_archive_processing_when_files_table_is_absent():
     )
 
     result = service.ingest({"title": "Clannad", "version": "1.0"})
-    assert result.build_id is not None
+    assert result.release_id is not None
     assert called["processed"] is False

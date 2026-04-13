@@ -1,6 +1,9 @@
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 pytest.importorskip("yaml")
 import yaml
@@ -20,14 +23,14 @@ def _allowed_metadata_fields():
     return allowed
 
 
-def test_domain_tables_follow_vn_build_file_core_order():
-    assert table_names() == ["series", "vn", "build", "file", "build_file_metadata"]
+def test_domain_tables_follow_title_release_file_core_order():
+    assert table_names() == ["series", "title", "release", "file", "file_snapshot"]
 
 
 def test_domain_columns_are_based_on_metadata_v1_fields():
     allowed = _allowed_metadata_fields()
     internal = {
-        "id", "vn_id", "build_id", "from_build_id", "series_id",
+        "id", "title_id", "release_id", "from_release_id", "series_id",
         "file_id", "metadata_id", "metadata_version", "relation_id",
         "series_description", "normalized_version", "created_at",
         "metadata_json", "platform", "source_url", "size_bytes",

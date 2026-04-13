@@ -352,11 +352,11 @@ def _process_incoming_pairs():
             notify(f"Removed processed metadata yaml: {yaml_name}", "info")
 
 
-def add_file_to_existing_build():
+def add_file_to_existing_release():
     from datetime import datetime as _dt
 
     print()
-    panel("Add File to Existing Build")
+    panel("Add File to Existing Release")
 
     if not os.path.exists(INCOMING_DIR):
         os.makedirs(INCOMING_DIR)
@@ -390,27 +390,27 @@ def add_file_to_existing_build():
     selected_path = os.path.join(INCOMING_DIR, selected_file)
 
     with get_connection() as conn:
-        build_rows = conn.execute(
+        release_rows = conn.execute(
             """
             SELECT
-                b.build_id,
-                v.title,
-                b.version,
-                b.build_type,
-                b.language,
-                b.distribution_platform
-            FROM build b
-            JOIN vn v ON v.vn_id = b.vn_id
-            ORDER BY v.title COLLATE NOCASE, b.version COLLATE NOCASE, b.build_id
+                r.release_id,
+                t.title,
+                r.version,
+                r.build_type,
+                r.language,
+                r.distribution_platform
+            FROM release r
+            JOIN title t ON t.title_id = r.title_id
+            ORDER BY t.title COLLATE NOCASE, r.version COLLATE NOCASE, r.release_id
             """
         ).fetchall()
 
-    if not build_rows:
-        notify("No builds found. Create a build first (option 2).", "error")
+    if not release_rows:
+        notify("No releases found. Create a release first (option 2).", "error")
         return
 
-    panel("Select Build")
-    for i, row in enumerate(build_rows, 1):
+    panel("Select Release")
+    for i, row in enumerate(release_rows, 1):
         print(
             TEXT
             + f"[{i}] {row['title']} | v{row['version']} | "
@@ -418,20 +418,20 @@ def add_file_to_existing_build():
             + f"platform={row['distribution_platform'] or '-'}"
         )
 
-    build_choice = prompt("Select build number, or 0 to cancel: ")
-    if build_choice in ("", "0"):
+    release_choice = prompt("Select release number, or 0 to cancel: ")
+    if release_choice in ("", "0"):
         return
     try:
-        build_idx = int(build_choice) - 1
-        if not (0 <= build_idx < len(build_rows)):
-            notify("Invalid build selection.", "error")
+        release_idx = int(release_choice) - 1
+        if not (0 <= release_idx < len(release_rows)):
+            notify("Invalid release selection.", "error")
             return
     except ValueError:
         notify("Invalid input.", "error")
         return
 
-    build_id = int(build_rows[build_idx]["build_id"])
-    selected_build = build_rows[build_idx]
+    release_id = int(release_rows[release_idx]["release_id"])
+    selected_release = release_rows[release_idx]
     file_sha = sha256_file(selected_path)
     file_size = os.path.getsize(selected_path)
     archived_at = _dt.utcnow().isoformat() + "Z"
@@ -441,11 +441,11 @@ def add_file_to_existing_build():
     prompt_fields = resolve_prompt_fields(template)
     file_metadata = {
         "metadata_version": metadata_version,
-        "title": selected_build["title"] or "",
-        "version": selected_build["version"] or "",
-        "build_type": selected_build["build_type"] or "",
-        "language": selected_build["language"] or "",
-        "distribution_platform": selected_build["distribution_platform"] or "",
+        "title": selected_release["title"] or "",
+        "version": selected_release["version"] or "",
+        "build_type": selected_release["build_type"] or "",
+        "language": selected_release["language"] or "",
+        "distribution_platform": selected_release["distribution_platform"] or "",
     }
 
     panel("Optional File Metadata (Template Fields)")
@@ -460,7 +460,7 @@ def add_file_to_existing_build():
     with get_connection() as conn:
         repo = VnIngestionRepository(conn)
         file_id = repo.create_file_link(
-            build_id,
+            release_id,
             {"archived_at": archived_at, "artifact_type": file_metadata.get("artifact_type")},
             {
                 "sha256": file_sha,
@@ -468,9 +468,9 @@ def add_file_to_existing_build():
                 "size_bytes": file_size,
             },
         )
-        repo.create_file_attachment_metadata(build_id, file_id, file_metadata)
+        repo.create_file_attachment_metadata(release_id, file_id, file_metadata)
 
-    notify(f"Linked file '{selected_file}' to build_id={build_id}.", "ok")
+    notify(f"Linked file '{selected_file}' to release_id={release_id}.", "ok")
 
 def create_metadata_only():
     print()
@@ -519,9 +519,9 @@ def create_metadata_only():
         notify("Invalid input.", "error")
 
 
-def upsert_build_from_metadata_yaml():
+def upsert_release_from_metadata_yaml():
     print()
-    panel("Upsert Build/VN From Metadata YAML (No File Required)")
+    panel("Upsert Release/Title From Metadata YAML (No File Required)")
 
     if not os.path.exists(INCOMING_DIR):
         os.makedirs(INCOMING_DIR)
@@ -566,9 +566,9 @@ def upsert_build_from_metadata_yaml():
         metadata["_raw_text"] = raw_metadata_text
         metadata["_source_file"] = metadata_path
         result = insert_visual_novel(metadata)
-        notify(f"Build/VN metadata upserted successfully (vn_id={result.vn_id}, build_id={result.build_id}).", "ok")
+        notify(f"Release/Title metadata upserted successfully (title_id={result.title_id}, release_id={result.release_id}).", "ok")
     except Exception as exc:
-        notify(f"Build/VN upsert failed: {exc}", "error")
+        notify(f"Release/Title upsert failed: {exc}", "error")
         return
 
 
@@ -706,49 +706,49 @@ def quick_process_with_metadata_yaml():
 def edit_metadata_only():
     conn = get_connection()
     try:
-        # 1. List available Visual Novels
+        # 1. List available Titles
         print()
-        panel("Select Visual Novel to Edit")
-        vns = conn.execute("SELECT vn_id, title FROM vn").fetchall()
-        if not vns:
-            notify("No visual novels in the database yet.", "warn")
+        panel("Select Title to Edit")
+        titles = conn.execute("SELECT title_id, title FROM title").fetchall()
+        if not titles:
+            notify("No titles in the database yet.", "warn")
             return
 
-        for vn in vns:
-            print(f"[{vn['vn_id']}] {vn['title']}")
+        for t in titles:
+            print(f"[{t['title_id']}] {t['title']}")
 
-        vn_id_str = prompt("Enter VN ID to edit (or press Enter to cancel): ")
-        if not vn_id_str.isdigit():
+        title_id_str = prompt("Enter Title ID to edit (or press Enter to cancel): ")
+        if not title_id_str.isdigit():
             return
-        vn_id = int(vn_id_str)
+        title_id = int(title_id_str)
 
-        # 2. List available builds for the selected VN
+        # 2. List available releases for the selected title
         print()
-        panel("Select Build to Edit")
-        builds = conn.execute("SELECT build_id, version, build_type, language FROM build WHERE vn_id = ?", (vn_id,)).fetchall()
-        if not builds:
-            notify("No builds found for this visual novel.", "warn")
+        panel("Select Release to Edit")
+        releases = conn.execute("SELECT release_id, version, build_type, language FROM release WHERE title_id = ?", (title_id,)).fetchall()
+        if not releases:
+            notify("No releases found for this title.", "warn")
             return
 
-        for build in builds:
-            lang = build['language'] or 'default'
-            print(f"[{build['build_id']}] Version: {build['version']} - Language: {lang} - Type: {build['build_type']}")
+        for rel in releases:
+            lang = rel['language'] or 'default'
+            print(f"[{rel['release_id']}] Version: {rel['version']} - Language: {lang} - Type: {rel['build_type']}")
 
-        build_id_str = prompt("Enter Build ID to edit (or press Enter to cancel): ")
-        if not build_id_str.isdigit():
+        release_id_str = prompt("Enter Release ID to edit (or press Enter to cancel): ")
+        if not release_id_str.isdigit():
             return
-        build_id = int(build_id_str)
+        release_id = int(release_id_str)
 
         # 3. Fetch metadata for the specific build.
         # Prefer the canonical current metadata version first, then fall back to
         # archive-layer metadata for legacy rows, then VN-level metadata.
         row = conn.execute('''
                     SELECT raw_json AS metadata_json
-                    FROM metadata_raw_versions
-                    WHERE build_id = ? AND is_current = 1
-                    ORDER BY created_at DESC, metadata_raw_id DESC
+                    FROM revision
+                    WHERE release_id = ? AND is_current = 1
+                    ORDER BY created_at DESC, revision_id DESC
                     LIMIT 1
-                ''', (build_id,)).fetchone()
+                ''', (release_id,)).fetchone()
 
         if not row:
             notify("No metadata found in the database for this Visual Novel.", "error")
@@ -756,17 +756,17 @@ def edit_metadata_only():
 
         current_metadata = json.loads(row["metadata_json"])
 
-        # Ensure build-specific fields reflect the selected build so the user
-        # confirms/edits against the exact build context they chose.
-        build_info = conn.execute(
-            "SELECT version, build_type, language FROM build WHERE build_id = ?",
-            (build_id,)
+        # Ensure release-specific fields reflect the selected release so the user
+        # confirms/edits against the exact release context they chose.
+        release_info = conn.execute(
+            "SELECT version, build_type, language FROM release WHERE release_id = ?",
+            (release_id,)
         ).fetchone()
 
-        if build_info:
-            current_metadata["version"] = build_info["version"]
-            current_metadata["build_type"] = build_info["build_type"]
-            current_metadata["language"] = build_info["language"]
+        if release_info:
+            current_metadata["version"] = release_info["version"]
+            current_metadata["build_type"] = release_info["build_type"]
+            current_metadata["language"] = release_info["language"]
 
     finally:
         conn.close()
@@ -807,7 +807,7 @@ def edit_metadata_only():
         result = insert_visual_novel(updated_metadata)
         notify("Metadata successfully updated!", "ok")
 
-        build_id = result.build_id
+        build_id = result.release_id
         next_metadata_revision = result.metadata_version_number or 1
         print()
         panel(f"Updated Metadata Copy (staged v{next_metadata_revision})")
@@ -863,17 +863,17 @@ def upload_archives():
         with get_connection() as conn:
             if lower.endswith('.zip'):
                 existing_obj = conn.execute(
-                    "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                    "SELECT 1 FROM cloud_archive WHERE sha256 = ?",
                     (file_hash,)
                 ).fetchone()
             elif lower.endswith(('.yaml', '.yml')):
                 existing_obj = conn.execute(
-                    "SELECT 1 FROM metadata_file_objects WHERE sha256 = ?",
+                    "SELECT 1 FROM cloud_sidecar WHERE sha256 = ?",
                     (file_hash,)
                 ).fetchone()
             else:
                 existing_obj = conn.execute(
-                    "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                    "SELECT 1 FROM cloud_archive WHERE sha256 = ?",
                     (file_hash,)
                 ).fetchone()
         return bool(existing_obj)
@@ -963,17 +963,17 @@ def is_upload_file_confirmed_uploaded(file_path):
     with get_connection() as conn:
         if lower.endswith(".zip"):
             existing_obj = conn.execute(
-                "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                "SELECT 1 FROM cloud_archive WHERE sha256 = ?",
                 (file_hash,)
             ).fetchone()
         elif lower.endswith((".yaml", ".yml")):
             existing_obj = conn.execute(
-                "SELECT 1 FROM metadata_file_objects WHERE sha256 = ?",
+                "SELECT 1 FROM cloud_sidecar WHERE sha256 = ?",
                 (file_hash,)
             ).fetchone()
         else:
             existing_obj = conn.execute(
-                "SELECT 1 FROM archive_objects WHERE sha256 = ?",
+                "SELECT 1 FROM cloud_archive WHERE sha256 = ?",
                 (file_hash,)
             ).fetchone()
     return bool(existing_obj)

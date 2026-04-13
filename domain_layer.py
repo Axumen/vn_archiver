@@ -3,16 +3,16 @@ from typing import Protocol
 
 
 @dataclass(frozen=True)
-class Build:
+class Release:
     """
-    Build-centric release aggregate.
+    Release-centric distributable aggregate.
 
-    A Build represents a distributable release. Version is only a descriptor
-    attached to Build and does not define identity on its own.
+    A Release represents a distributable release. Version is only a descriptor
+    attached to Release and does not define identity on its own.
     """
 
-    build_id: int
-    vn_id: int
+    release_id: int
+    title_id: int
     version: "Version"
     release_type: str | None = None
     release_status: str | None = None
@@ -20,11 +20,11 @@ class Build:
 
     def __post_init__(self):
         if self.file_count < 1:
-            raise ValueError("A Build must have at least one file.")
+            raise ValueError("A Release must have at least one file.")
 
 
 @dataclass(frozen=True)
-class VN:
+class Title:
     canonical_title: str
     developer: str | None = None
     publisher: str | None = None
@@ -44,37 +44,37 @@ class Version:
 
 @dataclass(frozen=True)
 class IngestionResult:
-    vn_id: int
-    build_id: int
+    title_id: int
+    release_id: int
     metadata_version_number: int | None = None
-    build: Build | None = None
-    vn: VN | None = None
+    release: Release | None = None
+    title: Title | None = None
 
     def __post_init__(self):
-        if self.build is not None:
-            if self.build.vn_id != self.vn_id:
-                raise ValueError("Build must belong to exactly one VN.")
-            if self.build.build_id != self.build_id:
-                raise ValueError("Build identity mismatch in ingestion result.")
+        if self.release is not None:
+            if self.release.title_id != self.title_id:
+                raise ValueError("Release must belong to exactly one Title.")
+            if self.release.release_id != self.release_id:
+                raise ValueError("Release identity mismatch in ingestion result.")
 
 
 class IngestionRepository(Protocol):
-    def get_or_create_vn(self, metadata): ...
+    def get_or_create_title(self, metadata): ...
 
-    def get_or_create_build(self, vn_id, metadata): ...
+    def get_or_create_release(self, title_id, metadata): ...
 
-    def create_file_link(self, build_id, metadata, archive_data): ...
+    def create_file_link(self, release_id, metadata, archive_data): ...
 
-    def create_metadata_raw(self, raw_payload, file_id, build_id=None): ...
+    def create_metadata_raw(self, raw_payload, file_id, release_id=None): ...
 
-    def create_file_attachment_metadata(self, build_id, file_id, metadata_dict): ...
+    def create_file_attachment_metadata(self, release_id, file_id, metadata_dict): ...
 
 
 class VisualNovelDomainService:
     """
     Domain-layer orchestration for VN archiving.
 
-    This service centralizes the file -> Build -> VN flow so callers do
+    This service centralizes the file -> Release -> Title flow so callers do
     not need to coordinate low-level SQL-oriented helper functions directly.
     """
 
@@ -89,11 +89,11 @@ class VisualNovelDomainService:
         self.repository = repository
         self.collect_archives_for_db = collect_archives_for_db
 
-    def _build_domain_graph(self, metadata, archives_to_process, *, build_id=None, vn_id=None):
-        if build_id is None or vn_id is None:
-            raise ValueError("Build and VN IDs must be resolved before domain graph creation.")
+    def _build_domain_graph(self, metadata, archives_to_process, *, release_id=None, title_id=None):
+        if release_id is None or title_id is None:
+            raise ValueError("Release and Title IDs must be resolved before domain graph creation.")
 
-        vn = VN(
+        title_obj = Title(
             canonical_title=metadata["title"],
             developer=metadata.get("developer"),
             publisher=metadata.get("publisher"),
@@ -102,15 +102,15 @@ class VisualNovelDomainService:
             version_string=metadata.get("version", "unknown"),
             normalized_version=metadata.get("normalized_version"),
         )
-        build = Build(
-            build_id=build_id,
-            vn_id=vn_id,
+        release = Release(
+            release_id=release_id,
+            title_id=title_id,
             version=version,
             release_type=metadata.get("release_type"),
             release_status=metadata.get("release_status"),
             file_count=max(1, len(archives_to_process)),
         )
-        return build, vn
+        return release, title_obj
 
     @staticmethod
     def normalize_version(version_value):
@@ -133,7 +133,7 @@ class VisualNovelDomainService:
         return language_text.lower()
 
     def _prepare_resolution_metadata(self, metadata):
-        """Stage 6 split: route VN vs Build metadata to the correct columns/entities."""
+        """Stage 6 split: route Title vs Release metadata to the correct columns/entities."""
         resolved = dict(metadata)
 
         creator = resolved.get("creator")
@@ -158,8 +158,8 @@ class VisualNovelDomainService:
         archives_to_process, _ = self.collect_archives_for_db(metadata)
 
         resolved_metadata = self._prepare_resolution_metadata(metadata)
-        vn_id = self.repository.get_or_create_vn(resolved_metadata)
-        build_id = self.repository.get_or_create_build(vn_id, resolved_metadata)
+        title_id = self.repository.get_or_create_title(resolved_metadata)
+        release_id = self.repository.get_or_create_release(title_id, resolved_metadata)
 
         candidate_sha256 = None
         if archives_to_process:
@@ -181,7 +181,7 @@ class VisualNovelDomainService:
             path = archive_data.get("filepath") or archive_data.get("filename")
             if not sha or not path:
                 continue
-            file_id = self.repository.create_file_link(build_id, resolved_metadata, archive_data)
+            file_id = self.repository.create_file_link(release_id, resolved_metadata, archive_data)
             if file_id is not None:
                 created_file_ids.append(file_id)
 
@@ -194,19 +194,19 @@ class VisualNovelDomainService:
             metadata_version_number = self.repository.create_metadata_raw(
                 raw_payload,
                 primary_file_id,
-                build_id=build_id,
+                release_id=release_id,
             )
 
-        build, vn = self._build_domain_graph(
+        release, title_obj = self._build_domain_graph(
             resolved_metadata,
             archives_to_process,
-            build_id=build_id,
-            vn_id=vn_id,
+            release_id=release_id,
+            title_id=title_id,
         )
         return IngestionResult(
-            vn_id=vn_id,
-            build_id=build_id,
+            title_id=title_id,
+            release_id=release_id,
             metadata_version_number=metadata_version_number,
-            build=build,
-            vn=vn,
+            release=release,
+            title=title_obj,
         )

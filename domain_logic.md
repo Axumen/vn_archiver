@@ -7,7 +7,8 @@ This document defines the **target domain model** for VN Archiver.
 The architecture is **build-centric** and models releases as structured domain entities rather than file-driven blobs.
 
 The system must represent:
-- VN identity
+The system must represent:
+- Title identity
 - Versioned releases
 - Physical files
 
@@ -21,12 +22,12 @@ file → hash → stored
 
 Design around:
 
-VN → Build → File
+Title → Release → File
 
 Where:
 
-- **VN** is the product identity boundary  
-- **Build** is the release and distribution unit  
+- **Title** is the product identity boundary  
+- **Release** is the release and distribution unit  
 - **File** is the physical binary identity  
 
 ---
@@ -35,7 +36,7 @@ Where:
 
 ---
 
-### 1) VN
+### 1) Title
 
 Represents the **title-level identity** of a visual novel.
 
@@ -43,7 +44,7 @@ This is the highest-level grouping and remains stable across all versions.
 
 #### Required fields:
 
-- vn_id
+- title_id
 - canonical_title
 
 #### Optional fields:
@@ -64,13 +65,13 @@ This is the highest-level grouping and remains stable across all versions.
 
 ---
 
-### 2) Build
+### 2) Release
 
-Represents a **specific release/version** of a VN.
+Represents a **specific release/version** of a visual novel.
 
-A Build is the **primary unit of querying and classification**.
+A Release is the **primary unit of querying and classification**.
 
-A Build encapsulates:
+A Release encapsulates:
 - version identity
 - release lifecycle
 - distribution metadata
@@ -78,8 +79,8 @@ A Build encapsulates:
 
 #### Required fields:
 
-- build_id
-- vn_id
+- release_id
+- title_id
 - version_string
 - normalized_version
 
@@ -134,17 +135,19 @@ They are **not semantic entities** and carry no domain meaning beyond storage id
 
 ## Required Cardinality Rules
 
-- One VN has many Builds  
-- One Build has many Files  
-- One File can belong to many Builds  
+## Required Cardinality Rules
 
-- BuildRelation is a many-to-many self-reference over Build
+- One Title has many Releases  
+- One Release has many Files  
+- One File can belong to many Releases  
+
+- ReleaseRelation is a many-to-many self-reference over Release
 
 ---
 
-## BuildRelation (Required)
+## ReleaseRelation (Required)
 
-Represents relationships between builds.
+Represents relationships between releases.
 
 Used for modeling:
 - updates
@@ -153,8 +156,8 @@ Used for modeling:
 
 #### Fields:
 
-- from_build_id
-- to_build_id
+- from_release_id
+- to_release_id
 - relation_type (controlled vocabulary)
 
 #### Example relation types:
@@ -192,7 +195,7 @@ Examples:
 
 ### release_status
 
-Describes the stability or lifecycle of the build.
+Describes the stability or lifecycle of the release.
 
 Examples:
 
@@ -207,7 +210,7 @@ Examples:
 
 ### access_model
 
-Describes how the build is obtained.
+Describes how the release is obtained.
 
 Examples:
 
@@ -252,17 +255,17 @@ Ingestion must follow this sequence:
 
 ---
 
-### 3. Resolve VN
+### 3. Resolve Title
 
-- Match or create VN using:
+- Match or create Title using:
   - title
   - aliases (if needed)
 
 ---
 
-### 4. Resolve Build
+### 4. Resolve Release
 
-- Match or create Build using:
+- Match or create Release using:
   - version
   - normalized_version
   - release_type
@@ -270,40 +273,40 @@ Ingestion must follow this sequence:
 
 ---
 
-### 5. Link Files to Build
+### 5) Link Files to Release
 
-- Attach all ingested files to the resolved Build
+- Attach all ingested files to the resolved Release
 
 ---
 
-### 6. Apply Metadata Mapping
+### 6) Apply Metadata Mapping
 
-- VN-level fields → VN
-- Build-level fields → Build
+- Title-level fields → Title
+- Release-level fields → Release
 - File-level fields → File
 
 ---
 
-### 7. Mark Completion
+### 7) Mark Completion
 
-- Build is considered classified once:
-  - VN is resolved
-  - Build is resolved
+- Release is considered classified once:
+  - Title is resolved
+  - Release is resolved
   - Files are linked
 
 ---
 
 ## Non-Negotiable Distinctions
 
-- VN ≠ Build
-- Build ≠ File
+- Title ≠ Release
+- Release ≠ File
 
 - Files must never determine release semantics  
-- Builds must never be inferred solely from hashes  
+- Releases must never be inferred solely from hashes  
 
 All domain queries must operate through:
 
-VN → Build → File
+Title → Release → File
 
 ---
 
@@ -319,21 +322,21 @@ MyVN_aprilfools.zip
 
 ### Canonical interpretation:
 
-VN: MyVN
+Title: MyVN
 
-Build:
+Release:
   version: v1
   release_type: full
 
-Build:
+Release:
   version: v2
   release_type: patch
 
-Build:
+Release:
   version: april_fools
   release_type: april_fools
 
-Each Build links to one or more Files via SHA-256 identity.
+Each Release links to one or more Files via SHA-256 identity.
 
 ---
 
@@ -341,13 +344,13 @@ Each Build links to one or more Files via SHA-256 identity.
 
 The architecture is correct when the system can answer:
 
-- Which build does this file belong to?
-- What versions exist for this VN?
-- Which builds are patches vs full releases?
-- Which builds are available on platform X?
+- Which release does this file belong to?
+- What versions exist for this Title?
+- Which releases are patches vs full releases?
+- Which releases are available on platform X?
 - Where has this exact file appeared?
 
-If a query requires bypassing VN/Build and relying only on hashes, the model is incomplete.
+If a query requires bypassing Title/Release and relying only on hashes, the model is incomplete.
 
 ---
 
@@ -355,8 +358,8 @@ If a query requires bypassing VN/Build and relying only on hashes, the model is 
 
 This model enforces:
 
-VN = identity  
-Build = release + distribution unit  
+Title = identity  
+Release = release + distribution unit  
 File = physical data  
 
 All system behavior must conform to this hierarchy.

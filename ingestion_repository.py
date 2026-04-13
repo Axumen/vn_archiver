@@ -4,16 +4,16 @@ from datetime import datetime, timezone
 
 
 class VnIngestionRepository:
-    """Repository adapter for VN/build/file ingestion on the canonical schema.
+    """Repository adapter for Title/Release/File ingestion on the canonical schema.
 
     Strictly supports the canonical domain schema:
-    - `vn`, `build`, `file`, `build_file`
-    - enrichments: `tags`, `vn_tags`, `developers`, `vn_developers`,
-      `publishers`, `vn_publishers`, `languages`, `build_languages`,
-      `metadata_raw_versions`
+    - `title`, `release`, `file`, `release_file`
+    - enrichments: `tag`, `title_tag`, `developer`, `title_developer`,
+      `publisher`, `title_publisher`, `language`, `release_language`,
+      `revision`
     """
 
-    BUILD_METADATA_COLUMN_MAP = {
+    RELEASE_METADATA_COLUMN_MAP = {
         "distribution_model": "distribution_model",
         "distribution_platform": "distribution_platform",
         "translator": "translator",
@@ -43,37 +43,37 @@ class VnIngestionRepository:
         return {row[1] for row in rows}
 
     def _resolve_schema(self):
-        self.vn_table = "vn"
-        if not self._table_exists(self.vn_table):
-            raise RuntimeError("New schema required: missing 'vn' table.")
-        vn_columns = self._table_columns(self.vn_table)
-        if "vn_id" not in vn_columns:
-            raise RuntimeError("New schema required: 'vn.vn_id' column is missing.")
-        self.vn_id_column = "vn_id"
+        self.title_table = "title"
+        if not self._table_exists(self.title_table):
+            raise RuntimeError("New schema required: missing 'title' table.")
+        title_columns = self._table_columns(self.title_table)
+        if "title_id" not in title_columns:
+            raise RuntimeError("New schema required: 'title.title_id' column is missing.")
+        self.title_id_column = "title_id"
 
-        self.build_table = "build"
-        if not self._table_exists(self.build_table):
-            raise RuntimeError("New schema required: missing 'build' table.")
-        build_columns = self._table_columns(self.build_table)
-        if "build_id" not in build_columns or "version" not in build_columns:
-            raise RuntimeError("New schema required: 'build.build_id' and 'build.version' columns are missing.")
-        self.build_id_column = "build_id"
-        self.build_version_column = "version"
-        self.build_platform_column = "target_platform"
+        self.release_table = "release"
+        if not self._table_exists(self.release_table):
+            raise RuntimeError("New schema required: missing 'release' table.")
+        release_columns = self._table_columns(self.release_table)
+        if "release_id" not in release_columns or "version" not in release_columns:
+            raise RuntimeError("New schema required: 'release.release_id' and 'release.version' columns are missing.")
+        self.release_id_column = "release_id"
+        self.release_version_column = "version"
+        self.release_platform_column = "target_platform"
 
         required_tables = (
             "file",
-            "build_file",
-            "build_file_metadata",
-            "tags",
-            "vn_tags",
-            "developers",
-            "vn_developers",
-            "publishers",
-            "vn_publishers",
-            "languages",
-            "build_languages",
-            "metadata_raw_versions",
+            "release_file",
+            "file_snapshot",
+            "tag",
+            "title_tag",
+            "developer",
+            "title_developer",
+            "publisher",
+            "title_publisher",
+            "language",
+            "release_language",
+            "revision",
         )
         missing_tables = [name for name in required_tables if not self._table_exists(name)]
         if missing_tables:
@@ -81,7 +81,7 @@ class VnIngestionRepository:
                 f"New schema required: missing canonical table(s): {', '.join(missing_tables)}."
             )
 
-        required_build_columns = (
+        required_release_columns = (
             "language",
             "build_type",
             "target_platform",
@@ -95,13 +95,13 @@ class VnIngestionRepository:
             "notes",
             "change_note",
         )
-        missing_build_columns = [name for name in required_build_columns if name not in build_columns]
-        if missing_build_columns:
+        missing_release_columns = [name for name in required_release_columns if name not in release_columns]
+        if missing_release_columns:
             raise RuntimeError(
-                f"New schema required: missing canonical build column(s): {', '.join(missing_build_columns)}."
+                f"New schema required: missing canonical release column(s): {', '.join(missing_release_columns)}."
             )
 
-        self.has_file_link_tables = self._table_exists("file") and self._table_exists("build_file")
+        self.has_file_link_tables = self._table_exists("file") and self._table_exists("release_file")
 
     @staticmethod
     def _normalize_text_value(value):
@@ -152,25 +152,25 @@ class VnIngestionRepository:
         normalized = str(value).strip().lower()
         return [normalized] if normalized else []
 
-    def _sync_vn_tags_tables(self, vn_id, tags_value):
+    def _sync_title_tags_tables(self, title_id, tags_value):
         tags = self._normalize_tag_list(tags_value)
-        self.conn.execute("DELETE FROM vn_tags WHERE vn_id = ?", (vn_id,))
-        for tag in tags:
-            tag_row = self.conn.execute("SELECT tag_id FROM tags WHERE name = ? LIMIT 1", (tag,)).fetchone()
+        self.conn.execute("DELETE FROM title_tag WHERE title_id = ?", (title_id,))
+        for tag_name in tags:
+            tag_row = self.conn.execute("SELECT tag_id FROM tag WHERE name = ? LIMIT 1", (tag_name,)).fetchone()
             if tag_row:
                 tag_id = int(tag_row["tag_id"])
             else:
-                self.conn.execute("INSERT INTO tags (name) VALUES (?)", (tag,))
+                self.conn.execute("INSERT INTO tag (name) VALUES (?)", (tag_name,))
                 tag_id = int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
             self.conn.execute(
-                "INSERT OR IGNORE INTO vn_tags (vn_id, tag_id) VALUES (?, ?)",
-                (vn_id, tag_id),
+                "INSERT OR IGNORE INTO title_tag (title_id, tag_id) VALUES (?, ?)",
+                (title_id, tag_id),
             )
 
-    def _sync_vn_people_tables(
+    def _sync_title_people_tables(
         self,
         *,
-        vn_id,
+        title_id,
         raw_value,
         dictionary_table,
         dictionary_id_column,
@@ -179,7 +179,7 @@ class VnIngestionRepository:
         join_foreign_id_column,
     ):
         values = self._normalize_tag_list(raw_value)
-        self.conn.execute(f"DELETE FROM {join_table} WHERE vn_id = ?", (vn_id,))
+        self.conn.execute(f"DELETE FROM {join_table} WHERE title_id = ?", (title_id,))
         for name in values:
             row = self.conn.execute(
                 f"SELECT {dictionary_id_column} FROM {dictionary_table} WHERE {dictionary_name_column} = ? LIMIT 1",
@@ -194,26 +194,26 @@ class VnIngestionRepository:
                 )
                 foreign_id = int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
             self.conn.execute(
-                f"INSERT OR IGNORE INTO {join_table} (vn_id, {join_foreign_id_column}) VALUES (?, ?)",
-                (vn_id, foreign_id),
+                f"INSERT OR IGNORE INTO {join_table} (title_id, {join_foreign_id_column}) VALUES (?, ?)",
+                (title_id, foreign_id),
             )
 
-    def _sync_build_languages_tables(self, build_id, language_value):
+    def _sync_release_languages_tables(self, release_id, language_value):
         values = self._normalize_tag_list(language_value)
-        self.conn.execute("DELETE FROM build_languages WHERE build_id = ?", (build_id,))
+        self.conn.execute("DELETE FROM release_language WHERE release_id = ?", (release_id,))
         for code in values:
             row = self.conn.execute(
-                "SELECT language_id FROM languages WHERE code = ? LIMIT 1",
+                "SELECT language_id FROM language WHERE code = ? LIMIT 1",
                 (code,),
             ).fetchone()
             if row:
                 language_id = int(row["language_id"])
             else:
-                self.conn.execute("INSERT INTO languages (code) VALUES (?)", (code,))
+                self.conn.execute("INSERT INTO language (code) VALUES (?)", (code,))
                 language_id = int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
             self.conn.execute(
-                "INSERT OR IGNORE INTO build_languages (build_id, language_id) VALUES (?, ?)",
-                (build_id, language_id),
+                "INSERT OR IGNORE INTO release_language (release_id, language_id) VALUES (?, ?)",
+                (release_id, language_id),
             )
 
 
@@ -245,13 +245,13 @@ class VnIngestionRepository:
         )
         return int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
 
-    def get_or_create_vn(self, metadata):
+    def get_or_create_title(self, metadata):
         title = str(metadata.get("title") or "").strip()
         if not title:
-            raise ValueError("Title is required for VN resolution.")
+            raise ValueError("Title is required for Title resolution.")
 
-        vn_columns = self._table_columns(self.vn_table)
-        vn_updatable_columns = [
+        title_columns = self._table_columns(self.title_table)
+        title_updatable_columns = [
             "aliases",
             "developer",
             "publisher",
@@ -265,160 +265,160 @@ class VnIngestionRepository:
             "original_release_date",
         ]
 
-        vn_values = {}
-        for column_name in vn_updatable_columns:
-            if column_name not in vn_columns:
+        title_values = {}
+        for column_name in title_updatable_columns:
+            if column_name not in title_columns:
                 continue
             if column_name not in metadata:
                 continue
-            vn_values[column_name] = self._normalize_text_value(metadata.get(column_name))
+            title_values[column_name] = self._normalize_text_value(metadata.get(column_name))
 
-        if "series_id" in vn_columns:
+        if "series_id" in title_columns:
             series_id = self.get_or_create_series(metadata)
             if series_id is not None:
-                vn_values["series_id"] = series_id
+                title_values["series_id"] = series_id
 
         existing = self.conn.execute(
-            f"SELECT {self.vn_id_column} FROM {self.vn_table} WHERE TRIM(title) = TRIM(?) COLLATE NOCASE LIMIT 1",
+            f"SELECT {self.title_id_column} FROM {self.title_table} WHERE TRIM(title) = TRIM(?) COLLATE NOCASE LIMIT 1",
             (title,),
         ).fetchone()
         if existing:
-            vn_id = existing[self.vn_id_column]
-            if vn_values:
-                assignments = ", ".join(f"{column} = ?" for column in vn_values)
+            title_id = existing[self.title_id_column]
+            if title_values:
+                assignments = ", ".join(f"{column} = ?" for column in title_values)
                 self.conn.execute(
-                    f"UPDATE {self.vn_table} SET {assignments} WHERE {self.vn_id_column} = ?",
-                    tuple(vn_values.values()) + (vn_id,),
+                    f"UPDATE {self.title_table} SET {assignments} WHERE {self.title_id_column} = ?",
+                    tuple(title_values.values()) + (title_id,),
                 )
-            self._sync_vn_tags_tables(vn_id, metadata.get("tags"))
-            self._sync_vn_people_tables(
-                vn_id=vn_id,
+            self._sync_title_tags_tables(title_id, metadata.get("tags"))
+            self._sync_title_people_tables(
+                title_id=title_id,
                 raw_value=metadata.get("developer"),
-                dictionary_table="developers",
+                dictionary_table="developer",
                 dictionary_id_column="developer_id",
                 dictionary_name_column="name",
-                join_table="vn_developers",
+                join_table="title_developer",
                 join_foreign_id_column="developer_id",
             )
-            self._sync_vn_people_tables(
-                vn_id=vn_id,
+            self._sync_title_people_tables(
+                title_id=title_id,
                 raw_value=metadata.get("publisher"),
-                dictionary_table="publishers",
+                dictionary_table="publisher",
                 dictionary_id_column="publisher_id",
                 dictionary_name_column="name",
-                join_table="vn_publishers",
+                join_table="title_publisher",
                 join_foreign_id_column="publisher_id",
             )
-            return vn_id
+            return title_id
 
         insert_columns = ["title"]
         insert_values = [title]
-        for column_name, value in vn_values.items():
+        for column_name, value in title_values.items():
             insert_columns.append(column_name)
             insert_values.append(value)
 
         placeholders = ", ".join(["?"] * len(insert_columns))
         self.conn.execute(
-            f"INSERT INTO {self.vn_table} ({', '.join(insert_columns)}) VALUES ({placeholders})",
+            f"INSERT INTO {self.title_table} ({', '.join(insert_columns)}) VALUES ({placeholders})",
             tuple(insert_values),
         )
-        vn_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        self._sync_vn_tags_tables(vn_id, metadata.get("tags"))
-        self._sync_vn_people_tables(
-            vn_id=vn_id,
+        title_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        self._sync_title_tags_tables(title_id, metadata.get("tags"))
+        self._sync_title_people_tables(
+            title_id=title_id,
             raw_value=metadata.get("developer"),
-            dictionary_table="developers",
+            dictionary_table="developer",
             dictionary_id_column="developer_id",
             dictionary_name_column="name",
-            join_table="vn_developers",
+            join_table="title_developer",
             join_foreign_id_column="developer_id",
         )
-        self._sync_vn_people_tables(
-            vn_id=vn_id,
+        self._sync_title_people_tables(
+            title_id=title_id,
             raw_value=metadata.get("publisher"),
-            dictionary_table="publishers",
+            dictionary_table="publisher",
             dictionary_id_column="publisher_id",
             dictionary_name_column="name",
-            join_table="vn_publishers",
+            join_table="title_publisher",
             join_foreign_id_column="publisher_id",
         )
-        return vn_id
+        return title_id
 
-    def _build_lookup_filters(self, metadata):
+    def _release_lookup_filters(self, metadata):
         version_value = str(metadata.get("version") or "").strip()
         language = self._normalize_text_value(metadata.get("language"))
         build_type = self._normalize_text_value(metadata.get("build_type"))
         platform = self._normalize_text_value(metadata.get("target_platform"))
         return version_value, language, build_type, platform
 
-    def find_build(self, vn_id, metadata):
-        version_value, language, build_type, platform = self._build_lookup_filters(metadata)
+    def find_release(self, title_id, metadata):
+        version_value, language, build_type, platform = self._release_lookup_filters(metadata)
         if not version_value:
             return None
 
-        where_clauses = ["vn_id = ?", f"{self.build_version_column} = ?"]
-        params = [vn_id, version_value]
+        where_clauses = ["title_id = ?", f"{self.release_version_column} = ?"]
+        params = [title_id, version_value]
 
         where_clauses.append("COALESCE(language, '') = COALESCE(?, '')")
         params.append(language)
         where_clauses.append("COALESCE(build_type, '') = COALESCE(?, '')")
         params.append(build_type)
         where_clauses.append(
-            f"COALESCE({self.build_platform_column}, '') = COALESCE(?, '')"
+            f"COALESCE({self.release_platform_column}, '') = COALESCE(?, '')"
         )
         params.append(platform)
 
         row = self.conn.execute(
-            f"SELECT {self.build_id_column} FROM {self.build_table} WHERE {' AND '.join(where_clauses)} ORDER BY {self.build_id_column} DESC LIMIT 1",
+            f"SELECT {self.release_id_column} FROM {self.release_table} WHERE {' AND '.join(where_clauses)} ORDER BY {self.release_id_column} DESC LIMIT 1",
             tuple(params),
         ).fetchone()
-        return row[self.build_id_column] if row else None
+        return row[self.release_id_column] if row else None
 
-    def create_build(self, vn_id, metadata):
-        version_value, language, build_type, platform = self._build_lookup_filters(metadata)
+    def create_release(self, title_id, metadata):
+        version_value, language, build_type, platform = self._release_lookup_filters(metadata)
         if not version_value:
             version_value = "1.0"
 
-        insert_columns = ["vn_id", self.build_version_column]
-        values = [vn_id, version_value]
+        insert_columns = ["title_id", self.release_version_column]
+        values = [title_id, version_value]
 
         insert_columns.append("language")
         values.append(language)
         insert_columns.append("build_type")
         values.append(build_type)
-        insert_columns.append(self.build_platform_column)
+        insert_columns.append(self.release_platform_column)
         values.append(platform)
 
-        for build_column, metadata_key in self.BUILD_METADATA_COLUMN_MAP.items():
+        for release_column, metadata_key in self.RELEASE_METADATA_COLUMN_MAP.items():
             if metadata_key not in metadata:
                 continue
-            if build_column == "translator":
+            if release_column == "translator":
                 normalized_value = self._normalize_translator_value(metadata.get(metadata_key))
             else:
                 normalized_value = self._normalize_text_value(metadata.get(metadata_key))
-            insert_columns.append(build_column)
+            insert_columns.append(release_column)
             values.append(normalized_value)
 
         placeholders = ", ".join(["?"] * len(insert_columns))
         self.conn.execute(
-            f"INSERT INTO {self.build_table} ({', '.join(insert_columns)}) VALUES ({placeholders})",
+            f"INSERT INTO {self.release_table} ({', '.join(insert_columns)}) VALUES ({placeholders})",
             tuple(values),
         )
-        build_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        self._sync_build_languages_tables(build_id, metadata.get("language"))
-        return build_id
+        release_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        self._sync_release_languages_tables(release_id, metadata.get("language"))
+        return release_id
 
-    def get_or_create_build(self, vn_id, metadata):
-        existing = self.find_build(vn_id, metadata)
+    def get_or_create_release(self, title_id, metadata):
+        existing = self.find_release(title_id, metadata)
         if existing:
-            self._sync_build_languages_tables(existing, metadata.get("language"))
+            self._sync_release_languages_tables(existing, metadata.get("language"))
             return existing
-        return self.create_build(vn_id, metadata)
+        return self.create_release(title_id, metadata)
 
-    def upsert_vn_and_build(self, metadata):
-        vn_id = self.get_or_create_vn(metadata)
-        build_id = self.get_or_create_build(vn_id, metadata)
-        return vn_id, build_id
+    def upsert_title_and_release(self, metadata):
+        title_id = self.get_or_create_title(metadata)
+        release_id = self.get_or_create_release(title_id, metadata)
+        return title_id, release_id
 
     def _get_file_size_from_disk(self, file_path):
         import os
@@ -426,7 +426,7 @@ class VnIngestionRepository:
             return os.path.getsize(file_path)
         return None
 
-    def _create_file_in_tables(self, build_id, metadata, archive_data):
+    def _create_file_in_tables(self, release_id, metadata, archive_data):
         archive_data = archive_data or {}
         artifact_sha = self._normalize_text_value(archive_data.get("sha256"))
         if not artifact_sha:
@@ -459,8 +459,8 @@ class VnIngestionRepository:
             file_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         link_row = self.conn.execute(
-            "SELECT 1 FROM build_file WHERE build_id = ? AND file_id = ? LIMIT 1",
-            (build_id, file_id),
+            "SELECT 1 FROM release_file WHERE release_id = ? AND file_id = ? LIMIT 1",
+            (release_id, file_id),
         ).fetchone()
         artifact_type = self._normalize_text_value(metadata.get("artifact_type"))
         if not artifact_type:
@@ -474,26 +474,26 @@ class VnIngestionRepository:
                 archived_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
             self.conn.execute(
-                "INSERT INTO build_file (build_id, file_id, original_filename, artifact_type, archived_at) VALUES (?, ?, ?, ?, ?)",
-                (build_id, file_id, filename, artifact_type, archived_at),
+                "INSERT INTO release_file (release_id, file_id, original_filename, artifact_type, archived_at) VALUES (?, ?, ?, ?, ?)",
+                (release_id, file_id, filename, artifact_type, archived_at),
             )
         else:
             if artifact_type is not None:
                 self.conn.execute(
-                    "UPDATE build_file SET artifact_type = ? WHERE build_id = ? AND file_id = ? AND (artifact_type IS NULL OR artifact_type = '')",
-                    (artifact_type, build_id, file_id)
+                    "UPDATE release_file SET artifact_type = ? WHERE release_id = ? AND file_id = ? AND (artifact_type IS NULL OR artifact_type = '')",
+                    (artifact_type, release_id, file_id)
                 )
 
         return file_id
 
-    def create_file_link(self, build_id, metadata, archive_data):
+    def create_file_link(self, release_id, metadata, archive_data):
         if self.has_file_link_tables:
-            return self._create_file_in_tables(build_id, metadata, archive_data)
+            return self._create_file_in_tables(release_id, metadata, archive_data)
         raise RuntimeError("No supported file persistence tables found in current schema.")
 
-    def create_metadata_raw(self, raw_payload, file_id, build_id=None):
-        if self._table_exists("metadata_raw_versions"):
-            if build_id is None:
+    def create_metadata_raw(self, raw_payload, file_id, release_id=None):
+        if self._table_exists("revision"):
+            if release_id is None:
                 return
 
             if isinstance(raw_payload, dict):
@@ -507,45 +507,45 @@ class VnIngestionRepository:
 
             # Mark all previous versions as not current
             self.conn.execute(
-                "UPDATE metadata_raw_versions SET is_current = 0 WHERE build_id = ? AND is_current = 1",
-                (build_id,),
+                "UPDATE revision SET is_current = 0 WHERE release_id = ? AND is_current = 1",
+                (release_id,),
             )
 
             next_version = self.conn.execute(
-                "SELECT COALESCE(MAX(version_number), 0) + 1 FROM metadata_raw_versions WHERE build_id = ?",
-                (build_id,),
+                "SELECT COALESCE(MAX(version_number), 0) + 1 FROM revision WHERE release_id = ?",
+                (release_id,),
             ).fetchone()[0]
 
             self.conn.execute(
                 """
-                INSERT INTO metadata_raw_versions (
-                    build_id, file_id, raw_json, raw_sha256, version_number, is_current, created_at
+                INSERT INTO revision (
+                    release_id, file_id, raw_json, raw_sha256, version_number, is_current, created_at
                 ) VALUES (?, ?, ?, ?, ?, 1, ?)
                 """,
-                (build_id, file_id, raw_json_value, raw_sha256, next_version, created_at),
+                (release_id, file_id, raw_json_value, raw_sha256, next_version, created_at),
             )
             return next_version
 
-    def create_file_attachment_metadata(self, build_id, file_id, metadata_dict):
-        """Record a metadata snapshot at the time a file is attached to a build.
+    def create_file_attachment_metadata(self, release_id, file_id, metadata_dict):
+        """Record a metadata snapshot at the time a file is attached to a release.
 
-        This writes to ``build_file_metadata`` — a provenance table distinct from
-        ``metadata_raw_versions`` (which tracks the build-level metadata version chain).
+        This writes to ``file_snapshot`` — a provenance table distinct from
+        ``revision`` (which tracks the release-level metadata version chain).
         """
         created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         raw_json = json.dumps(metadata_dict, ensure_ascii=False, sort_keys=True)
 
         self.conn.execute(
             """
-            INSERT INTO build_file_metadata (
-                build_id, file_id, metadata_version, title, version,
+            INSERT INTO file_snapshot (
+                release_id, file_id, metadata_version, title, version,
                 build_type, normalized_version, distribution_platform, platform,
                 language, edition,
                 release_date, source_url, notes, change_note, raw_json, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                build_id,
+                release_id,
                 file_id,
                 int(metadata_dict.get("metadata_version") or 1),
                 str(metadata_dict.get("title") or ""),

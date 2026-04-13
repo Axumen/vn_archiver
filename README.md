@@ -32,9 +32,9 @@ content_rating: "18+"
 content_mode: "selectable"
 ```
 
-## Content type metadata (VN release flavor)
+## Content type metadata (Title release flavor)
 
-Use `content_type` to describe the release/story flavor for VN metadata.
+Use `content_type` to describe the release/story flavor for Title metadata.
 Suggested values: `main_story`, `story_expansion`, `seasonal_event`, `april_fools`, `side_story`, `non_canon_special`.
 
 ```yaml
@@ -46,9 +46,8 @@ content_type: "seasonal_event"
 Capitalization is mostly a data-quality recommendation (not a strict parser rule).
 
 - **Keep proper capitalization** for display/name fields:
-  - `title`, `series`, `developer`, `publisher`, `parent_vn_title`
+  - `title`, `series`, `developer`, `publisher`, `parent_title`
   - free-text fields like `description`, `notes`, `change_note`
-- **Prefer lowercase canonical values** for enum/status-like fields:
   - `release_status`, `distribution_model`, `build_type`, `distribution_platform`
   - `content_rating`, `content_mode`, `relationship_type`, `artifact_type`
 
@@ -75,23 +74,23 @@ When processing a non-runnable artifact, set `artifact_type` using these suggest
 `instructions`, `readme`, `manual`, `soundtrack`, `bonus`, `checksum`.
 
 Derived artifact types (`patch`, `mod`, `hotfix`, `translation_patch`) must point to
-their base artifact on the same build. Provide one of:
+their base artifact on the same release. Provide one of:
 - `base_artifact_sha256` (recommended, unique)
-- `base_artifact_filename` (allowed when unique on build)
+- `base_artifact_filename` (allowed when unique on release)
 
-If exactly one `base_game`/`game_archive` exists for that build, vn_archiver will auto-link it.
+If exactly one `base_game`/`game_archive` exists for that release, vn_archiver will auto-link it.
 
 `Process Artifact` in the TUI accepts both `.zip` and non-zip artifact files (YAML files are excluded).
-It now requires entering a title first, then selecting an existing build from the database so the artifact is linked to a specific build.
+It now requires entering a title first, then selecting an existing release from the database so the artifact is linked to a specific release.
 
-Artifact records are normalized in the `artifacts` table and linked to their parent `builds` row.
-Current core columns: `artifact_id`, `build_id`, `artifact_type`, `filename`, `sha256`,
-`file_object_sha256`, `base_artifact_id`, `release_date`, `notes`, `created_at`.
+Artifact records are normalized in the `file` and `release_file` tables and linked to their parent `release` row.
+Current core columns: `file_id`, `release_id`, `artifact_type`, `filename`, `sha256`,
+`base_artifact_id`, `release_date`, `notes`, `created_at`.
 Artifact sidecars use the same metadata object/version handling as other metadata sidecars.
 Use `metadata/metadata_artifact_v1.yaml` as a baseline template for artifact-focused sidecars.
 
 Uploaded artifacts are explicitly linked to content-addressed file objects through
-`artifacts.file_object_sha256 -> archive_objects.sha256`.
+`file.sha256 -> cloud_archive.sha256`.
 
 ```yaml
 artifact_type: "patch"
@@ -121,16 +120,16 @@ translator:
   japanese: "Original team"
 ```
 
-When a list/map is used, vn_archiver stores it in the `builds.translator` text column as JSON while preserving the full value in metadata history. Stored `metadata_objects.metadata_json` keeps template-style field ordering for readability/export consistency while version hashing remains canonical.
+When a list/map is used, vn_archiver stores it in the `release.translator` text column as JSON while preserving the full value in metadata history. Stored `revision.raw_json` keeps template-style field ordering for readability/export consistency while version hashing remains canonical.
 
 
 ## Upload format (separate archive + metadata sidecar)
 
 Uploads now use a strict separation model:
-- the VN archive file is uploaded as the cloud object
+- the Title archive file is uploaded as the cloud object
 - metadata must be provided as a sidecar YAML file in `uploading/` with the pattern `<archive_name>_meta_vN.yaml` (where `vN` is the metadata revision number)
-- archive upload path format: `archives/{title_slug}/vn-{vn_id:05d}/{version_slug}/{archive_file_name}`
-- metadata upload path format: `metadata/{title_slug}/vn-{vn_id:05d}/{version_slug}/{sidecar_file_name}`
+- archive upload path format: `archives/{title_slug}/title-{title_id:05d}/{version_slug}/{archive_file_name}`
+- metadata upload path format: `metadata/{title_slug}/title-{title_id:05d}/{version_slug}/{sidecar_file_name}`
 - upload menu accepts both VN archive files (`.zip`) and metadata sidecar files (`*_meta_vN.yaml`)
 - upload requires sidecar metadata to match the corresponding metadata revision stored in database
 - when uploading metadata revision `vN` (N > 1), the parent metadata revision `vN-1` must already be uploaded
@@ -139,44 +138,44 @@ Embedded `metadata.yaml` inside archives is no longer used by the upload pipelin
 
 ## Undoing a mistaken metadata/create entry
 
-Use `metadata_rollback_tool.py` to manage `metadata_versions` and, if needed, remove the full created build entry.
+Use `metadata_rollback_tool.py` to manage revisions and, if needed, remove the full created release entry.
 
 ### If you only want to undo the latest metadata edit
 Use rollback (non-destructive history pointer move):
 
 ```bash
-python metadata_rollback_tool.py --build-id 7 rollback --backup
+python metadata_rollback_tool.py --release-id 7 rollback --backup
 ```
 
 ### If you want it to look like the create never happened
-Use hard undo (build-level removal):
+Use hard undo (release-level removal):
 
 ```bash
-# Removes the build row and cascaded build-linked rows
-python metadata_rollback_tool.py --build-id 7 undo-build-create --backup
+# Removes the release row and cascaded release-linked rows
+python metadata_rollback_tool.py --release-id 7 undo-release-create --backup
 
-# Keep VN row even if that was its only build
-python metadata_rollback_tool.py --build-id 7 undo-build-create --backup --keep-empty-vn
+# Keep Title row even if that was its only release
+python metadata_rollback_tool.py --release-id 7 undo-release-create --backup --keep-empty-title
 
 # Preview affected rows without changing archive.db
-python metadata_rollback_tool.py --build-id 7 undo-build-create --dry-run
+python metadata_rollback_tool.py --release-id 7 undo-release-create --dry-run
 ```
 
-`undo-build-create` performs:
-- delete from `builds` for that build id (which cascades to `archives`, `build_target_platforms`, and `metadata_versions`)
-- optional deletion of the now-empty `visual_novels` row (default behavior)
-- cleanup of orphaned `metadata_objects`, `tags`, and `series`
+`undo-release-create` performs:
+- delete from `release` for that release id (which cascades to `file`, `release_file`, and `revision`)
+- optional deletion of the now-empty `title` row (default behavior)
+- cleanup of orphaned `tag` and `series`
 
 ### Targeting entries
 ```bash
-# By build id
-python metadata_rollback_tool.py --build-id 7 list
+# By release id
+python metadata_rollback_tool.py --release-id 7 list
 
-# Delete only the newest metadata version for this build
-python metadata_rollback_tool.py --build-id 7 delete-version --latest --backup
+# Delete only the newest metadata version for this release
+python metadata_rollback_tool.py --release-id 7 delete-version --latest --backup
 
-# Undo latest update entry on an existing build (removes newest metadata version + newest archive row)
-python metadata_rollback_tool.py --build-id 7 undo-latest-entry --backup
+# Undo latest update entry on an existing release (removes newest metadata version + newest archive row)
+python metadata_rollback_tool.py --release-id 7 undo-latest-entry --backup
 
 # By title/version
 python metadata_rollback_tool.py --title "My VN" --version "1.2" list
@@ -184,23 +183,23 @@ python metadata_rollback_tool.py --title "My VN" --version "1.2" list
 
 
 Schema behavior note:
-- Deleting the last `archives` row for a build now automatically deletes that `builds` row (which then cascades to build-linked tables via existing foreign keys).
-- Deleting `metadata_versions` rows now automatically prunes orphaned `metadata_objects` rows via trigger.
-- `undo-latest-entry` is intended for existing builds with at least 2 archives and 2 metadata versions; it avoids deleting the only archive row to prevent accidental build removal.
+- Deleting the last `release_file` row for a release now automatically deletes that `release` row (which then cascades to release-linked tables via existing foreign keys).
+- Deleting `revision` rows now automatically prunes orphaned `file_snapshot` rows via trigger.
+- `undo-latest-entry` is intended for existing releases with at least 2 archives and 2 metadata versions; it avoids deleting the only archive row to prevent accidental release removal.
 
 Safety files created when `--backup` is used:
 - `db_backups/archive_backup_<timestamp>.db`
 
-## Can `archive.db` be regenerated from `metadata_objects.metadata_json`?
+## Can `archive.db` be regenerated from `revision.raw_json`?
 
-Partially. The JSON blobs in `metadata_objects.metadata_json` are sufficient to reconstruct
+Partially. The JSON blobs in `revision.raw_json` are sufficient to reconstruct
 most normalized metadata tables by re-feeding each blob through `insert_visual_novel()` in
-`vn_archiver.py`, because that path upserts series/VN/build/tag/platform/canon rows and
+`vn_archiver.py`, because that path upserts series/title/release/tag/platform rows and
 re-materializes metadata history entries.
 
 However, this is **not** a full-fidelity rebuild of every table:
 - Auto-generated IDs and timestamps will differ.
-- `archive_objects` cannot be fully reconstructed from metadata JSON alone because that table
+- `cloud_archive` cannot be fully reconstructed from metadata JSON alone because that table
   stores storage-layer fields (`storage_path`, object `file_size`) that are not guaranteed to
   exist in metadata blobs.
 - Any operational state not represented in metadata JSON (for example upload bookkeeping) must
@@ -208,7 +207,7 @@ However, this is **not** a full-fidelity rebuild of every table:
 ### Rebuild directly from YAML files
 
 Use `rebuild_archive_db_from_yaml.py` to recreate `archive.db` by scanning a folder tree for metadata YAML files and re-processing each document through the normal insert pipeline.
-The rebuild now performs a second canon-relationship sync pass so parent/child VN links are restored even when child metadata is processed before parent metadata in file order.
+The rebuild now performs a second canon-relationship sync pass so parent/child Title links are restored even when child metadata is processed before parent metadata in file order.
 
 When running `Create Archive` (both VN and artifact content flows), vn_archiver now also mirrors sidecar metadata into `rebuild_metadata/` using archive-id-prefixed names:
 
