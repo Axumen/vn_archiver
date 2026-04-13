@@ -436,6 +436,8 @@ class VnIngestionRepository:
             file_id = file_row["file_id"]
         else:
             size_bytes = archive_data.get("size_bytes")
+            if size_bytes is None:
+                size_bytes = archive_data.get("file_size_bytes")
             self.conn.execute(
                 "INSERT INTO file (sha256, filename, size_bytes) VALUES (?, ?, ?)",
                 (artifact_sha, filename, size_bytes),
@@ -447,10 +449,16 @@ class VnIngestionRepository:
             (build_id, file_id),
         ).fetchone()
         if not link_row:
+            archived_at = metadata.get("archived_at")
+            if not archived_at:
+                archived_at = archive_data.get("archived_at")
+            if not archived_at:
+                archived_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
             artifact_type = self._normalize_text_value(metadata.get("artifact_type"))
             self.conn.execute(
                 "INSERT INTO build_file (build_id, file_id, original_filename, artifact_type, archived_at) VALUES (?, ?, ?, ?, ?)",
-                (build_id, file_id, filename, artifact_type, metadata.get("archived_at")),
+                (build_id, file_id, filename, artifact_type, archived_at),
             )
 
         return file_id
