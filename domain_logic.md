@@ -1,365 +1,101 @@
-# VN Archiver — Domain Logic (Simplified Canonical Architecture)
+# VN Archiver — Domain Logic (Canonical Architecture)
 
 ## Purpose
-
-This document defines the **target domain model** for VN Archiver.
-
-The architecture is **build-centric** and models releases as structured domain entities rather than file-driven blobs.
-
-The system must represent:
-The system must represent:
-- Title identity
-- Versioned releases
-- Physical files
+This document outlines the **current domain model** and canonical data schema for the VN Archiver.
+The system is built on a strict hierarchical structure, treating versioned releases as structured domain aggregates rather than standalone file blobs. It focuses on representing immutable files attached to descriptive release entities under a defined title.
 
 ---
 
 ## Core Principle
+The core organizational hierarchy follows:
+**Title** → **Release** → **File**
 
-Do **not** design around:
-
-file → hash → stored
-
-Design around:
-
-Title → Release → File
-
-Where:
-
-- **Title** is the product identity boundary  
-- **Release** is the release and distribution unit  
-- **File** is the physical binary identity  
+- **Title**: The product identity boundary.
+- **Release**: The versioned release and distribution unit.
+- **File**: The immutable physical data identity (content-addressed).
 
 ---
 
-## Domain Entities (Required)
-
----
+## Domain Entities
 
 ### 1) Title
+Represents the highest-level product identity of a visual novel. It aggregates overarching attributes that span all versions or editions.
 
-Represents the **title-level identity** of a visual novel.
-
-This is the highest-level grouping and remains stable across all versions.
-
-#### Required fields:
-
-- title_id
-- canonical_title
-
-#### Optional fields:
-
-- developer
-- publisher
-- aliases
-- series
-- series_description
-- release_status
-- content_rating
-- content_mode
-- content_type
-- description
-- source
-- tags
-- original_release_date
-
----
+**Database Table**: `title`
+- **Required fields**: `title_id`, `title` (canonical_title)
+- **Attribute fields**: `series_id`, `aliases`, `description`, `source`, `original_release_date`, `release_status`, `content_rating`, `content_mode`, `content_type`
+- **Tied properties**: Developers, Publishers, Tags (linked via normalized `title_developer`, `title_publisher`, `title_tag` tables).
 
 ### 2) Release
+Represents a specific version, build, or edition of a `Title`.
+Releases act as the primary queryable boundaries for users retrieving metadata.
 
-Represents a **specific release/version** of a visual novel.
+**Database Table**: `release`
+- **Required fields**: `release_id`, `title_id`, `version`
+- **Computed fields**: `normalized_version`
+- **Classification fields**:
+  - `build_type` (e.g., full, patch, demo)
+  - `edition` (e.g., standard, limited)
+  - `language`
+  - `distribution_platform`
+  - `distribution_model`
+  - `target_platform`
+  - `engine` / `engine_version`
+- **Lifecycle fields**: `release_date`, `translator`, `notes`, `change_note`.
 
-A Release is the **primary unit of querying and classification**.
-
-A Release encapsulates:
-- version identity
-- release lifecycle
-- distribution metadata
-- technical/runtime characteristics
-
-#### Required fields:
-
-- release_id
-- title_id
-- version_string
-- normalized_version
-
-#### Lifecycle fields:
-
-- release_type (controlled vocabulary)
-- release_status (controlled vocabulary)
-- release_date (optional but recommended)
-
-#### Access / Distribution:
-
-- access_model (free, paid, freemium, subscription, etc.)
-- distribution_platform (Steam, DLsite, Itch, etc.)
-
-#### Content:
-
-- language
-- translator
-- edition
-
-#### Technical:
-
-- engine
-- engine_version
-- target_platform
-
-#### Additional:
-
-- notes (optional)
-
----
+*Note: The identity of a Release is generally guaranteed uniquely by a combination of `title_id`, `normalized_version`, `language`, `edition`, and `distribution_platform`.*
 
 ### 3) File
+Represents the physical, deduplicated object binary, identified via content addressing (hash-based).
+Files are strictly non-semantic entities. They hold no domain logic beyond their physical storage footprint.
 
-Represents a **deduplicated binary object**.
-
-Files are immutable and identified by content hash.
-
-They are **not semantic entities** and carry no domain meaning beyond storage identity.
-
-#### Required fields:
-
-- file_id
-- sha256
-- size_bytes
-
-#### Optional fields:
-
-- filename
+**Database Table**: `file`
+- **Required fields**: `file_id`, `sha256`
+- **Optional/Calculated fields**: `size_bytes`, `filename`.
 
 ---
 
-## Required Cardinality Rules
+## Linkages & Metadata Sub-Entities
 
-## Required Cardinality Rules
+To map physical files to the logical `Release` aggregate, and capture context at the time of archiving, several auxiliary tables are natively supported:
 
-- One Title has many Releases  
-- One Release has many Files  
-- One File can belong to many Releases  
-
-- ReleaseRelation is a many-to-many self-reference over Release
-
----
-
-## ReleaseRelation (Required)
-
-Represents relationships between releases.
-
-Used for modeling:
-- updates
-- dependencies
-- alternate releases
-
-#### Fields:
-
-- from_release_id
-- to_release_id
-- relation_type (controlled vocabulary)
-
-#### Example relation types:
-
-- supersedes
-- depends_on
-- variant_of
-- continuation_of
+- **Release-File Mapping (`release_file`)**: Maps `file_id` to `release_id`. Tracks the original filename and artifact type.
+- **File Snapshot (`file_snapshot`)**: Captures flattened, denormalized metadata properties specifically tied to the exact moment a file was archived into a given release.
+- **Revisions (`revision`)**: Supports content-addressed metadata version management. Stores a timeline of metadata iterations (`raw_json`, `raw_sha256`), tracking changes dynamically for each release.
+- **Series Identity (`series`)**: A high-level entity capable of grouping multiple related `Title` records logically.
+- **Language Sub-table (`release_language`)**: Associates releases dynamically with locale codes.
 
 ---
 
-## Controlled Vocabulary Requirements
+## Controlled Vocabulary Constraints
 
-Free-text must not be used for core classification fields.
+The canonical schema normalizes categorization to avoid unstructured free-text anomalies. These fields are defined carefully in processing steps:
 
-At minimum, define controlled vocabularies for:
-
----
-
-### release_type
-
-Describes the nature of the release.
-
-Examples:
-
-- full
-- patch
-- demo
-- trial
-- fandisc
-- hotfix
-- april_fools
+- **`build_type`** (formerly release_type): Differentiates between 'full' games, patches, demos, fan-discs, DLCs, etc.
+- **`language`**: Expected to follow ISO codes (normalized using the domain layer ingestion constraints).
+- **`normalized_version`**: Standardized stripped versions heavily used for DB-level uniqueness checks (e.g., stripping 'v' prefixes).
 
 ---
 
-### release_status
+## Ingestion Sequence (Domain Layer)
 
-Describes the stability or lifecycle of the release.
+All file processing follows a centralized orchestration enforced by `domain_layer.py`:
 
-Examples:
-
-- stable
-- beta
-- alpha
-- prerelease
-- discontinued
-- unknown
-
----
-
-### access_model
-
-Describes how the release is obtained.
-
-Examples:
-
-- free
-- paid
-- freemium
-- subscription
+1. **Resolve Title**: Parses the core identity payload and attempts to fetch an existing `Title` or create a new one using overarching metadata properties.
+2. **Resolve Release**: Maps to an existing database `Release` based on `title_id` and standardized version heuristics.
+3. **Ingest Files**: Extracts local physical attributes (`sha256`, size, path).
+4. **Create File Attachments**:
+   - Commits independent `File` deduplication entries.
+   - Maps them to the `Release` via the junction table (`release_file`).
+5. **Metadata Revisioning**: Stores raw json metadata payload as a `revision` linked to the primary release and explicitly snapshotted to the attached files.
+6. **Yield Result**: The `domain_layer` passes a unified `IngestionResult` back to the orchestration service (like the CLI/TUI), guaranteeing synchronized identity definitions (`title_id`, `release_id`, `metadata_version_number`).
 
 ---
 
-### target_platform
+## Canonical Distinctions
 
-Examples:
+- **Title ≠ Release**: A Title defines semantics; a Release defines execution and runtime.
+- **Release ≠ File**: A Release has semantic scope; a File is just an immutable hash.
+- Files cannot redefine release semantics. Releases cannot inherently deduce context solely without Title bounds.
 
-- windows
-- linux
-- macos
-- android
-- web
-
----
-
-## Ingestion Decision Model
-
-Ingestion must follow this sequence:
-
----
-
-### 1. Ingest Files
-
-- Compute sha256
-- Create or reuse File record
-- Store independently of metadata
-
----
-
-### 2. Parse Metadata
-
-- Read YAML/JSON metadata
-- Store as structured data
-- Do not assign domain identity yet
-
----
-
-### 3. Resolve Title
-
-- Match or create Title using:
-  - title
-  - aliases (if needed)
-
----
-
-### 4. Resolve Release
-
-- Match or create Release using:
-  - version
-  - normalized_version
-  - release_type
-  - language (if relevant)
-
----
-
-### 5) Link Files to Release
-
-- Attach all ingested files to the resolved Release
-
----
-
-### 6) Apply Metadata Mapping
-
-- Title-level fields → Title
-- Release-level fields → Release
-- File-level fields → File
-
----
-
-### 7) Mark Completion
-
-- Release is considered classified once:
-  - Title is resolved
-  - Release is resolved
-  - Files are linked
-
----
-
-## Non-Negotiable Distinctions
-
-- Title ≠ Release
-- Release ≠ File
-
-- Files must never determine release semantics  
-- Releases must never be inferred solely from hashes  
-
-All domain queries must operate through:
-
-Title → Release → File
-
----
-
-## Example
-
-### Input files:
-
-MyVN_v1.zip  
-MyVN_v2_patch.zip  
-MyVN_aprilfools.zip  
-
----
-
-### Canonical interpretation:
-
-Title: MyVN
-
-Release:
-  version: v1
-  release_type: full
-
-Release:
-  version: v2
-  release_type: patch
-
-Release:
-  version: april_fools
-  release_type: april_fools
-
-Each Release links to one or more Files via SHA-256 identity.
-
----
-
-## Success Criteria
-
-The architecture is correct when the system can answer:
-
-- Which release does this file belong to?
-- What versions exist for this Title?
-- Which releases are patches vs full releases?
-- Which releases are available on platform X?
-- Where has this exact file appeared?
-
-If a query requires bypassing Title/Release and relying only on hashes, the model is incomplete.
-
----
-
-## Final Statement
-
-This model enforces:
-
-Title = identity  
-Release = release + distribution unit  
-File = physical data  
-
-All system behavior must conform to this hierarchy.
+All application design must operate down the tree: `Title` → `Release` → `File`.
