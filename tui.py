@@ -11,11 +11,10 @@ from db_manager import initialize_database, get_connection
 from ingestion_repository import VnIngestionRepository
 from pathlib import Path
 from colorama import init, Fore, Style
+from b2 import upload_archive, upload_metadata_sidecar
 from vn_archiver import (
     create_archive_only,
     create_archive_from_metadata_file,
-    upload_archive,
-    upload_metadata_sidecar,
     INCOMING_DIR,
     UPLOADING_DIR,
     sha256_file,
