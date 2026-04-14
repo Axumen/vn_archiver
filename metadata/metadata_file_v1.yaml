@@ -9,7 +9,6 @@ required:
   - artifact_type
 
 optional:
-  - build_type
   - distribution_platform
   - platform
   - language
@@ -22,7 +21,6 @@ optional:
 # Example
 # title: "Example VN"
 # version: "1.0"
-# build_type: "full"
 # distribution_platform: "steam"
 # language: "english"
 # edition: "default"
