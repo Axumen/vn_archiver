@@ -61,6 +61,7 @@ class VnIngestionRepository:
         self.release_id_column = "release_id"
         self.release_version_column = "version"
         self.release_platform_column = "target_platform"
+        self.release_has_normalized_version = "normalized_version" in release_columns
 
         required_tables = (
             "file",
@@ -152,6 +153,15 @@ class VnIngestionRepository:
             return [part.strip().lower() for part in value.split(",") if part.strip()]
         normalized = str(value).strip().lower()
         return [normalized] if normalized else []
+
+    @staticmethod
+    def _normalize_version_value(value):
+        version_text = str(value or "").strip()
+        if not version_text:
+            return ""
+        if version_text.lower().startswith("v") and len(version_text) > 1:
+            version_text = version_text[1:].strip()
+        return version_text
 
     def _sync_title_tags_tables(self, title_id, tags_value):
         tags = self._normalize_tag_list(tags_value)
@@ -343,28 +353,27 @@ class VnIngestionRepository:
         return title_id
 
     def _release_lookup_filters(self, metadata):
-        version_value = str(metadata.get("version") or "").strip()
+        version_value = self._normalize_version_value(metadata.get("version"))
         language = self._normalize_text_value(metadata.get("language"))
-        build_type = self._normalize_text_value(metadata.get("build_type"))
-        platform = self._normalize_text_value(metadata.get("target_platform"))
-        return version_value, language, build_type, platform
+        edition = self._normalize_text_value(metadata.get("edition"))
+        distribution_platform = self._normalize_text_value(metadata.get("distribution_platform"))
+        return version_value, language, edition, distribution_platform
 
     def find_release(self, title_id, metadata):
-        version_value, language, build_type, platform = self._release_lookup_filters(metadata)
+        version_value, language, edition, distribution_platform = self._release_lookup_filters(metadata)
         if not version_value:
             return None
 
-        where_clauses = ["title_id = ?", f"{self.release_version_column} = ?"]
+        normalized_version_expr = "normalized_version" if self.release_has_normalized_version else "lower(trim(version))"
+        where_clauses = ["title_id = ?", f"{normalized_version_expr} = lower(trim(?))"]
         params = [title_id, version_value]
 
         where_clauses.append("COALESCE(language, '') = COALESCE(?, '')")
         params.append(language)
-        where_clauses.append("COALESCE(build_type, '') = COALESCE(?, '')")
-        params.append(build_type)
-        where_clauses.append(
-            f"COALESCE({self.release_platform_column}, '') = COALESCE(?, '')"
-        )
-        params.append(platform)
+        where_clauses.append("COALESCE(edition, '') = COALESCE(?, '')")
+        params.append(edition)
+        where_clauses.append("COALESCE(distribution_platform, '') = COALESCE(?, '')")
+        params.append(distribution_platform)
 
         row = self.conn.execute(
             f"SELECT {self.release_id_column} FROM {self.release_table} WHERE {' AND '.join(where_clauses)} ORDER BY {self.release_id_column} DESC LIMIT 1",
@@ -373,7 +382,7 @@ class VnIngestionRepository:
         return row[self.release_id_column] if row else None
 
     def create_release(self, title_id, metadata):
-        version_value, language, build_type, platform = self._release_lookup_filters(metadata)
+        version_value, language, _, _ = self._release_lookup_filters(metadata)
         if not version_value:
             version_value = "1.0"
 
@@ -382,10 +391,6 @@ class VnIngestionRepository:
 
         insert_columns.append("language")
         values.append(language)
-        insert_columns.append("build_type")
-        values.append(build_type)
-        insert_columns.append(self.release_platform_column)
-        values.append(platform)
 
         for release_column, metadata_key in self.RELEASE_METADATA_COLUMN_MAP.items():
             if metadata_key not in metadata:

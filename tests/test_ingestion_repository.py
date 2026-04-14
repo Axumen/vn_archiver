@@ -419,3 +419,73 @@ def test_repository_populates_series_and_maps_id():
 
     title_row_2 = conn.execute("SELECT series_id FROM title WHERE title_id = ?", (title_id_2,)).fetchone()
     assert title_row_2["series_id"] == series_id
+
+
+def test_repository_release_lookup_matches_documented_unique_identity():
+    conn = make_conn_new_schema()
+    repo = VnIngestionRepository(conn)
+    title_id = repo.get_or_create_title({"title": "Identity VN"})
+
+    base_release_id = repo.get_or_create_release(
+        title_id,
+        {
+            "version": "1.0",
+            "language": "EN",
+            "edition": "standard",
+            "distribution_platform": "steam",
+            "build_type": "full",
+            "target_platform": "windows",
+        },
+    )
+
+    # Build/platform differences should not alter identity lookup.
+    same_identity_release_id = repo.get_or_create_release(
+        title_id,
+        {
+            "version": "1.0",
+            "language": "EN",
+            "edition": "standard",
+            "distribution_platform": "steam",
+            "build_type": "patch",
+            "target_platform": "linux",
+        },
+    )
+    assert same_identity_release_id == base_release_id
+
+    # Edition change should produce a distinct release identity.
+    new_edition_release_id = repo.get_or_create_release(
+        title_id,
+        {
+            "version": "1.0",
+            "language": "EN",
+            "edition": "limited",
+            "distribution_platform": "steam",
+        },
+    )
+    assert new_edition_release_id != base_release_id
+
+
+def test_repository_release_lookup_normalizes_v_prefix_in_version():
+    conn = make_conn_new_schema()
+    repo = VnIngestionRepository(conn)
+    title_id = repo.get_or_create_title({"title": "Version VN"})
+
+    release_id = repo.get_or_create_release(
+        title_id,
+        {
+            "version": "v1.2",
+            "language": "EN",
+            "edition": "standard",
+            "distribution_platform": "itch.io",
+        },
+    )
+    looked_up = repo.get_or_create_release(
+        title_id,
+        {
+            "version": "1.2",
+            "language": "EN",
+            "edition": "standard",
+            "distribution_platform": "itch.io",
+        },
+    )
+    assert looked_up == release_id
