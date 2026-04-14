@@ -73,12 +73,6 @@ When processing a non-runnable artifact, set `artifact_type` using these suggest
 `base_game`, `game_archive`, `patch`, `mod`, `hotfix`, `translation_patch`,
 `instructions`, `readme`, `manual`, `soundtrack`, `bonus`, `checksum`.
 
-Derived artifact types (`patch`, `mod`, `hotfix`, `translation_patch`) must point to
-their base artifact on the same release. Provide one of:
-- `base_artifact_sha256` (recommended, unique)
-- `base_artifact_filename` (allowed when unique on release)
-
-If exactly one `base_game`/`game_archive` exists for that release, vn_archiver will auto-link it.
 
 `Process Artifact` in the TUI accepts both `.zip` and non-zip artifact files (YAML files are excluded).
 It now requires entering a title first, then selecting an existing release from the database so the artifact is linked to a specific release.
@@ -94,7 +88,6 @@ Uploaded artifacts are explicitly linked to content-addressed file objects throu
 
 ```yaml
 artifact_type: "patch"
-base_artifact_sha256: "0123abcd..."
 ```
 
 ## Translator metadata for multi-language releases

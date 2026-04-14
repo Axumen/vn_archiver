@@ -10,13 +10,10 @@ required:
 
 optional:
   - build_type
-  - normalized_version
   - distribution_platform
   - platform
   - language
   - edition
-  - base_artifact_sha256
-  - base_artifact_filename
   - source_url
   - release_date
   - notes
@@ -29,7 +26,6 @@ optional:
 # distribution_platform: "steam"
 # language: "english"
 # edition: "default"
-# base_artifact_sha256: "0123abcd..."
 # release_date: "2026-03-19"
 # artifact_type: "patch"
 # notes: "Standalone file metadata baseline."
