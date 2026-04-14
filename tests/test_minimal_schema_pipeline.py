@@ -54,3 +54,40 @@ def test_mirror_metadata_for_rebuild_uses_file_release_file_table(tmp_path, monk
     assert len(mirrored) == 1
     assert mirrored[0].name.startswith("13_")
     assert mirrored[0].read_text(encoding="utf-8") == "title: Example VN\n"
+
+
+def test_stage_ingested_files_for_upload_moves_archives_and_stages_metadata(tmp_path, monkeypatch):
+    incoming_archive = tmp_path / "incoming_sample.zip"
+    incoming_archive.write_bytes(b"payload")
+
+    upload_dir = tmp_path / "uploading"
+    staged_meta = upload_dir / "staged_meta.yaml"
+
+    monkeypatch.setattr(vn_archiver, "UPLOADING_DIR", str(upload_dir))
+
+    def fake_stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None):
+        Path(target_dir).mkdir(parents=True, exist_ok=True)
+        staged_meta.write_text("title: Sample\n", encoding="utf-8")
+        return staged_meta
+
+    monkeypatch.setattr(vn_archiver, "stage_metadata_yaml_for_upload", fake_stage_metadata_yaml_for_upload)
+
+    archives_data = [
+        {
+            "original_path": str(incoming_archive),
+            "filename": incoming_archive.name,
+            "sha256": "abcd1234",
+        }
+    ]
+    staged_archives, staged_meta_path = vn_archiver.stage_ingested_files_for_upload(
+        {"title": "Sample VN", "version": "1.0"},
+        archives_data,
+        metadata_version_number=2,
+    )
+
+    assert len(staged_archives) == 1
+    assert staged_archives[0].parent == upload_dir
+    assert staged_archives[0].exists()
+    assert not incoming_archive.exists()
+    assert archives_data[0]["staged_upload_path"] == str(staged_archives[0])
+    assert staged_meta_path == staged_meta
