@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import time
 import json
@@ -17,9 +17,7 @@ from vn_archiver import (
     normalize_text_list_value,
     safe_json_serialize,
     slugify_component,
-    build_recommended_archive_name,
-    sync_visual_novel_upload_status,
-    link_artifact_to_file_object
+    build_recommended_archive_name
 )
 
 B2_CONFIG_FILE = "backblaze_config.yaml"
@@ -493,9 +491,9 @@ def upload_archive(file_path):
                 """,
                 (release_id, archive_sha256)
             )
-            link_artifact_to_file_object(conn, release_id, archive_sha256)
+            # link_artifact_to_file_object(conn, release_id, archive_sha256)
             conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", archive_sha256, release_id))
-            sync_visual_novel_upload_status(conn, title_id)
+            # sync_visual_novel_upload_status(conn, title_id)
 
     # -------------------------------------------------------------------
     # 6. Backblaze B2 Authentication via Config
@@ -590,10 +588,10 @@ def upload_archive(file_path):
                     """,
                     (release_id, archive_sha256)
                 )
-                link_artifact_to_file_object(conn, release_id, archive_sha256)
+                # link_artifact_to_file_object(conn, release_id, archive_sha256)
 
                 conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", archive_sha256, release_id))
-                sync_visual_novel_upload_status(conn, title_id)
+                # sync_visual_novel_upload_status(conn, title_id)
             except Exception as e:
                 print(Fore.RED + f"Database update failed after upload verification: {e}")
                 return False
