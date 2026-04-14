@@ -914,6 +914,59 @@ def finalize_archive_creation(metadata, archives_data):
         print(Fore.RED + "Failed to insert visual novel into database.")
         return
 
+    staged_paths, staged_meta_path = stage_ingested_files_for_upload(
+        metadata,
+        archives_data,
+        result.metadata_version_number,
+    )
+    if staged_paths:
+        for staged_path in staged_paths:
+            print(Fore.GREEN + f"Staged archive for upload: {staged_path}")
+    if staged_meta_path:
+        print(Fore.GREEN + f"Staged metadata sidecar: {staged_meta_path}")
+
+
+def stage_ingested_files_for_upload(metadata, archives_data, metadata_version_number=None):
+    """Move ingested archive files to uploading/ and stage metadata sidecar when available."""
+    target_dir = Path(get_uploading_latest_dir(metadata))
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    staged_archives = []
+    for archive_data in archives_data or []:
+        source_path = archive_data.get("original_path") or archive_data.get("filepath")
+        if not source_path:
+            continue
+
+        source = Path(source_path)
+        if not source.exists() or not source.is_file():
+            continue
+
+        ext = source.suffix or Path(str(archive_data.get("filename") or "")).suffix or ".zip"
+        staged_name = build_recommended_archive_name(metadata, archive_data.get("sha256"), ext=ext)
+        destination = target_dir / staged_name
+
+        try:
+            same_file = source.resolve() == destination.resolve()
+        except Exception:
+            same_file = source == destination
+        if same_file:
+            staged_archives.append(destination)
+            archive_data["staged_upload_path"] = str(destination)
+            continue
+
+        if destination.exists():
+            destination.unlink()
+
+        shutil.move(str(source), str(destination))
+        staged_archives.append(destination)
+        archive_data["staged_upload_path"] = str(destination)
+
+    staged_meta_path = None
+    if metadata_version_number is not None:
+        staged_meta_path = stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=target_dir)
+
+    return staged_archives, staged_meta_path
+
 
 def create_archive_from_metadata_file(archive_paths, metadata, raw_text=None, source_file=None):
     """Create archive pipeline from existing metadata.yaml without prompts."""

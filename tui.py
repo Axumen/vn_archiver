@@ -26,6 +26,7 @@ from vn_archiver import (
     insert_visual_novel,
     get_latest_metadata_for_title,
     stage_metadata_yaml_for_upload,
+    stage_ingested_files_for_upload,
     order_metadata_for_yaml,
 )
 
@@ -470,6 +471,25 @@ def add_file_to_existing_release():
         repo.create_file_attachment_metadata(release_id, file_id, file_metadata)
 
     notify(f"Linked file '{selected_file}' to release_id={release_id}.", "ok")
+    staged_archives, _ = stage_ingested_files_for_upload(
+        file_metadata,
+        [
+            {
+                "original_path": selected_path,
+                "filename": selected_file,
+                "sha256": file_sha,
+            }
+        ],
+        metadata_version_number=None,
+    )
+    staged_meta_path = stage_metadata_yaml_for_upload(
+        file_metadata,
+        int(file_metadata.get("metadata_version") or 1),
+    )
+    for staged_path in staged_archives:
+        notify(f"Moved ingested file to uploading: {staged_path.name}", "ok")
+    if staged_meta_path:
+        notify(f"Created metadata yaml copy: {Path(staged_meta_path).name}", "ok")
 
 def create_metadata_only():
     print()
@@ -566,6 +586,23 @@ def upsert_release_from_metadata_yaml():
         metadata["_source_file"] = metadata_path
         result = insert_visual_novel(metadata)
         notify(f"Release/Title metadata upserted successfully (title_id={result.title_id}, release_id={result.release_id}).", "ok")
+        staged_archives, staged_meta_path = stage_ingested_files_for_upload(
+            metadata,
+            [],
+            metadata_version_number=(
+                result.metadata_version_number
+                if result.metadata_version_number is not None
+                else int(metadata.get("metadata_version") or get_active_metadata_template_version())
+            ),
+        )
+        if staged_archives:
+            for staged_path in staged_archives:
+                notify(f"Moved ingested file to uploading: {staged_path.name}", "ok")
+        if staged_meta_path:
+            notify(f"Staged metadata sidecar: {Path(staged_meta_path).name}", "ok")
+        if os.path.exists(metadata_path):
+            os.remove(metadata_path)
+            notify(f"Removed processed metadata yaml: {os.path.basename(metadata_path)}", "info")
     except Exception as exc:
         notify(f"Release/Title upsert failed: {exc}", "error")
         return
