@@ -191,3 +191,11 @@ class VisualNovelDomainService:
             release=release,
             title=title_obj,
         )
+
+    def attach_file_to_release(self, *, release_id, metadata, archive_data):
+        """Attach a file to an existing release and snapshot file-level metadata."""
+        file_id = self.repository.create_file_link(release_id, metadata, archive_data)
+        if file_id is None:
+            raise ValueError("Could not attach file to release: missing file identifier.")
+        self.repository.create_file_attachment_metadata(release_id, file_id, metadata)
+        return file_id

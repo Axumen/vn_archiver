@@ -177,7 +177,7 @@ class VnIngestionRepository:
 
 
 
-    def get_or_create_series(self, metadata):
+    def _get_or_create_series(self, metadata):
         series_name = normalize_text_value(metadata.get("series"))
         if not series_name:
             return None
@@ -230,7 +230,7 @@ class VnIngestionRepository:
             title_values[column_name] = normalize_text_value(metadata.get(column_name))
 
         if "series_id" in title_columns:
-            series_id = self.get_or_create_series(metadata)
+            series_id = self._get_or_create_series(metadata)
             if series_id is not None:
                 title_values["series_id"] = series_id
 
@@ -307,7 +307,7 @@ class VnIngestionRepository:
         distribution_platform = normalize_text_value(metadata.get("distribution_platform"))
         return version_value, language, edition, distribution_platform
 
-    def find_release(self, title_id, metadata):
+    def _find_release(self, title_id, metadata):
         version_value, language, edition, distribution_platform = self._release_lookup_filters(metadata)
         if not version_value:
             return None
@@ -360,16 +360,11 @@ class VnIngestionRepository:
         return release_id
 
     def get_or_create_release(self, title_id, metadata):
-        existing = self.find_release(title_id, metadata)
+        existing = self._find_release(title_id, metadata)
         if existing:
             self._sync_release_languages_tables(existing, metadata.get("language"))
             return existing
         return self.create_release(title_id, metadata)
-
-    def upsert_title_and_release(self, metadata):
-        title_id = self.get_or_create_title(metadata)
-        release_id = self.get_or_create_release(title_id, metadata)
-        return title_id, release_id
 
     def _get_file_size_from_disk(self, file_path):
         import os
