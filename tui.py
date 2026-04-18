@@ -8,6 +8,7 @@ import tempfile
 import json
 import re
 from db_manager import initialize_database, get_connection
+from domain_layer import VisualNovelDomainService
 from ingestion_repository import VnIngestionRepository
 from pathlib import Path
 from colorama import init, Fore, Style
@@ -138,18 +139,6 @@ def list_zips():
 def list_metadata():
     return [f for f in os.listdir(INCOMING_DIR)
             if f.endswith(".yaml")]
-
-
-
-def normalize_value(value):
-    return value.strip() if value else None
-
-
-def normalize_list(value):
-    if not value:
-        return None
-    return sorted(set([v.strip() for v in value.split(",") if v.strip()]))
-
 
 def show_file_info(filename):
     path = Path(INCOMING_DIR) / filename
@@ -458,16 +447,24 @@ def add_file_to_existing_release():
 
     with get_connection() as conn:
         repo = VnIngestionRepository(conn)
-        file_id = repo.create_file_link(
-            release_id,
-            {"archived_at": archived_at, "artifact_type": file_metadata.get("artifact_type")},
-            {
+        domain_service = VisualNovelDomainService(
+            conn,
+            repository=repo,
+            collect_archives_for_db=lambda _: ([], None),
+        )
+        file_id = domain_service.attach_file_to_release(
+            release_id=release_id,
+            metadata={
+                **file_metadata,
+                "archived_at": archived_at,
+                "artifact_type": file_metadata.get("artifact_type"),
+            },
+            archive_data={
                 "sha256": file_sha,
                 "filename": selected_file,
                 "size_bytes": file_size,
             },
         )
-        repo.create_file_attachment_metadata(release_id, file_id, file_metadata)
 
     notify(f"Linked file '{selected_file}' to release_id={release_id}.", "ok")
     staged_archives, _ = stage_ingested_files_for_upload(

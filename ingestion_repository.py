@@ -1,6 +1,12 @@
 import hashlib
 import json
 from datetime import datetime, timezone
+from utils import (
+    normalize_csv_list,
+    normalize_text_value,
+    normalize_translator_value,
+    normalize_version_value,
+)
 
 
 class VnIngestionRepository:
@@ -105,66 +111,8 @@ class VnIngestionRepository:
 
         self.has_file_link_tables = self._table_exists("file") and self._table_exists("release_file")
 
-    @staticmethod
-    def _normalize_text_value(value):
-        if value is None:
-            return None
-        if isinstance(value, str):
-            normalized = value.strip()
-            return normalized or None
-        if isinstance(value, list):
-            parts = [str(item).strip() for item in value if str(item).strip()]
-            return ", ".join(parts) if parts else None
-        return str(value).strip() or None
-
-    @staticmethod
-    def _normalize_translator_value(value):
-        if value is None:
-            return None
-        if isinstance(value, str):
-            normalized = value.strip()
-            return normalized or None
-        if isinstance(value, list):
-            parts = [str(item).strip() for item in value if str(item).strip()]
-            return ", ".join(parts) if parts else None
-        if isinstance(value, dict):
-            normalized_chunks = []
-            for language_key, translators in value.items():
-                key = str(language_key).strip()
-                if not key:
-                    continue
-                if isinstance(translators, list):
-                    names = [str(name).strip() for name in translators if str(name).strip()]
-                else:
-                    single = str(translators).strip()
-                    names = [single] if single else []
-                if names:
-                    normalized_chunks.append(f"{key}: {', '.join(names)}")
-            return " | ".join(normalized_chunks) if normalized_chunks else None
-        return str(value).strip() or None
-
-    @staticmethod
-    def _normalize_tag_list(value):
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return [str(item).strip().lower() for item in value if str(item).strip()]
-        if isinstance(value, str):
-            return [part.strip().lower() for part in value.split(",") if part.strip()]
-        normalized = str(value).strip().lower()
-        return [normalized] if normalized else []
-
-    @staticmethod
-    def _normalize_version_value(value):
-        version_text = str(value or "").strip()
-        if not version_text:
-            return ""
-        if version_text.lower().startswith("v") and len(version_text) > 1:
-            version_text = version_text[1:].strip()
-        return version_text
-
     def _sync_title_tags_tables(self, title_id, tags_value):
-        tags = self._normalize_tag_list(tags_value)
+        tags = normalize_csv_list(tags_value, lowercase=True)
         self.conn.execute("DELETE FROM title_tag WHERE title_id = ?", (title_id,))
         for tag_name in tags:
             tag_row = self.conn.execute("SELECT tag_id FROM tag WHERE name = ? LIMIT 1", (tag_name,)).fetchone()
@@ -189,7 +137,7 @@ class VnIngestionRepository:
         join_table,
         join_foreign_id_column,
     ):
-        values = self._normalize_tag_list(raw_value)
+        values = normalize_csv_list(raw_value, lowercase=True)
         self.conn.execute(f"DELETE FROM {join_table} WHERE title_id = ?", (title_id,))
         for name in values:
             row = self.conn.execute(
@@ -210,7 +158,7 @@ class VnIngestionRepository:
             )
 
     def _sync_release_languages_tables(self, release_id, language_value):
-        values = self._normalize_tag_list(language_value)
+        values = normalize_csv_list(language_value, lowercase=True)
         self.conn.execute("DELETE FROM release_language WHERE release_id = ?", (release_id,))
         for code in values:
             row = self.conn.execute(
@@ -229,8 +177,8 @@ class VnIngestionRepository:
 
 
 
-    def get_or_create_series(self, metadata):
-        series_name = self._normalize_text_value(metadata.get("series"))
+    def _get_or_create_series(self, metadata):
+        series_name = normalize_text_value(metadata.get("series"))
         if not series_name:
             return None
             
@@ -239,7 +187,7 @@ class VnIngestionRepository:
             (series_name,),
         ).fetchone()
         
-        description = self._normalize_text_value(metadata.get("series_description"))
+        description = normalize_text_value(metadata.get("series_description"))
         
         if row:
             series_id = int(row["series_id"])
@@ -279,10 +227,10 @@ class VnIngestionRepository:
                 continue
             if column_name not in metadata:
                 continue
-            title_values[column_name] = self._normalize_text_value(metadata.get(column_name))
+            title_values[column_name] = normalize_text_value(metadata.get(column_name))
 
         if "series_id" in title_columns:
-            series_id = self.get_or_create_series(metadata)
+            series_id = self._get_or_create_series(metadata)
             if series_id is not None:
                 title_values["series_id"] = series_id
 
@@ -353,13 +301,13 @@ class VnIngestionRepository:
         return title_id
 
     def _release_lookup_filters(self, metadata):
-        version_value = self._normalize_version_value(metadata.get("version"))
-        language = self._normalize_text_value(metadata.get("language"))
-        edition = self._normalize_text_value(metadata.get("edition"))
-        distribution_platform = self._normalize_text_value(metadata.get("distribution_platform"))
+        version_value = normalize_version_value(metadata.get("version"))
+        language = normalize_text_value(metadata.get("language"))
+        edition = normalize_text_value(metadata.get("edition"))
+        distribution_platform = normalize_text_value(metadata.get("distribution_platform"))
         return version_value, language, edition, distribution_platform
 
-    def find_release(self, title_id, metadata):
+    def _find_release(self, title_id, metadata):
         version_value, language, edition, distribution_platform = self._release_lookup_filters(metadata)
         if not version_value:
             return None
@@ -396,9 +344,9 @@ class VnIngestionRepository:
             if metadata_key not in metadata:
                 continue
             if release_column == "translator":
-                normalized_value = self._normalize_translator_value(metadata.get(metadata_key))
+                normalized_value = normalize_translator_value(metadata.get(metadata_key), dict_format="inline")
             else:
-                normalized_value = self._normalize_text_value(metadata.get(metadata_key))
+                normalized_value = normalize_text_value(metadata.get(metadata_key))
             insert_columns.append(release_column)
             values.append(normalized_value)
 
@@ -412,16 +360,11 @@ class VnIngestionRepository:
         return release_id
 
     def get_or_create_release(self, title_id, metadata):
-        existing = self.find_release(title_id, metadata)
+        existing = self._find_release(title_id, metadata)
         if existing:
             self._sync_release_languages_tables(existing, metadata.get("language"))
             return existing
         return self.create_release(title_id, metadata)
-
-    def upsert_title_and_release(self, metadata):
-        title_id = self.get_or_create_title(metadata)
-        release_id = self.get_or_create_release(title_id, metadata)
-        return title_id, release_id
 
     def _get_file_size_from_disk(self, file_path):
         import os
@@ -431,7 +374,7 @@ class VnIngestionRepository:
 
     def _create_file_in_tables(self, release_id, metadata, archive_data):
         archive_data = archive_data or {}
-        artifact_sha = self._normalize_text_value(archive_data.get("sha256"))
+        artifact_sha = normalize_text_value(archive_data.get("sha256"))
         if not artifact_sha:
             return None
 
@@ -465,9 +408,9 @@ class VnIngestionRepository:
             "SELECT 1 FROM release_file WHERE release_id = ? AND file_id = ? LIMIT 1",
             (release_id, file_id),
         ).fetchone()
-        artifact_type = self._normalize_text_value(metadata.get("artifact_type"))
+        artifact_type = normalize_text_value(metadata.get("artifact_type"))
         if not artifact_type:
-            artifact_type = self._normalize_text_value(archive_data.get("artifact_type"))
+            artifact_type = normalize_text_value(archive_data.get("artifact_type"))
 
         if not link_row:
             archived_at = metadata.get("archived_at")
