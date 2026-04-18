@@ -229,6 +229,182 @@ def upload_to_b2(filepath, remote_folder=None):
     return True
 
 
+def _load_and_normalize_sidecar(sidecar_path):
+    try:
+        with open(sidecar_path, "r", encoding="utf-8") as handle:
+            metadata = yaml.safe_load(handle)
+    except Exception as exc:
+        print(Fore.RED + f"Upload Blocked: Failed to read metadata sidecar '{Path(sidecar_path).name}': {exc}")
+        return None, None
+
+    if not isinstance(metadata, dict):
+        print(Fore.RED + "Upload Blocked: Metadata sidecar is not a valid YAML mapping.")
+        return None, None
+
+    metadata = normalize_metadata_fields(metadata)
+    revision_match = re.search(r"_meta_v(\d+)\.ya?ml$", Path(sidecar_path).name)
+    requested_revision = int(revision_match.group(1)) if revision_match else None
+    return metadata, requested_revision
+
+
+def _resolve_release_for_upload(metadata, *, include_registration_hint):
+    title = str(metadata.get("title", "")).strip()
+    version = str(metadata.get("version", "")).strip()
+    language = normalize_text_list_value(metadata.get("language")) or ""
+    build_type = str(metadata.get("build_type", "")).strip()
+    edition = str(metadata.get("edition", "")).strip()
+    distribution_platform = str(metadata.get("distribution_platform", "")).strip()
+
+    if not title:
+        print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
+        return None
+
+    with get_connection() as conn:
+        title_row = conn.execute("SELECT title_id FROM title WHERE title = ?", (title,)).fetchone()
+        if not title_row:
+            print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' does not exist in the database.")
+            if include_registration_hint:
+                print(Fore.YELLOW + "Please run '(1) Create Metadata' to register it before uploading.")
+            return None
+        title_id = title_row["title_id"]
+
+        if version:
+            release_row = conn.execute(
+                """
+                SELECT release_id, version FROM release
+                WHERE title_id = ? AND version = ?
+                  AND COALESCE(language, '') = COALESCE(?, '')
+                  AND COALESCE(build_type, '') = COALESCE(?, '')
+                  AND COALESCE(edition, '') = COALESCE(?, '')
+                  AND COALESCE(distribution_platform, '') = COALESCE(?, '')
+                """,
+                (title_id, version, language, build_type, edition, distribution_platform),
+            ).fetchone()
+            if not release_row:
+                if include_registration_hint:
+                    lang_label = language if language else "default"
+                    edition_label = edition if edition else "default"
+                    print(
+                        Fore.RED
+                        + f"Upload Blocked: Version '{version}' (language={lang_label}, edition={edition_label}) for '{title}' does not exist in the database."
+                    )
+                    print(Fore.YELLOW + "Please run '(1) Create Metadata' to register this release before uploading.")
+                else:
+                    print(Fore.RED + f"Upload Blocked: Version '{version}' for '{title}' does not exist in the database.")
+                return None
+        else:
+            release_row = conn.execute(
+                "SELECT release_id, version FROM release WHERE title_id = ? ORDER BY release_id DESC LIMIT 1",
+                (title_id,),
+            ).fetchone()
+            if not release_row:
+                print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' has no releases in the database.")
+                if include_registration_hint:
+                    print(Fore.YELLOW + "Please run '(1) Create Metadata' to register a release before uploading.")
+                return None
+            version = str(release_row["version"]).strip()
+            print(Fore.YELLOW + f"No version supplied in sidecar metadata; using latest DB release version: {version}")
+
+    return {
+        "title": title,
+        "title_id": title_id,
+        "release_id": release_row["release_id"],
+        "version": version,
+    }
+
+
+def _verify_sidecar_integrity(
+    metadata,
+    release_id,
+    requested_metadata_revision,
+    *,
+    include_registration_hint,
+):
+    with get_connection() as conn:
+        if requested_metadata_revision is not None:
+            metadata_row = conn.execute(
+                "SELECT raw_sha256 AS metadata_hash, version_number FROM revision WHERE release_id = ? AND version_number = ?",
+                (release_id, requested_metadata_revision),
+            ).fetchone()
+        else:
+            metadata_row = conn.execute(
+                "SELECT raw_sha256 AS metadata_hash, version_number FROM revision WHERE release_id = ? AND is_current = 1",
+                (release_id,),
+            ).fetchone()
+
+    if not metadata_row:
+        if include_registration_hint:
+            if requested_metadata_revision is not None:
+                print(
+                    Fore.RED
+                    + f"Upload Blocked: Release {release_id} has no metadata version v{requested_metadata_revision} in database."
+                )
+            else:
+                print(Fore.RED + f"Upload Blocked: Release {release_id} has no current metadata version in database.")
+            print(Fore.YELLOW + "Please run '(1) Create Metadata' or update metadata before uploading.")
+        else:
+            print(Fore.RED + f"Upload Blocked: No matching metadata version found in database for release {release_id}.")
+        return None
+
+    db_metadata_hash = metadata_row["metadata_hash"]
+    db_version_number = metadata_row["version_number"]
+    canonical_metadata_json = json.dumps(
+        metadata,
+        default=safe_json_serialize,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    sidecar_metadata_hash = hashlib.sha256(canonical_metadata_json.encode("utf-8")).hexdigest()
+    if sidecar_metadata_hash != db_metadata_hash:
+        print(Fore.RED + "Upload Blocked: Sidecar metadata does not match metadata stored in database for this revision.")
+        print(Fore.YELLOW + f"DB metadata hash : {db_metadata_hash}")
+        print(Fore.YELLOW + f"Sidecar hash     : {sidecar_metadata_hash}")
+        if include_registration_hint:
+            print(Fore.YELLOW + "Regenerate/stage metadata so the sidecar matches the intended build metadata revision.")
+        return None
+    return db_version_number
+
+
+def _build_cloud_paths(*, title, title_id, version, metadata_file_name, archive_file_name=None):
+    title_slug = slugify_component(title, "unknown")
+    version_slug = slugify_component(version, "unknown")
+    archive_cloud_path = None
+    if archive_file_name:
+        archive_cloud_path = f"archives/{title_slug}/t-{title_id:05d}/{version_slug}/{archive_file_name}"
+    metadata_cloud_path = f"metadata/{title_slug}/t-{title_id:05d}/{version_slug}/{metadata_file_name}"
+    return archive_cloud_path, metadata_cloud_path
+
+
+def _get_authenticated_bucket():
+    key_id, app_key, bucket_name, dry_run = load_b2_config()
+    info = InMemoryAccountInfo()
+    api = B2Api(info)
+    api.authorize_account("production", key_id, app_key)
+    bucket = api.get_bucket_by_name(bucket_name)
+    return bucket, dry_run
+
+
+def _ensure_parent_revision_uploaded(metadata_cloud_path, db_version_number):
+    if db_version_number <= 1:
+        return True
+    parent_metadata_cloud_path = re.sub(
+        r"_meta_v\d+(\.ya?ml)$",
+        f"_meta_v{db_version_number - 1}\\1",
+        metadata_cloud_path,
+    )
+    with get_connection() as conn:
+        parent_uploaded_row = conn.execute(
+            "SELECT 1 FROM cloud_sidecar WHERE storage_path = ?",
+            (parent_metadata_cloud_path,),
+        ).fetchone()
+    if not parent_uploaded_row:
+        print(Fore.RED + f"Upload Blocked: Parent metadata revision v{db_version_number - 1} is not uploaded yet.")
+        print(Fore.YELLOW + f"Expected parent path: {parent_metadata_cloud_path}")
+        return False
+    return True
+
+
 def upload_archive(file_path):
     if not os.path.exists(file_path):
         print(Fore.RED + f"File not found: {file_path}")
@@ -239,7 +415,6 @@ def upload_archive(file_path):
     # -------------------------------------------------------------------
     # 1. Read metadata only from queued sidecar file
     # -------------------------------------------------------------------
-    metadata = None
     metadata_source = None
     selected_sidecar = None
 
@@ -260,129 +435,39 @@ def upload_archive(file_path):
 
     if sidecar_candidates:
         selected_sidecar = sidecar_candidates[-1]
-        try:
-            with open(selected_sidecar, 'r', encoding='utf-8') as handle:
-                metadata = yaml.safe_load(handle)
-                metadata_source = str(selected_sidecar)
-        except Exception as e:
-            print(Fore.RED + f"Upload Blocked: Failed to read sidecar metadata file '{selected_sidecar.name}': {e}")
-            return False
+        metadata_source = str(selected_sidecar)
 
-    if not isinstance(metadata, dict):
+    if not selected_sidecar:
         print(Fore.RED + "Upload Blocked: Could not find valid metadata sidecar file.")
         print(Fore.YELLOW + "Expected '<archive_name>_meta_vN.yaml' next to the archive in uploading/.")
         return False
 
-    metadata = normalize_metadata_fields(metadata)
+    metadata, requested_metadata_revision = _load_and_normalize_sidecar(selected_sidecar)
+    if metadata is None:
+        return False
 
     print(Fore.CYAN + f"Metadata source: sidecar file ({metadata_source})")
-
-    revision_match = re.search(r"_meta_v(\d+)\.ya?ml$", Path(metadata_source).name)
-    requested_metadata_revision = int(revision_match.group(1)) if revision_match else None
-
-    title = str(metadata.get("title", "")).strip()
-    version = str(metadata.get("version", "")).strip()
-    language = normalize_text_list_value(metadata.get("language")) or ""
-    build_type = str(metadata.get("build_type", "")).strip()
-    edition = str(metadata.get("edition", "")).strip()
-    distribution_platform = str(metadata.get("distribution_platform", "")).strip()
-    if not title:
-        print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
+    release_info = _resolve_release_for_upload(metadata, include_registration_hint=True)
+    if release_info is None:
         return False
 
-    # -------------------------------------------------------------------
-    # 2. Block upload if it wasn't inserted into the Database
-    # -------------------------------------------------------------------
-    title_id = None
-    release_id = None
-    with get_connection() as conn:
-        title_row = conn.execute("SELECT title_id FROM title WHERE title = ?", (title,)).fetchone()
-        if not title_row:
-            print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' does not exist in the database.")
-            print(Fore.YELLOW + "Please run '(1) Create Metadata' to register it before uploading.")
-            return False
+    title = release_info["title"]
+    title_id = release_info["title_id"]
+    release_id = release_info["release_id"]
+    version = release_info["version"]
 
-        title_id = title_row["title_id"]
-
-        if version:
-            release_row = conn.execute(
-                """
-                SELECT release_id, version FROM release
-                WHERE title_id = ? AND version = ?
-                  AND COALESCE(language, '') = COALESCE(?, '')
-                  AND COALESCE(build_type, '') = COALESCE(?, '')
-                  AND COALESCE(edition, '') = COALESCE(?, '')
-                  AND COALESCE(distribution_platform, '') = COALESCE(?, '')
-                """,
-                (title_id, version, language, build_type, edition, distribution_platform)
-            ).fetchone()
-            if not release_row:
-                lang_label = language if language else "default"
-                edition_label = edition if edition else "default"
-                print(Fore.RED + f"Upload Blocked: Version '{version}' (language={lang_label}, edition={edition_label}) for '{title}' does not exist in the database.")
-                print(Fore.YELLOW + "Please run '(1) Create Metadata' to register this release before uploading.")
-                return False
-        else:
-            release_row = conn.execute(
-                "SELECT release_id, version FROM release WHERE title_id = ? ORDER BY release_id DESC LIMIT 1",
-                (title_id,)
-            ).fetchone()
-            if not release_row:
-                print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' has no releases in the database.")
-                print(Fore.YELLOW + "Please run '(1) Create Metadata' to register a release before uploading.")
-                return False
-            version = str(release_row["version"]).strip()
-            print(Fore.YELLOW + f"No version supplied in sidecar metadata; using latest DB release version: {version}")
-
-        release_id = release_row["release_id"]
-
-    # -------------------------------------------------------------------
-    # 3. Validate sidecar metadata revision against DB metadata history
-    # -------------------------------------------------------------------
-    with get_connection() as conn:
-        if requested_metadata_revision is not None:
-            metadata_row = conn.execute(
-                "SELECT raw_sha256 AS metadata_hash, version_number FROM revision WHERE release_id = ? AND version_number = ?",
-                (release_id, requested_metadata_revision)
-            ).fetchone()
-        else:
-            metadata_row = conn.execute(
-                "SELECT raw_sha256 AS metadata_hash, version_number FROM revision WHERE release_id = ? AND is_current = 1",
-                (release_id,)
-            ).fetchone()
-
-    if not metadata_row:
-        if requested_metadata_revision is not None:
-            print(Fore.RED + f"Upload Blocked: Release {release_id} has no metadata version v{requested_metadata_revision} in database.")
-        else:
-            print(Fore.RED + f"Upload Blocked: Release {release_id} has no current metadata version in database.")
-        print(Fore.YELLOW + "Please run '(1) Create Metadata' or update metadata before uploading.")
-        return False
-
-    db_metadata_hash = metadata_row["metadata_hash"]
-    db_version_number = metadata_row["version_number"]
-
-    canonical_metadata_json = json.dumps(
+    db_version_number = _verify_sidecar_integrity(
         metadata,
-        default=safe_json_serialize,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":")
+        release_id,
+        requested_metadata_revision,
+        include_registration_hint=True,
     )
-    sidecar_metadata_hash = hashlib.sha256(canonical_metadata_json.encode("utf-8")).hexdigest()
-    if sidecar_metadata_hash != db_metadata_hash:
-        print(Fore.RED + "Upload Blocked: Sidecar metadata does not match metadata stored in database for this revision.")
-        print(Fore.YELLOW + f"DB metadata hash : {db_metadata_hash}")
-        print(Fore.YELLOW + f"Sidecar hash     : {sidecar_metadata_hash}")
-        print(Fore.YELLOW + "Regenerate/stage metadata so the sidecar matches the intended build metadata revision.")
+    if db_version_number is None:
         return False
 
     # -------------------------------------------------------------------
     # 4. Formulate cloud naming paths & hashes
     # -------------------------------------------------------------------
-    title_slug = slugify_component(title, "unknown")
-    version_slug = slugify_component(version, "unknown")
-
     print(Fore.CYAN + "Calculating archive SHA-256 for cloud verification...")
     archive_sha256 = sha256_file(file_path)
 
@@ -391,20 +476,16 @@ def upload_archive(file_path):
     file_name = build_recommended_archive_name(metadata, archive_sha256, ext=ext)
     metadata_file_name = Path(metadata_source).name
 
-    cloud_path = f"archives/{title_slug}/t-{title_id:05d}/{version_slug}/{file_name}"
-    metadata_cloud_path = f"metadata/{title_slug}/t-{title_id:05d}/{version_slug}/{metadata_file_name}"
+    cloud_path, metadata_cloud_path = _build_cloud_paths(
+        title=title,
+        title_id=title_id,
+        version=version,
+        metadata_file_name=metadata_file_name,
+        archive_file_name=file_name,
+    )
 
-    if db_version_number > 1:
-        parent_metadata_cloud_path = re.sub(r"_meta_v\d+(\.ya?ml)$", f"_meta_v{db_version_number - 1}\\1", metadata_cloud_path)
-        with get_connection() as conn:
-            parent_uploaded_row = conn.execute(
-                "SELECT 1 FROM cloud_sidecar WHERE storage_path = ?",
-                (parent_metadata_cloud_path,)
-            ).fetchone()
-        if not parent_uploaded_row:
-            print(Fore.RED + f"Upload Blocked: Parent metadata revision v{db_version_number - 1} is not uploaded yet.")
-            print(Fore.YELLOW + f"Expected parent path: {parent_metadata_cloud_path}")
-            return False
+    if not _ensure_parent_revision_uploaded(metadata_cloud_path, db_version_number):
+        return False
 
     print(Fore.GREEN + f"Database verification passed (Title ID: {title_id}, metadata v{db_version_number})")
 
@@ -440,12 +521,7 @@ def upload_archive(file_path):
     # 6. Backblaze B2 Authentication via Config
     # -------------------------------------------------------------------
     try:
-        key_id, app_key, bucket_name, dry_run = load_b2_config()
-
-        info = InMemoryAccountInfo()
-        api = B2Api(info)
-        api.authorize_account("production", key_id, app_key)
-        bucket = api.get_bucket_by_name(bucket_name)
+        bucket, dry_run = _get_authenticated_bucket()
     except Exception as e:
         print(Fore.RED + f"B2 Authentication failed: {e}")
         return False
@@ -595,118 +671,38 @@ def upload_metadata_sidecar(sidecar_path):
         print(Fore.RED + "Upload Blocked: Metadata sidecar filename must follow '<archive_name>_meta_vN.yaml'.")
         return False
 
-    try:
-        with open(sidecar_file, 'r', encoding='utf-8') as handle:
-            metadata = yaml.safe_load(handle)
-    except Exception as e:
-        print(Fore.RED + f"Upload Blocked: Failed to read metadata sidecar '{sidecar_file.name}': {e}")
+    metadata, requested_metadata_revision = _load_and_normalize_sidecar(sidecar_file)
+    if metadata is None:
         return False
 
-    if not isinstance(metadata, dict):
-        print(Fore.RED + "Upload Blocked: Metadata sidecar is not a valid YAML mapping.")
+    release_info = _resolve_release_for_upload(metadata, include_registration_hint=False)
+    if release_info is None:
         return False
 
-    metadata = normalize_metadata_fields(metadata)
+    title = release_info["title"]
+    title_id = release_info["title_id"]
+    release_id = release_info["release_id"]
+    version = release_info["version"]
 
-    revision_match = re.search(r"_meta_v(\d+)\.ya?ml$", sidecar_file.name)
-    requested_metadata_revision = int(revision_match.group(1)) if revision_match else None
-
-    title = str(metadata.get("title", "")).strip()
-    version = str(metadata.get("version", "")).strip()
-    language = normalize_text_list_value(metadata.get("language")) or ""
-    build_type = str(metadata.get("build_type", "")).strip()
-    edition = str(metadata.get("edition", "")).strip()
-    distribution_platform = str(metadata.get("distribution_platform", "")).strip()
-    if not title:
-        print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
-        return False
-
-    title_id = None
-    release_id = None
-    with get_connection() as conn:
-        title_row = conn.execute("SELECT title_id FROM title WHERE title = ?", (title,)).fetchone()
-        if not title_row:
-            print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' does not exist in the database.")
-            return False
-
-        title_id = title_row["title_id"]
-
-        if version:
-            release_row = conn.execute(
-                """
-                SELECT release_id, version FROM release
-                WHERE title_id = ? AND version = ?
-                  AND COALESCE(language, '') = COALESCE(?, '')
-                  AND COALESCE(build_type, '') = COALESCE(?, '')
-                  AND COALESCE(edition, '') = COALESCE(?, '')
-                  AND COALESCE(distribution_platform, '') = COALESCE(?, '')
-                """,
-                (title_id, version, language, build_type, edition, distribution_platform)
-            ).fetchone()
-            if not release_row:
-                print(Fore.RED + f"Upload Blocked: Version '{version}' for '{title}' does not exist in the database.")
-                return False
-        else:
-            release_row = conn.execute(
-                "SELECT release_id, version FROM release WHERE title_id = ? ORDER BY release_id DESC LIMIT 1",
-                (title_id,)
-            ).fetchone()
-            if not release_row:
-                print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' has no releases in the database.")
-                return False
-            version = str(release_row["version"]).strip()
-            print(Fore.YELLOW + f"No version supplied in sidecar metadata; using latest DB release version: {version}")
-
-        release_id = release_row["release_id"]
-
-    with get_connection() as conn:
-        if requested_metadata_revision is not None:
-            metadata_row = conn.execute(
-                "SELECT raw_sha256 AS metadata_hash, version_number FROM revision WHERE release_id = ? AND version_number = ?",
-                (release_id, requested_metadata_revision)
-            ).fetchone()
-        else:
-            metadata_row = conn.execute(
-                "SELECT raw_sha256 AS metadata_hash, version_number FROM revision WHERE release_id = ? AND is_current = 1",
-                (release_id,)
-            ).fetchone()
-
-    if not metadata_row:
-        print(Fore.RED + f"Upload Blocked: No matching metadata version found in database for release {release_id}.")
-        return False
-
-    db_metadata_hash = metadata_row["metadata_hash"]
-    db_version_number = metadata_row["version_number"]
-    canonical_metadata_json = json.dumps(
+    db_version_number = _verify_sidecar_integrity(
         metadata,
-        default=safe_json_serialize,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":")
+        release_id,
+        requested_metadata_revision,
+        include_registration_hint=False,
     )
-    sidecar_metadata_hash = hashlib.sha256(canonical_metadata_json.encode("utf-8")).hexdigest()
-    if sidecar_metadata_hash != db_metadata_hash:
-        print(Fore.RED + "Upload Blocked: Sidecar metadata does not match metadata stored in database for this revision.")
-        print(Fore.YELLOW + f"DB metadata hash : {db_metadata_hash}")
-        print(Fore.YELLOW + f"Sidecar hash     : {sidecar_metadata_hash}")
+    if db_version_number is None:
         return False
 
-    title_slug = slugify_component(title, "unknown")
-    version_slug = slugify_component(version, "unknown")
     metadata_file_name = sidecar_file.name
-    metadata_cloud_path = f"metadata/{title_slug}/t-{title_id:05d}/{version_slug}/{metadata_file_name}"
+    _, metadata_cloud_path = _build_cloud_paths(
+        title=title,
+        title_id=title_id,
+        version=version,
+        metadata_file_name=metadata_file_name,
+    )
 
-    if db_version_number > 1:
-        parent_metadata_cloud_path = re.sub(r"_meta_v\d+(\.ya?ml)$", f"_meta_v{db_version_number - 1}\\1", metadata_cloud_path)
-        with get_connection() as conn:
-            parent_uploaded_row = conn.execute(
-                "SELECT 1 FROM cloud_sidecar WHERE storage_path = ?",
-                (parent_metadata_cloud_path,)
-            ).fetchone()
-        if not parent_uploaded_row:
-            print(Fore.RED + f"Upload Blocked: Parent metadata revision v{db_version_number - 1} is not uploaded yet.")
-            print(Fore.YELLOW + f"Expected parent path: {parent_metadata_cloud_path}")
-            return False
+    if not _ensure_parent_revision_uploaded(metadata_cloud_path, db_version_number):
+        return False
 
     metadata_sha256 = sha256_file(sidecar_file)
     metadata_local_size = os.path.getsize(sidecar_file)
@@ -720,11 +716,7 @@ def upload_metadata_sidecar(sidecar_path):
     metadata_needs_upload = existing_meta_obj is None
 
     try:
-        key_id, app_key, bucket_name, dry_run = load_b2_config()
-        info = InMemoryAccountInfo()
-        api = B2Api(info)
-        api.authorize_account("production", key_id, app_key)
-        bucket = api.get_bucket_by_name(bucket_name)
+        bucket, dry_run = _get_authenticated_bucket()
     except Exception as e:
         print(Fore.RED + f"B2 Authentication failed: {e}")
         return False
