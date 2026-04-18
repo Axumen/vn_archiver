@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Protocol
+from utils import normalize_language_value, normalize_version_value
 
 
 @dataclass(frozen=True)
@@ -112,26 +113,6 @@ class VisualNovelDomainService:
         )
         return release, title_obj
 
-    @staticmethod
-    def normalize_version(version_value):
-        """Normalize user-provided version labels (e.g. v1.0 -> 1.0)."""
-        version_text = str(version_value or "").strip()
-        if not version_text:
-            return ""
-        if version_text.lower().startswith("v") and len(version_text) > 1:
-            return version_text[1:].strip()
-        return version_text
-
-    @staticmethod
-    def normalize_language(language_value):
-        """Normalize language labels to stable ingest keys."""
-        language_text = str(language_value or "").strip()
-        if not language_text:
-            return ""
-        if language_text.isalpha() and len(language_text) <= 3:
-            return language_text.upper()
-        return language_text.lower()
-
     def _prepare_resolution_metadata(self, metadata):
         """Stage 6 split: route Title vs Release metadata to the correct columns/entities."""
         resolved = dict(metadata)
@@ -140,12 +121,12 @@ class VisualNovelDomainService:
         if creator and not resolved.get("developer"):
             resolved["developer"] = creator
 
-        normalized_version = self.normalize_version(resolved.get("version") or resolved.get("version_string"))
+        normalized_version = normalize_version_value(resolved.get("version") or resolved.get("version_string"))
         if normalized_version:
             resolved["version"] = normalized_version
             resolved["normalized_version"] = normalized_version.lower()
 
-        normalized_language = self.normalize_language(resolved.get("language"))
+        normalized_language = normalize_language_value(resolved.get("language"))
         if normalized_language:
             resolved["language"] = normalized_language
 
