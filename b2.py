@@ -481,20 +481,6 @@ def upload_archive(file_path):
         print(Fore.CYAN + f"Existing Path: {existing_cloud_path}")
         print(Fore.YELLOW + "Skipping archive upload. Linking database records...")
 
-        with get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE archives
-                SET status = 'uploaded',
-                    uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
-                WHERE release_id = ? AND sha256 = ?
-                """,
-                (release_id, archive_sha256)
-            )
-            # link_artifact_to_file_object(conn, release_id, archive_sha256)
-            conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", archive_sha256, release_id))
-            # sync_visual_novel_upload_status(conn, title_id)
-
     # -------------------------------------------------------------------
     # 6. Backblaze B2 Authentication via Config
     # -------------------------------------------------------------------
@@ -578,20 +564,6 @@ def upload_archive(file_path):
                     ''',
                     (archive_sha256, file_size, cloud_path)
                 )
-
-                conn.execute(
-                    """
-                    UPDATE archives
-                    SET status = 'uploaded',
-                        uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
-                    WHERE release_id = ? AND sha256 = ?
-                    """,
-                    (release_id, archive_sha256)
-                )
-                # link_artifact_to_file_object(conn, release_id, archive_sha256)
-
-                conn.execute("UPDATE builds SET status = ?, archive_object_sha256 = ? WHERE id = ?", ("uploaded", archive_sha256, release_id))
-                # sync_visual_novel_upload_status(conn, title_id)
             except Exception as e:
                 print(Fore.RED + f"Database update failed after upload verification: {e}")
                 return False

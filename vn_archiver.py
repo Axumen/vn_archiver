@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 
 import hashlib
 import json
@@ -1227,9 +1227,6 @@ def mirror_metadata_for_rebuild(staged_meta_path, archives_data, release_id):
     if mirrored_paths:
         print(Fore.GREEN + f"Mirrored metadata copies for rebuild: {len(mirrored_paths)} file(s).")
     return mirrored_paths
-
-
-    return True
 
 
 def slugify_component(value, fallback):
