@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 pytest.importorskip("yaml")
 pytest.importorskip("b2sdk.v2")
 import vn_archiver
+import staging
 
 
 def _make_conn():
@@ -42,10 +43,10 @@ def test_mirror_metadata_for_rebuild_uses_file_release_file_table(tmp_path, monk
     def fake_connection():
         yield conn
 
-    monkeypatch.setattr(vn_archiver, "get_connection", fake_connection)
-    monkeypatch.setattr(vn_archiver, "REBUILD_METADATA_DIR", str(rebuild_dir))
+    monkeypatch.setattr(staging, "get_connection", fake_connection)
+    monkeypatch.setattr(staging, "REBUILD_METADATA_DIR", str(rebuild_dir))
 
-    mirrored = vn_archiver.mirror_metadata_for_rebuild(
+    mirrored = staging.mirror_metadata_for_rebuild(
         str(staged),
         [{"sha256": "deadbeef"}],
         release_id=7,
@@ -63,14 +64,14 @@ def test_stage_ingested_files_for_upload_moves_archives_and_stages_metadata(tmp_
     upload_dir = tmp_path / "uploading"
     staged_meta = upload_dir / "staged_meta.yaml"
 
-    monkeypatch.setattr(vn_archiver, "UPLOADING_DIR", str(upload_dir))
+    monkeypatch.setattr(staging, "UPLOADING_DIR", str(upload_dir))
 
-    def fake_stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None):
+    def fake_stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None, *, order_fn=None):
         Path(target_dir).mkdir(parents=True, exist_ok=True)
         staged_meta.write_text("title: Sample\n", encoding="utf-8")
         return staged_meta
 
-    monkeypatch.setattr(vn_archiver, "stage_metadata_yaml_for_upload", fake_stage_metadata_yaml_for_upload)
+    monkeypatch.setattr(staging, "stage_metadata_yaml_for_upload", fake_stage_metadata_yaml_for_upload)
 
     archives_data = [
         {
@@ -79,7 +80,7 @@ def test_stage_ingested_files_for_upload_moves_archives_and_stages_metadata(tmp_
             "sha256": "abcd1234",
         }
     ]
-    staged_archives, staged_meta_path = vn_archiver.stage_ingested_files_for_upload(
+    staged_archives, staged_meta_path = staging.stage_ingested_files_for_upload(
         {"title": "Sample VN", "version": "1.0"},
         archives_data,
         metadata_version_number=2,

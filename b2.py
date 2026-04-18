@@ -10,15 +10,9 @@ import yaml
 from colorama import Fore
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from db_manager import get_connection
-from vn_archiver import (
-    sha1_file,
-    sha256_file,
-    normalize_metadata_fields,
-    normalize_text_list_value,
-    safe_json_serialize,
-    slugify_component,
-    build_recommended_archive_name
-)
+from utils import sha1_file, sha256_file, safe_json_serialize, slugify_component
+from staging import build_recommended_archive_name
+from vn_archiver import normalize_metadata_fields, normalize_text_list_value
 
 B2_CONFIG_FILE = "backblaze_config.yaml"
 B2_KEY_ID = None
@@ -227,51 +221,6 @@ def upload_to_b2(filepath, remote_folder=None):
 
     print(f"Uploaded to Backblaze: {remote_name}")
     return True
-
-
-def get_b2_bucket():
-    # 1. Check if the config file exists
-    if not os.path.exists(B2_CONFIG_FILE):
-        print(Fore.RED + f"Config file '{B2_CONFIG_FILE}' not found.")
-        print(Fore.YELLOW + "Creating a blank template. Please fill it out and try again.")
-
-        template = {
-            "b2_key_id": "YOUR_KEY_ID_HERE",
-            "b2_application_key": "YOUR_APPLICATION_KEY_HERE",
-            "b2_bucket_name": "YOUR_BUCKET_NAME_HERE"
-        }
-        with open(B2_CONFIG_FILE, "w", encoding="utf-8") as f:
-            yaml.dump(template, f, default_flow_style=False, sort_keys=False)
-
-        return None, None
-
-    # 2. Read credentials from the YAML file
-    try:
-        with open(B2_CONFIG_FILE, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f) or {}
-    except Exception as e:
-        print(Fore.RED + f"Failed to read '{B2_CONFIG_FILE}': {e}")
-        return None, None
-
-    b2_key_id = config.get("b2_key_id")
-    b2_application_key = config.get("b2_application_key")
-    b2_bucket_name = config.get("b2_bucket_name")
-
-    # 3. Block upload if credentials are still the default placeholders
-    if not b2_key_id or not b2_application_key or not b2_bucket_name or b2_key_id == "YOUR_KEY_ID_HERE":
-        print(Fore.RED + f"Credentials missing. Please edit '{B2_CONFIG_FILE}' with your actual B2 keys.")
-        return None, None
-
-    # 4. Authenticate with Backblaze
-    info = InMemoryAccountInfo()
-    api = B2Api(info)
-    try:
-        api.authorize_account("production", b2_key_id, b2_application_key)
-        bucket = api.get_bucket_by_name(b2_bucket_name)
-        return api, bucket
-    except Exception as e:
-        print(Fore.RED + f"Failed to authorize Backblaze B2: {e}")
-        return None, None
 
 
 def upload_archive(file_path):

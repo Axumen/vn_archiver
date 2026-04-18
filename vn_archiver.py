@@ -1,32 +1,47 @@
 #!/usr/bin/env python3
 
-import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
-import time
 import yaml
-from tqdm import tqdm
 from colorama import Fore
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from db_manager import get_connection
 from domain_layer import VisualNovelDomainService
 from ingestion_repository import VnIngestionRepository
 from metadata_validation import validate_metadata_contract
+from utils import (
+    sha256_file,
+    sha1_file,
+    safe_json_serialize,
+    slugify_component,
+    format_uploaded_component,
+    normalize_version_for_sort,
+    determine_latest_version,
+)
+from staging import (
+    build_recommended_archive_name,
+    build_recommended_metadata_name,
+    stage_metadata_yaml_for_upload as _stage_metadata_yaml,
+    stage_ingested_files_for_upload as _stage_ingested_files,
+    get_uploading_latest_dir,
+    get_vn_archive_version_dir,
+    mirror_metadata_for_rebuild,
+    INCOMING_DIR,
+    UPLOADING_DIR,
+    VN_ARCHIVE_DIR,
+    REBUILD_METADATA_DIR,
+)
 
 # ==============================
 # CONFIGURATION
 # ==============================
 
-INCOMING_DIR = "incoming"
-UPLOADING_DIR = "uploading"
-VN_ARCHIVE_DIR = "vn archive"
-REBUILD_METADATA_DIR = "rebuild_metadata"
+# Path constants are now defined in staging.py and re-imported above.
 METADATA_TEMPLATE_DIR = Path("metadata")
 DEFAULT_METADATA_VERSION = 1
 SUGGESTED_TAGS = [
@@ -61,7 +76,7 @@ FIELD_SUGGESTIONS = {
 AUTO_METADATA_FIELDS = {
     "original_filename": lambda zip_path: os.path.basename(zip_path),
     "size_bytes": lambda zip_path: os.path.getsize(zip_path),
-    "sha256": lambda zip_path: sha256_file(zip_path),
+    "sha256": lambda zip_path: sha256_file(zip_path),  # from utils
     "archived_at": lambda _: datetime.utcnow().isoformat() + "Z",
 }
 
@@ -75,42 +90,6 @@ def ensure_directories():
     Path(UPLOADING_DIR).mkdir(exist_ok=True)
     Path(VN_ARCHIVE_DIR).mkdir(exist_ok=True)
     Path(REBUILD_METADATA_DIR).mkdir(exist_ok=True)
-
-
-def sha256_file(filepath):
-    sha256 = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            sha256.update(chunk)
-    return sha256.hexdigest()
-
-
-def sha1_file(filepath):
-    sha1 = hashlib.sha1()
-    with open(filepath, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            sha1.update(chunk)
-    return sha1.hexdigest()
-
-
-def _table_exists(conn, table_name):
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (table_name,),
-    ).fetchone()
-    return row is not None
-
-
-def _column_exists(conn, table_name, column_name):
-    try:
-        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    except Exception:
-        return False
-    for row in rows:
-        normalized = tuple(row)
-        if len(normalized) > 1 and normalized[1] == column_name:
-            return True
-    return False
 
 
 def get_metadata_template_path(version=DEFAULT_METADATA_VERSION):
@@ -907,6 +886,22 @@ def create_archive_only(
     finalize_archive_creation(metadata, archives_data)
 
 
+def stage_ingested_files_for_upload(metadata, archives_data, metadata_version_number=None):
+    """Convenience wrapper that passes :func:`order_metadata_for_yaml` to staging."""
+    return _stage_ingested_files(
+        metadata, archives_data, metadata_version_number,
+        order_fn=order_metadata_for_yaml,
+    )
+
+
+def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None):
+    """Convenience wrapper that passes :func:`order_metadata_for_yaml` to staging."""
+    return _stage_metadata_yaml(
+        metadata, metadata_version_number, target_dir,
+        order_fn=order_metadata_for_yaml,
+    )
+
+
 def finalize_archive_creation(metadata, archives_data):
     """Shared finalization flow for prompted and pre-filled metadata runs."""
     result = insert_visual_novel(metadata)
@@ -924,48 +919,6 @@ def finalize_archive_creation(metadata, archives_data):
             print(Fore.GREEN + f"Staged archive for upload: {staged_path}")
     if staged_meta_path:
         print(Fore.GREEN + f"Staged metadata sidecar: {staged_meta_path}")
-
-
-def stage_ingested_files_for_upload(metadata, archives_data, metadata_version_number=None):
-    """Move ingested archive files to uploading/ and stage metadata sidecar when available."""
-    target_dir = Path(get_uploading_latest_dir(metadata))
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    staged_archives = []
-    for archive_data in archives_data or []:
-        source_path = archive_data.get("original_path") or archive_data.get("filepath")
-        if not source_path:
-            continue
-
-        source = Path(source_path)
-        if not source.exists() or not source.is_file():
-            continue
-
-        ext = source.suffix or Path(str(archive_data.get("filename") or "")).suffix or ".zip"
-        staged_name = build_recommended_archive_name(metadata, archive_data.get("sha256"), ext=ext)
-        destination = target_dir / staged_name
-
-        try:
-            same_file = source.resolve() == destination.resolve()
-        except Exception:
-            same_file = source == destination
-        if same_file:
-            staged_archives.append(destination)
-            archive_data["staged_upload_path"] = str(destination)
-            continue
-
-        if destination.exists():
-            destination.unlink()
-
-        shutil.move(str(source), str(destination))
-        staged_archives.append(destination)
-        archive_data["staged_upload_path"] = str(destination)
-
-    staged_meta_path = None
-    if metadata_version_number is not None:
-        staged_meta_path = stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=target_dir)
-
-    return staged_archives, staged_meta_path
 
 
 def create_archive_from_metadata_file(archive_paths, metadata, raw_text=None, source_file=None):
@@ -999,29 +952,6 @@ def create_archive_from_metadata_file(archive_paths, metadata, raw_text=None, so
         ]
 
     finalize_archive_creation(prepared, archives_data)
-
-
-def format_uploaded_component(value, fallback):
-    text = str(value or "").replace("_", " ").strip()
-    text = " ".join(text.split())
-    return text or fallback
-
-
-
-
-def build_recommended_archive_name(metadata, sha256, ext='.zip'):
-    title_slug = slugify_component(metadata.get('title'), 'unknown')
-    version_slug = slugify_component(metadata.get('version'), 'unknown')
-    short_hash = (sha256 or 'nohash')[:8]
-    safe_ext = ext if ext.startswith('.') else f'.{ext}'
-    return f"{title_slug}_{version_slug}_{short_hash}{safe_ext}"
-
-
-def build_recommended_metadata_name(metadata, sha256, metadata_version_number):
-    title_slug = slugify_component(metadata.get('title'), 'unknown')
-    version_slug = slugify_component(metadata.get('version'), 'unknown')
-    short_hash = (sha256 or 'nohash')[:8]
-    return f"{title_slug}_{version_slug}_{short_hash}_meta_v{metadata_version_number}.yaml"
 
 
 def order_metadata_for_yaml(metadata):
@@ -1075,183 +1005,3 @@ def order_metadata_for_yaml(metadata):
             ordered[key] = value
 
     return ordered
-
-
-def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None):
-    """Create a metadata.yaml copy and stage it in uploading/ with recommended naming."""
-    metadata_for_staging = dict(metadata or {})
-    metadata_for_staging.pop("_raw_text", None)
-    metadata_for_staging.pop("_source_file", None)
-
-    meta_sha = metadata_for_staging.get('sha256')
-    if not meta_sha and isinstance(metadata_for_staging.get('archives'), list) and metadata_for_staging['archives']:
-        first_arch = metadata_for_staging['archives'][0]
-        if isinstance(first_arch, dict):
-            meta_sha = first_arch.get('sha256')
-
-    final_name = build_recommended_metadata_name(metadata_for_staging, meta_sha, metadata_version_number)
-
-    if target_dir is None:
-        target_dir = get_uploading_latest_dir(metadata)
-    target_dir = Path(target_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    temp_meta_path = target_dir / 'metadata.yaml'
-    ordered_metadata = order_metadata_for_yaml(metadata_for_staging)
-    with open(temp_meta_path, 'w', encoding='utf-8') as handle:
-        yaml.dump(ordered_metadata, handle, sort_keys=False, allow_unicode=True)
-
-    final_path = target_dir / final_name
-    if final_path.exists():
-        final_path.unlink()
-    temp_meta_path.rename(final_path)
-    return final_path
-
-
-def get_uploading_latest_dir(metadata):
-    # Keep upload queue flat (no title/version folder structure required).
-    return Path(UPLOADING_DIR)
-
-
-def normalize_version_for_sort(version_text):
-    """Convert versions like '1.10.2' into sortable tuples with text fallback."""
-    text = str(version_text or "").strip()
-    if not text:
-        return (0,)
-
-    cleaned = re.sub(r"[^0-9A-Za-z\.\-_]", "", text)
-    tokens = re.split(r"[\.\-_]+", cleaned)
-    sortable = []
-    for tok in tokens:
-        if tok.isdigit():
-            sortable.append((0, int(tok)))
-        else:
-            sortable.append((1, tok.lower()))
-    return tuple(sortable)
-
-
-def determine_latest_version(versions):
-    valid_versions = [str(v).strip() for v in versions if str(v).strip()]
-    if not valid_versions:
-        return "unknown"
-    return max(valid_versions, key=normalize_version_for_sort)
-
-
-def get_vn_archive_version_dir(metadata):
-    title = format_uploaded_component(metadata.get("title"), "Unknown Title")
-    current_version = format_uploaded_component(metadata.get("version"), "unknown")
-
-    title_root = Path(VN_ARCHIVE_DIR)
-    title_root.mkdir(parents=True, exist_ok=True)
-
-    sibling_versions = [current_version]
-    existing_title_parent = None
-    for entry in title_root.iterdir():
-        if not entry.is_dir():
-            continue
-        prefix = f"{title} "
-        if not entry.name.startswith(prefix):
-            continue
-        existing_title_parent = entry
-        parent_version = entry.name[len(prefix):].strip()
-        if parent_version:
-            sibling_versions.append(parent_version)
-        for child in entry.iterdir():
-            if child.is_dir() and child.name:
-                sibling_versions.append(child.name)
-        break
-
-    latest_version = determine_latest_version(sibling_versions)
-    target_parent = title_root / f"{title} {latest_version}"
-
-    if existing_title_parent and existing_title_parent != target_parent:
-        if target_parent.exists():
-            for child in existing_title_parent.iterdir():
-                destination = target_parent / child.name
-                if destination.exists():
-                    if destination.is_dir():
-                        shutil.rmtree(destination)
-                    else:
-                        destination.unlink(missing_ok=True)
-                shutil.move(str(child), str(destination))
-            existing_title_parent.rmdir()
-        else:
-            existing_title_parent.rename(target_parent)
-
-    target_parent.mkdir(parents=True, exist_ok=True)
-    target_version_dir = target_parent / current_version
-    target_version_dir.mkdir(parents=True, exist_ok=True)
-    return target_version_dir
-
-
-def mirror_metadata_for_rebuild(staged_meta_path, archives_data, release_id):
-    """Mirror staged sidecar metadata into rebuild_metadata/ with archive-id-prefixed names."""
-    metadata_dir = Path(REBUILD_METADATA_DIR)
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-
-    if not release_id:
-        print(Fore.YELLOW + "[WARN] Rebuild metadata mirror skipped: missing release ID.")
-        return []
-
-    archive_id_by_sha = {}
-    with get_connection() as conn:
-        if _table_exists(conn, "file") and _table_exists(conn, "release_file"):
-            rows = conn.execute(
-                """
-                SELECT f.file_id AS id, f.sha256 AS sha256
-                FROM release_file rf
-                JOIN file f ON f.file_id = rf.file_id
-                WHERE rf.release_id = ?
-                """,
-                (release_id,),
-            ).fetchall()
-            for row in rows:
-                archive_id_by_sha[str(row["sha256"]).strip().lower()] = int(row["id"])
-        else:
-            print(Fore.YELLOW + "[WARN] Rebuild metadata mirror skipped: missing file/release_file tables.")
-            return []
-
-    staged_name = Path(staged_meta_path).name
-    mirrored_paths = []
-    for archive in archives_data or []:
-        archive_sha = str(archive.get("sha256") or "").strip().lower()
-        archive_id = archive_id_by_sha.get(archive_sha)
-        if not archive_id:
-            print(Fore.YELLOW + f"[WARN] Could not resolve archive ID for metadata mirror ({archive_sha[:8]}...).")
-            continue
-
-        mirrored_path = metadata_dir / f"{archive_id}_{staged_name}"
-        shutil.copy2(staged_meta_path, mirrored_path)
-        mirrored_paths.append(mirrored_path)
-
-    if mirrored_paths:
-        print(Fore.GREEN + f"Mirrored metadata copies for rebuild: {len(mirrored_paths)} file(s).")
-    return mirrored_paths
-
-
-def slugify_component(value, fallback):
-    """
-    Slugify using:
-    - lowercase
-    - hyphen as word separator
-    - alphanumeric only
-    - collapse duplicates
-    """
-    text = str(value or "").strip().lower()
-    if not text:
-        return fallback
-
-    normalized = []
-    last_was_hyphen = False
-
-    for char in text:
-        if char.isalnum():
-            normalized.append(char)
-            last_was_hyphen = False
-        else:
-            if not last_was_hyphen:
-                normalized.append("-")
-                last_was_hyphen = True
-
-    slug = "".join(normalized).strip("-")
-    return slug or fallback
