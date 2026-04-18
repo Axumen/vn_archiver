@@ -139,18 +139,6 @@ def list_metadata():
     return [f for f in os.listdir(INCOMING_DIR)
             if f.endswith(".yaml")]
 
-
-
-def normalize_value(value):
-    return value.strip() if value else None
-
-
-def normalize_list(value):
-    if not value:
-        return None
-    return sorted(set([v.strip() for v in value.split(",") if v.strip()]))
-
-
 def show_file_info(filename):
     path = Path(INCOMING_DIR) / filename
     size = path.stat().st_size

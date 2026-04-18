@@ -10,9 +10,15 @@ import yaml
 from colorama import Fore
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from db_manager import get_connection
-from utils import sha1_file, sha256_file, safe_json_serialize, slugify_component
+from utils import (
+    sha1_file,
+    sha256_file,
+    safe_json_serialize,
+    slugify_component,
+    normalize_metadata_fields,
+    normalize_text_list_value,
+)
 from staging import build_recommended_archive_name
-from vn_archiver import normalize_metadata_fields, normalize_text_list_value
 
 B2_CONFIG_FILE = "backblaze_config.yaml"
 B2_KEY_ID = None

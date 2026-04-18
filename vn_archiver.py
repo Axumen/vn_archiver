@@ -22,6 +22,9 @@ from utils import (
     format_uploaded_component,
     normalize_version_for_sort,
     determine_latest_version,
+    normalize_csv_list,
+    normalize_metadata_fields,
+    CATEGORY_ALL_FIELDS,
 )
 from staging import (
     build_recommended_archive_name,
@@ -282,172 +285,6 @@ def get_metadata_value(metadata, key, fallback=None):
         return value
 
     return fallback
-
-
-def normalize_metadata_list(metadata, field_name):
-    values = metadata.get(field_name) or []
-    if isinstance(values, str):
-        values = [item.strip() for item in values.split(',') if item.strip()]
-    return values
-
-
-def normalize_text_list_value(value):
-    """Normalize text-or-list metadata fields into a comma-separated string."""
-    if value is None:
-        return None
-
-    if isinstance(value, str):
-        normalized = value.strip()
-        if not normalized:
-            return None
-        parts = [part.strip() for part in normalized.split(',') if part.strip()]
-        return ", ".join(parts) if parts else None
-
-    if isinstance(value, list):
-        parts = [str(item).strip() for item in value if str(item).strip()]
-        return ", ".join(parts) if parts else None
-
-    fallback = str(value).strip()
-    return fallback or None
-
-
-CSV_TO_TEXT_FIELDS = {
-    "developer",
-    "publisher",
-    "language",
-    "content_rating",
-    "content_mode",
-    "target_platform",
-}
-
-CSV_TO_LIST_FIELDS = {
-    "aliases",
-    "tags",
-}
-
-PASSTHROUGH_FIELDS = {
-    "metadata_version",
-    "title",
-    "version",
-    "normalized_version",
-    "series",
-    "series_description",
-    "release_status",
-    "description",
-    "source",
-    "source_url",
-    "build_type",
-    "release_type",
-    "distribution_model",
-    "distribution_platform",
-    "platform",
-    "translator",
-    "edition",
-    "original_release_date",
-    "release_date",
-    "engine",
-    "engine_version",
-    "parent_vn_title",
-    "relationship_type",
-    "build_relations",
-    "notes",
-    "change_note",
-    "content_type",
-    "archives",
-    "sha256",
-    "size_bytes",
-    "original_filename",
-    "artifact_type",
-    "archived_at",
-    "_raw_text",
-    "_source_file",
-}
-
-CATEGORY_ALL_FIELDS = CSV_TO_TEXT_FIELDS | CSV_TO_LIST_FIELDS | PASSTHROUGH_FIELDS
-
-
-def validate_metadata_field_categories(metadata):
-    """Warn about unknown metadata keys and validate category overlap."""
-    overlap = (CSV_TO_TEXT_FIELDS & CSV_TO_LIST_FIELDS) | (CSV_TO_TEXT_FIELDS & PASSTHROUGH_FIELDS) | (CSV_TO_LIST_FIELDS & PASSTHROUGH_FIELDS)
-    if overlap:
-        raise ValueError(f"Metadata category overlap detected: {sorted(overlap)}")
-
-    unknown_fields = sorted(set(metadata.keys()) - CATEGORY_ALL_FIELDS)
-    if unknown_fields:
-        print(Fore.YELLOW + f"[WARN] Unknown metadata fields (no explicit category): {', '.join(unknown_fields)}")
-
-
-def normalize_metadata_fields(metadata):
-    """Normalize metadata values according to explicit field categories.
-
-    - CSV_TO_TEXT_FIELDS: accepts comma-separated string or YAML list, stored as text.
-    - CSV_TO_LIST_FIELDS: accepts comma-separated string or YAML list, stored as list.
-    - PASSTHROUGH_FIELDS: preserved as-is.
-    """
-    if not isinstance(metadata, dict):
-        return metadata
-
-    normalized = dict(metadata)
-    validate_metadata_field_categories(normalized)
-
-    for field in CSV_TO_TEXT_FIELDS:
-        if field in normalized:
-            normalized[field] = normalize_text_list_value(normalized.get(field))
-
-    for field in CSV_TO_LIST_FIELDS:
-        if field in normalized:
-            field_value = normalized.get(field)
-            if isinstance(field_value, str):
-                normalized[field] = [item.strip() for item in field_value.split(',') if item.strip()]
-            elif isinstance(field_value, list):
-                normalized[field] = [str(item).strip() for item in field_value if str(item).strip()]
-
-    return normalized
-
-
-
-def normalize_translator_value(value):
-    """Normalize translator metadata into a storable TEXT value.
-
-    Supports:
-    - plain string: "Group A"
-    - list: ["Person A", "Person B"]
-    - dict keyed by language:
-      {"english": ["Person A", "Person B"], "spanish": "Person C"}
-    """
-    if value is None:
-        return None
-
-    if isinstance(value, str):
-        normalized = value.strip()
-        return normalized or None
-
-    if isinstance(value, list):
-        flattened = [str(item).strip() for item in value if str(item).strip()]
-        return json.dumps(flattened, ensure_ascii=False) if flattened else None
-
-    if isinstance(value, dict):
-        normalized_map = {}
-        for language, translators in value.items():
-            if not language:
-                continue
-            language_key = str(language).strip()
-            if not language_key:
-                continue
-
-            if isinstance(translators, list):
-                names = [str(name).strip() for name in translators if str(name).strip()]
-            else:
-                single = str(translators).strip()
-                names = [single] if single else []
-
-            if names:
-                normalized_map[language_key] = names
-
-        return json.dumps(normalized_map, ensure_ascii=False) if normalized_map else None
-
-    fallback = str(value).strip()
-    return fallback or None
 
 
 def get_latest_metadata_for_title(title):
@@ -720,11 +557,6 @@ def create_archive_only(
     metadata = {"metadata_version": metadata_version}
     defaults = {}
 
-    def normalize_list(val):
-        if not val:
-            return None
-        return sorted(set([v.strip() for v in val.split(",") if v.strip()]))
-
     if metadata_input_mode == "editor":
         template_defaults = base_template.get("defaults", {}) if isinstance(base_template.get("defaults"), dict) else {}
         metadata_editor_seed = {"metadata_version": metadata_version}
@@ -792,7 +624,7 @@ def create_archive_only(
                 user_value = defaults.get(field, default_value)
 
             if field in METADATA_LIST_FIELDS and isinstance(user_value, str):
-                user_value = normalize_list(user_value) or []
+                user_value = normalize_csv_list(user_value, unique=True, sort_values=True) or []
 
             if not _is_empty_metadata_value(user_value):
                 metadata[field] = user_value
@@ -836,7 +668,7 @@ def create_archive_only(
                 if raw_val == "-":
                     metadata[field] = []
                 elif raw_val:
-                    metadata[field] = normalize_list(raw_val)
+                    metadata[field] = normalize_csv_list(raw_val, unique=True, sort_values=True)
                 elif default_items:
                     metadata[field] = default_items
 
