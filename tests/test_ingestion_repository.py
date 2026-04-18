@@ -392,7 +392,8 @@ def test_repository_populates_series_and_maps_id():
         "series": "Epic Saga",
         "series_description": "The first book in the saga",
     }
-    title_id, _ = repo.upsert_title_and_release(metadata)
+    title_id = repo.get_or_create_title(metadata)
+    repo.get_or_create_release(title_id, metadata)
 
     # Verify series was created
     series_row = conn.execute("SELECT series_id, name, description FROM series").fetchone()
@@ -412,7 +413,8 @@ def test_repository_populates_series_and_maps_id():
         "series": "Epic Saga",
         "series_description": "Updated series description",
     }
-    title_id_2, _ = repo.upsert_title_and_release(metadata_2)
+    title_id_2 = repo.get_or_create_title(metadata_2)
+    repo.get_or_create_release(title_id_2, metadata_2)
 
     series_row_2 = conn.execute("SELECT description FROM series WHERE series_id = ?", (series_id,)).fetchone()
     assert series_row_2["description"] == "Updated series description"
