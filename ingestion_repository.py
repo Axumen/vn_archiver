@@ -6,6 +6,8 @@ from utils import (
     normalize_text_value,
     normalize_translator_value,
     normalize_version_value,
+    normalize_language_value,
+    normalize_language_list,
 )
 
 
@@ -21,6 +23,7 @@ class VnIngestionRepository:
 
     RELEASE_METADATA_COLUMN_MAP = {
         "language": "language",
+        "release_type": "release_type",
         "distribution_model": "distribution_model",
         "distribution_platform": "distribution_platform",
         "translator": "translator",
@@ -91,7 +94,7 @@ class VnIngestionRepository:
 
         required_release_columns = (
             "language",
-            "build_type",
+            "release_type",
             "target_platform",
             "distribution_model",
             "distribution_platform",
@@ -158,17 +161,17 @@ class VnIngestionRepository:
             )
 
     def _sync_release_languages_tables(self, release_id, language_value):
-        values = normalize_csv_list(language_value, lowercase=True)
+        values = normalize_language_list(language_value)
         self.conn.execute("DELETE FROM release_language WHERE release_id = ?", (release_id,))
         for code in values:
             row = self.conn.execute(
-                "SELECT language_id FROM language WHERE code = ? LIMIT 1",
+                "SELECT language_id FROM language WHERE name = ? LIMIT 1",
                 (code,),
             ).fetchone()
             if row:
                 language_id = int(row["language_id"])
             else:
-                self.conn.execute("INSERT INTO language (code) VALUES (?)", (code,))
+                self.conn.execute("INSERT INTO language (name) VALUES (?)", (code,))
                 language_id = int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
             self.conn.execute(
                 "INSERT OR IGNORE INTO release_language (release_id, language_id) VALUES (?, ?)",
@@ -302,7 +305,7 @@ class VnIngestionRepository:
 
     def _release_lookup_filters(self, metadata):
         version_value = normalize_version_value(metadata.get("version"))
-        language = normalize_text_value(metadata.get("language"))
+        language = normalize_language_value(metadata.get("language")) or None
         edition = normalize_text_value(metadata.get("edition"))
         distribution_platform = normalize_text_value(metadata.get("distribution_platform"))
         return version_value, language, edition, distribution_platform
@@ -485,7 +488,7 @@ class VnIngestionRepository:
             """
             INSERT INTO file_snapshot (
                 release_id, file_id, metadata_version, title, version,
-                build_type, normalized_version, distribution_platform, platform,
+                release_type, normalized_version, distribution_platform, platform,
                 language, edition,
                 release_date, source_url, notes, change_note, raw_json, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -496,7 +499,7 @@ class VnIngestionRepository:
                 int(metadata_dict.get("metadata_version") or 1),
                 str(metadata_dict.get("title") or ""),
                 str(metadata_dict.get("version") or ""),
-                str(metadata_dict.get("build_type") or ""),
+                str(metadata_dict.get("release_type") or ""),
                 str(metadata_dict.get("normalized_version") or ""),
                 str(metadata_dict.get("distribution_platform") or ""),
                 str(metadata_dict.get("platform") or ""),

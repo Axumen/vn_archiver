@@ -123,7 +123,7 @@ def test_ingest_normalizes_version_language_and_creator_before_resolution():
     assert captured["metadata"]["developer"] == "Key"
     assert captured["metadata"]["version"] == "1.0"
     assert captured["metadata"]["normalized_version"] == "1.0"
-    assert captured["metadata"]["language"] == "JP"
+    assert captured["metadata"]["language"] == "japanese"
 
 
 def test_ingest_persists_raw_metadata_with_primary_artifact_id_when_present():

@@ -187,14 +187,46 @@ def normalize_version_value(value):
     return version_text
 
 
-def normalize_language_value(value):
-    """Normalize language labels to stable ingest keys."""
-    language_text = str(value or "").strip()
+LANGUAGE_NAME_ALIASES = {
+    "en": "english",
+    "eng": "english",
+    "ja": "japanese",
+    "jp": "japanese",
+    "jpn": "japanese",
+    "es": "spanish",
+    "spa": "spanish",
+    "zh": "chinese",
+    "zho": "chinese",
+    "chi": "chinese",
+    "zh-cn": "chinese-simplified",
+    "zh-hans": "chinese-simplified",
+    "zh-tw": "chinese-traditional",
+    "zh-hant": "chinese-traditional",
+}
+
+
+def _normalize_single_language(language):
+    language_text = str(language or "").strip().lower()
     if not language_text:
         return ""
-    if language_text.isalpha() and len(language_text) <= 3:
-        return language_text.upper()
-    return language_text.lower()
+    return LANGUAGE_NAME_ALIASES.get(language_text, language_text)
+
+
+def normalize_language_list(value):
+    """Normalize language text/list values into canonical user-facing language names."""
+    values = normalize_csv_list(value)
+    normalized = []
+    for item in values:
+        canonical = _normalize_single_language(item)
+        if canonical:
+            normalized.append(canonical)
+    return list(dict.fromkeys(normalized))
+
+
+def normalize_language_value(value):
+    """Normalize language labels to canonical user-facing names."""
+    normalized = normalize_language_list(value)
+    return ", ".join(normalized) if normalized else ""
 
 
 def normalize_metadata_list(metadata, field_name):
@@ -227,7 +259,6 @@ PASSTHROUGH_FIELDS = {
     "description",
     "source",
     "source_url",
-    "build_type",
     "release_type",
     "distribution_model",
     "distribution_platform",
