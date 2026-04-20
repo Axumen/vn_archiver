@@ -586,7 +586,7 @@ def _process_incoming_pairs():
 
 
 def add_file_to_existing_release():
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timezone as _tz
 
     print()
     panel("Add File to Existing Release")
@@ -667,7 +667,7 @@ def add_file_to_existing_release():
     selected_release = release_rows[release_idx]
     file_sha = sha256_file(selected_path)
     file_size = os.path.getsize(selected_path)
-    archived_at = _dt.utcnow().isoformat() + "Z"
+    archived_at = _dt.now(_tz.utc).isoformat().replace('+00:00', 'Z')
 
     metadata_version = get_active_metadata_template_version()
     template = load_file_metadata_template(metadata_version)

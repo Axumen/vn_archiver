@@ -17,11 +17,11 @@ class Release:
     version: "Version"
     release_type: str | None = None
     release_status: str | None = None
-    file_count: int = 1
+    file_count: int = 0
 
     def __post_init__(self):
-        if self.file_count < 1:
-            raise ValueError("A Release must have at least one file.")
+        if self.file_count < 0:
+            raise ValueError("A Release cannot have a negative file count.")
 
 
 @dataclass(frozen=True)
@@ -109,7 +109,7 @@ class VisualNovelDomainService:
             version=version,
             release_type=metadata.get("release_type"),
             release_status=metadata.get("release_status"),
-            file_count=max(1, len(archives_to_process)),
+            file_count=len(archives_to_process),
         )
         return release, title_obj
 
