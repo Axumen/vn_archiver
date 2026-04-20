@@ -4,7 +4,7 @@ import queue
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 DB_PATH = "archive.db"
@@ -72,7 +72,7 @@ def create_database_backup() -> str | None:
         return None
 
     Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
-    backup_name = f"archive_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}.db"
+    backup_name = f"archive_backup_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}.db"
     backup_path = Path(BACKUP_DIR) / backup_name
 
     src = sqlite3.connect(str(db_file))
