@@ -116,7 +116,7 @@ def get_connection():
     return conn
 
 
-def initialize_database(*, reset: bool = True):
+def initialize_database(*, reset: bool = False):
     schema_file = Path(SCHEMA_PATH)
     if not schema_file.exists():
         raise FileNotFoundError(f"Schema file not found: {schema_file}")

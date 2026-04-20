@@ -167,7 +167,7 @@ class VisualNovelDomainService:
         raw_payload.pop("_raw_text", None)
         raw_payload.pop("_source_file", None)
         primary_file_id = created_file_ids[0] if created_file_ids else None
-        if raw_payload and primary_file_id is not None:
+        if raw_payload:
             metadata_version_number = self.repository.create_metadata_raw(
                 raw_payload,
                 primary_file_id,

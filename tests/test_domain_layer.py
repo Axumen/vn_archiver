@@ -148,7 +148,7 @@ def test_ingest_persists_raw_metadata_with_primary_artifact_id_when_present():
     ]
 
 
-def test_ingest_skips_raw_metadata_persistence_when_no_artifact_id_available():
+def test_ingest_persists_raw_metadata_even_when_no_artifact_id_available():
     repo = FakeRepository()
     service = VisualNovelDomainService(
         conn=object(),
@@ -157,7 +157,7 @@ def test_ingest_skips_raw_metadata_persistence_when_no_artifact_id_available():
     )
 
     # With no archives and no sha256 in metadata, ingest should succeed
-    # but skip raw metadata persistence (no file_id available).
+    # and still persist raw metadata with file_id = None.
     result = service.ingest(
         {
             "title": "MetadataOnly",
@@ -169,7 +169,9 @@ def test_ingest_skips_raw_metadata_persistence_when_no_artifact_id_available():
 
     assert result.title_id == 11
     assert result.release_id == 22
-    assert repo.raw_metadata_records == []
+    assert repo.raw_metadata_records == [
+        ({"title": "MetadataOnly", "version": "1.0", "normalized_version": "1.0"}, None, 22)
+    ]
 
 
 def test_domain_entities_model_release_to_version_to_title():
@@ -204,12 +206,14 @@ def test_ingest_succeeds_without_files_when_no_sha256_available():
     )
 
     # Ingest should succeed even without any files or sha256.
-    # The release is created but no file links or raw metadata are persisted.
+    # The release is created and raw metadata is persisted with file_id=None.
     result = service.ingest({"title": "Patch Without Files"})
     assert result.title_id == 11
     assert result.release_id == 22
     assert repo.created_artifacts == []
-    assert repo.raw_metadata_records == []
+    assert repo.raw_metadata_records == [
+        ({"title": "Patch Without Files"}, None, 22)
+    ]
 
 
 def test_ingest_rejects_duplicate_archive_sha256_values():

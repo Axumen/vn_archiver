@@ -57,7 +57,7 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
         if shm_path.exists():
             shm_path.unlink()
 
-    db_manager.initialize_database()
+    db_manager.initialize_database(reset=True)
 
     yaml_files = find_yaml_files(source_dir)
     if not yaml_files:
