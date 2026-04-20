@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS title_publisher (
 
 CREATE TABLE IF NOT EXISTS language (
     language_id INTEGER PRIMARY KEY,
-    code TEXT NOT NULL UNIQUE
+    name TEXT NOT NULL UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS release_language (

@@ -165,7 +165,7 @@ def make_conn_new_schema():
         """
         CREATE TABLE language (
             language_id INTEGER PRIMARY KEY,
-            code TEXT NOT NULL UNIQUE
+            name TEXT NOT NULL UNIQUE
         )
         """
     )
@@ -229,7 +229,7 @@ def test_repository_supports_new_release_file_schema():
     title_id = repo.get_or_create_title({"title": "Rewrite"})
     release_id = repo.get_or_create_release(
         title_id,
-        {"version": "1.0", "release_type": "full", "language": "JP", "target_platform": "windows"},
+        {"version": "1.0", "release_type": "full", "language": "japanese", "target_platform": "windows"},
     )
     file_id = repo.create_file_link(
         release_id,
@@ -346,15 +346,15 @@ def test_repository_syncs_release_languages_when_tables_exist():
 
     rows = conn.execute(
         """
-        SELECT l.code
+        SELECT l.name
         FROM release_language rl
         JOIN language l ON l.language_id = rl.language_id
         WHERE rl.release_id = ?
-        ORDER BY l.code
+        ORDER BY l.name
         """,
         (release_id,),
     ).fetchall()
-    assert [row["code"] for row in rows] == ["english", "japanese"]
+    assert [row["name"] for row in rows] == ["english", "japanese"]
 
 
 def test_repository_tracks_raw_metadata_versions_per_release():
@@ -432,7 +432,7 @@ def test_repository_release_lookup_matches_documented_unique_identity():
         title_id,
         {
             "version": "1.0",
-            "language": "EN",
+            "language": "english",
             "edition": "standard",
             "distribution_platform": "steam",
             "release_type": "full",
@@ -445,7 +445,7 @@ def test_repository_release_lookup_matches_documented_unique_identity():
         title_id,
         {
             "version": "1.0",
-            "language": "EN",
+            "language": "english",
             "edition": "standard",
             "distribution_platform": "steam",
             "release_type": "patch",
@@ -459,7 +459,7 @@ def test_repository_release_lookup_matches_documented_unique_identity():
         title_id,
         {
             "version": "1.0",
-            "language": "EN",
+            "language": "english",
             "edition": "limited",
             "distribution_platform": "steam",
         },
@@ -476,7 +476,7 @@ def test_repository_release_lookup_normalizes_v_prefix_in_version():
         title_id,
         {
             "version": "v1.2",
-            "language": "EN",
+            "language": "english",
             "edition": "standard",
             "distribution_platform": "itch.io",
         },
@@ -485,7 +485,7 @@ def test_repository_release_lookup_normalizes_v_prefix_in_version():
         title_id,
         {
             "version": "1.2",
-            "language": "EN",
+            "language": "english",
             "edition": "standard",
             "distribution_platform": "itch.io",
         },
