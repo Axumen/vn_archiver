@@ -34,7 +34,7 @@ Releases act as the primary queryable boundaries for users retrieving metadata.
 - **Required fields**: `release_id`, `title_id`, `version`
 - **Computed fields**: `normalized_version`
 - **Classification fields**:
-  - `build_type` (e.g., full, patch, demo)
+  - `release_type` (e.g., full, patch, demo)
   - `edition` (e.g., standard, limited)
   - `language`
   - `distribution_platform`
@@ -63,7 +63,7 @@ To map physical files to the logical `Release` aggregate, and capture context at
 - **File Snapshot (`file_snapshot`)**: Captures flattened, denormalized metadata properties specifically tied to the exact moment a file was archived into a given release.
 - **Revisions (`revision`)**: Supports content-addressed metadata version management. Stores a timeline of metadata iterations (`raw_json`, `raw_sha256`), tracking changes dynamically for each release.
 - **Series Identity (`series`)**: A high-level entity capable of grouping multiple related `Title` records logically.
-- **Language Sub-table (`release_language`)**: Associates releases dynamically with locale codes.
+- **Language Sub-table (`release_language`)**: Associates releases dynamically with normalized language names.
 
 ---
 
@@ -71,8 +71,8 @@ To map physical files to the logical `Release` aggregate, and capture context at
 
 The canonical schema normalizes categorization to avoid unstructured free-text anomalies. These fields are defined carefully in processing steps:
 
-- **`build_type`** (formerly release_type): Differentiates between 'full' games, patches, demos, fan-discs, DLCs, etc.
-- **`language`**: Expected to follow ISO codes (normalized using the domain layer ingestion constraints).
+- **`release_type`**: Differentiates between 'full' games, patches, demos, fan-discs, DLCs, etc.
+- **`language`**: Expected to use user-facing language names (for example: english, spanish, japanese, chinese-traditional).
 - **`normalized_version`**: Standardized stripped versions heavily used for DB-level uniqueness checks (e.g., stripping 'v' prefixes).
 
 ---

@@ -142,7 +142,6 @@ class VisualNovelDomainService:
         title_id = self.repository.get_or_create_title(resolved_metadata)
         release_id = self.repository.get_or_create_release(title_id, resolved_metadata)
 
-        candidate_sha256 = None
         if archives_to_process:
             seen = set()
             for archive in archives_to_process:
@@ -152,9 +151,6 @@ class VisualNovelDomainService:
                 if sha in seen:
                     raise ValueError(f"Duplicate file sha256 in ingest payload: {sha}")
                 seen.add(sha)
-            candidate_sha256 = archives_to_process[0].get("sha256")
-        if not candidate_sha256:
-            candidate_sha256 = metadata.get("sha256")
 
         created_file_ids = []
         for archive_data in archives_to_process:

@@ -251,7 +251,7 @@ def _resolve_release_for_upload(metadata, *, include_registration_hint):
     title = str(metadata.get("title", "")).strip()
     version = str(metadata.get("version", "")).strip()
     language = normalize_text_list_value(metadata.get("language")) or ""
-    build_type = str(metadata.get("build_type", "")).strip()
+    release_type = str(metadata.get("release_type", "")).strip()
     edition = str(metadata.get("edition", "")).strip()
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
 
@@ -274,11 +274,11 @@ def _resolve_release_for_upload(metadata, *, include_registration_hint):
                 SELECT release_id, version FROM release
                 WHERE title_id = ? AND version = ?
                   AND COALESCE(language, '') = COALESCE(?, '')
-                  AND COALESCE(build_type, '') = COALESCE(?, '')
+                  AND COALESCE(release_type, '') = COALESCE(?, '')
                   AND COALESCE(edition, '') = COALESCE(?, '')
                   AND COALESCE(distribution_platform, '') = COALESCE(?, '')
                 """,
-                (title_id, version, language, build_type, edition, distribution_platform),
+                (title_id, version, language, release_type, edition, distribution_platform),
             ).fetchone()
             if not release_row:
                 if include_registration_hint:
