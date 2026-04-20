@@ -9,6 +9,8 @@ from utils import (
     normalize_text_value,
     normalize_translator_value,
     normalize_version_value,
+    normalize_language_value,
+    normalize_language_list,
 )
 
 
