@@ -1014,13 +1014,7 @@ def edit_metadata_only():
         # 3. Fetch metadata for the specific build.
         # Prefer the canonical current metadata version first, then fall back to
         # archive-layer metadata for legacy rows, then VN-level metadata.
-        row = conn.execute('''
-                    SELECT raw_json AS metadata_json
-                    FROM revision
-                    WHERE release_id = ? AND is_current = 1
-                    ORDER BY created_at DESC, revision_id DESC
-                    LIMIT 1
-                ''', (release_id,)).fetchone()
+        row = repo.get_current_revision(release_id)
 
         if not row:
             notify("No metadata found in the database for this Visual Novel.", "error")

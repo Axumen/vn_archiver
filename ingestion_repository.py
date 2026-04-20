@@ -638,3 +638,12 @@ class VnIngestionRepository:
             """,
             (release_id,),
         ).fetchall()
+
+    def get_current_revision(self, release_id):
+        return self.conn.execute('''
+            SELECT raw_json AS metadata_json
+            FROM revision
+            WHERE release_id = ? AND is_current = 1
+            ORDER BY created_at DESC, revision_id DESC
+            LIMIT 1
+        ''', (release_id,)).fetchone()
