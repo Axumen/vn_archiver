@@ -16,12 +16,11 @@ It focuses on fidelity between the documented model and runtime behavior.
 
 The project has a solid **Title → Release → File** core and a practical ingestion orchestration path. The implementation already enforces useful invariants (title required, release-title consistency, non-zero file_count) and has broad unit test coverage for ingestion behavior.
 
-However, there are a few high-impact domain/architecture mismatches that should be addressed:
+The highest-impact architecture concerns in the current state are:
 
-1. **Metadata history currently depends on file linkage** during ingest, which can drop revision history for metadata-only updates.
-2. **Release identity uniqueness relies on nullable fields**, which weakens uniqueness guarantees in SQLite.
-3. **Domain documentation and code semantics diverge** on whether Version is identity-neutral vs used as identity keying for release upsert.
-4. **Application layer remains tightly coupled** (UI + orchestration + persistence concerns in `vn_archiver.py`), which slows future extension.
+1. **Domain documentation and code semantics diverge** on whether Version is identity-neutral vs used as identity keying for release upsert.
+2. **Application layer remains tightly coupled** (UI + orchestration + persistence concerns in `vn_archiver.py`), which slows future extension.
+3. **Repository update behavior is asymmetric** (release identity fields are stable, but many non-identity release attributes are effectively create-time only), which can leave stale descriptive metadata unless explicit update flows are added.
 
 ---
 
@@ -36,8 +35,8 @@ Strengths:
 - Duplicate SHA guard inside an ingest payload.
 - Domain object return (`IngestionResult`) gives callers a stable aggregate-level result.
 
-Risk:
-- `create_metadata_raw(...)` only executes when a primary `file_id` exists, so metadata-only ingest events can skip revision creation.
+Current status:
+- `create_metadata_raw(...)` is release-scoped and accepts `file_id = NULL`, so metadata-only ingest events are preserved in `revision`.
 
 ### 2) Persistence model quality
 
@@ -48,8 +47,11 @@ Strengths:
 - Foreign keys and indexes are generally strong.
 - Revision chain model has parent pointers and `(release_id, version_number)` uniqueness.
 
+Current status:
+- `ux_release_identity` is robust because identity tuple columns are `NOT NULL DEFAULT ''` in schema and normalized to empty-string sentinels in repository create paths.
+
 Risk:
-- `ux_release_identity` uses nullable columns (`language`, `edition`, `distribution_platform`) in the unique tuple. In SQLite, `NULL` values can permit logically duplicate rows when any nullable tuple element is `NULL`.
+- Existing release rows are reused by identity lookup, but most non-identity release metadata is not updated on match; this can cause drift between latest ingest payload and persisted release descriptors.
 
 ### 3) Application layering
 
@@ -75,10 +77,10 @@ This is not inherently wrong, but the language should be made explicit:
 
 ### B) Metadata revision semantics
 
-Current behavior implicitly treats revisions as attachment-linked events, not purely release-level events.
+Current behavior supports release-level revisions (`file_id = NULL`) and therefore preserves metadata-only ingest history.
 
 Recommendation:
-- Allow release-level revisions with `file_id = NULL` during metadata-only updates so metadata history is complete even without new files.
+- Add tests asserting expected `is_current` transitions and parent linkage semantics when metadata-only updates are mixed with file-attaching updates.
 
 ### C) Vocabulary and normalization
 
@@ -88,20 +90,17 @@ The codebase has good normalization entry points and dictionary tables. Keep thi
 
 ## Recommended Next Iteration (prioritized)
 
-1. **Fix release uniqueness for nullable columns**
-   - Either coalesce nullable fields in a generated-column/index strategy, or enforce NOT NULL + sentinel values at ingest normalization.
-
-2. **Decouple metadata revision creation from file attachment availability**
-   - Persist revisions whenever release metadata changes, regardless of file operations.
-
-3. **Refactor module boundaries**
+1. **Refactor module boundaries**
    - Split `vn_archiver.py` into:
      - `application/services` (use-case orchestration)
      - `adapters/sqlite` (repository implementations)
      - `interfaces/cli_tui` (prompting, menus)
 
-4. **Align documentation wording with actual persistence behavior**
+2. **Align documentation wording with actual persistence behavior**
    - Clarify “semantic identity” vs “database uniqueness key”.
+
+3. **Introduce explicit release metadata update policy**
+   - Either add update-on-match behavior for selected release fields (e.g., translator/notes/change_note) or codify immutability for these fields and store changes only in revision history.
 
 ---
 
