@@ -227,7 +227,6 @@ PASSTHROUGH_FIELDS = {
     "description",
     "source",
     "source_url",
-    "build_type",
     "release_type",
     "distribution_model",
     "distribution_platform",

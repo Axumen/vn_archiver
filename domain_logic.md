@@ -34,7 +34,7 @@ Releases act as the primary queryable boundaries for users retrieving metadata.
 - **Required fields**: `release_id`, `title_id`, `version`
 - **Computed fields**: `normalized_version`
 - **Classification fields**:
-  - `build_type` (e.g., full, patch, demo)
+  - `release_type` (e.g., full, patch, demo)
   - `edition` (e.g., standard, limited)
   - `language`
   - `distribution_platform`
@@ -71,7 +71,7 @@ To map physical files to the logical `Release` aggregate, and capture context at
 
 The canonical schema normalizes categorization to avoid unstructured free-text anomalies. These fields are defined carefully in processing steps:
 
-- **`build_type`** (formerly release_type): Differentiates between 'full' games, patches, demos, fan-discs, DLCs, etc.
+- **`release_type`**: Differentiates between 'full' games, patches, demos, fan-discs, DLCs, etc.
 - **`language`**: Expected to follow ISO codes (normalized using the domain layer ingestion constraints).
 - **`normalized_version`**: Standardized stripped versions heavily used for DB-level uniqueness checks (e.g., stripping 'v' prefixes).
 

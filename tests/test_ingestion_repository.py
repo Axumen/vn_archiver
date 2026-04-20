@@ -19,10 +19,10 @@ def make_conn():
             id INTEGER PRIMARY KEY,
             vn_id INTEGER NOT NULL,
             version_string TEXT,
-            build_type TEXT,
+            release_type TEXT,
             language TEXT,
             platform TEXT,
-            UNIQUE (vn_id, version_string, language, build_type, platform)
+            UNIQUE (vn_id, version_string, language, release_type, platform)
         )
         """
     )
@@ -73,7 +73,7 @@ def make_conn_new_schema():
             release_id INTEGER PRIMARY KEY,
             title_id INTEGER NOT NULL,
             version TEXT NOT NULL,
-            build_type TEXT,
+            release_type TEXT,
             distribution_model TEXT,
             distribution_platform TEXT,
             language TEXT,
@@ -203,7 +203,7 @@ def make_conn_new_schema():
             metadata_version INTEGER NOT NULL,
             title TEXT,
             version TEXT,
-            build_type TEXT,
+            release_type TEXT,
             normalized_version TEXT,
             distribution_platform TEXT,
             platform TEXT,
@@ -229,7 +229,7 @@ def test_repository_supports_new_release_file_schema():
     title_id = repo.get_or_create_title({"title": "Rewrite"})
     release_id = repo.get_or_create_release(
         title_id,
-        {"version": "1.0", "build_type": "full", "language": "JP", "target_platform": "windows"},
+        {"version": "1.0", "release_type": "full", "language": "JP", "target_platform": "windows"},
     )
     file_id = repo.create_file_link(
         release_id,
@@ -249,7 +249,7 @@ def test_repository_supports_new_release_file_schema():
     assert row["sha256"] == "abc123"
 
 
-def test_repository_uses_canonical_release_keys_only():
+def test_repository_persists_canonical_release_type_key():
     conn = make_conn_new_schema()
     repo = VnIngestionRepository(conn)
 
@@ -258,16 +258,16 @@ def test_repository_uses_canonical_release_keys_only():
         title_id,
         {
             "version": "1.0",
-            "release_type": "full",  # legacy key should not be consumed
-            "platform": "windows",   # legacy key should not be consumed
+            "release_type": "full",
+            "platform": "windows",
         },
     )
 
     row = conn.execute(
-        "SELECT build_type, target_platform FROM release WHERE release_id = ?",
+        "SELECT release_type, target_platform FROM release WHERE release_id = ?",
         (release_id,),
     ).fetchone()
-    assert row["build_type"] is None
+    assert row["release_type"] == "full"
     assert row["target_platform"] is None
 
 def test_repository_syncs_title_tags_when_tables_exist():
@@ -341,7 +341,7 @@ def test_repository_syncs_release_languages_when_tables_exist():
     title_id = repo.get_or_create_title({"title": "Clannad"})
     release_id = repo.get_or_create_release(
         title_id,
-        {"version": "1.0", "build_type": "full", "language": ["english", "japanese"]},
+        {"version": "1.0", "release_type": "full", "language": ["english", "japanese"]},
     )
 
     rows = conn.execute(
@@ -435,7 +435,7 @@ def test_repository_release_lookup_matches_documented_unique_identity():
             "language": "EN",
             "edition": "standard",
             "distribution_platform": "steam",
-            "build_type": "full",
+            "release_type": "full",
             "target_platform": "windows",
         },
     )
@@ -448,7 +448,7 @@ def test_repository_release_lookup_matches_documented_unique_identity():
             "language": "EN",
             "edition": "standard",
             "distribution_platform": "steam",
-            "build_type": "patch",
+            "release_type": "patch",
             "target_platform": "linux",
         },
     )
