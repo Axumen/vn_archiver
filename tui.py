@@ -378,20 +378,8 @@ def add_file_to_existing_release():
     selected_path = os.path.join(INCOMING_DIR, selected_file)
 
     with get_connection() as conn:
-        release_rows = conn.execute(
-            """
-            SELECT
-                r.release_id,
-                t.title,
-                r.version,
-                r.release_type,
-                r.language,
-                r.distribution_platform
-            FROM release r
-            JOIN title t ON t.title_id = r.title_id
-            ORDER BY t.title COLLATE NOCASE, r.version COLLATE NOCASE, r.release_id
-            """
-        ).fetchall()
+        repo = VnIngestionRepository(conn)
+        release_rows = repo.list_releases()
 
     if not release_rows:
         notify("No releases found. Create a release first (option 2).", "error")
@@ -738,10 +726,17 @@ def quick_process_with_metadata_yaml():
 def edit_metadata_only():
     conn = get_connection()
     try:
+        repo = VnIngestionRepository(conn)
         # 1. List available Titles
         print()
         panel("Select Title to Edit")
-        titles = conn.execute("SELECT title_id, title FROM title").fetchall()
+        release_rows = repo.list_releases()
+        titles_by_id = {}
+        for row in release_rows:
+            title_id = row["title_id"]
+            if title_id not in titles_by_id:
+                titles_by_id[title_id] = row["title"]
+        titles = [{"title_id": k, "title": v} for k, v in titles_by_id.items()]
         if not titles:
             notify("No titles in the database yet.", "warn")
             return
@@ -757,7 +752,7 @@ def edit_metadata_only():
         # 2. List available releases for the selected title
         print()
         panel("Select Release to Edit")
-        releases = conn.execute("SELECT release_id, version, release_type, language FROM release WHERE title_id = ?", (title_id,)).fetchall()
+        releases = [row for row in release_rows if row["title_id"] == title_id]
         if not releases:
             notify("No releases found for this title.", "warn")
             return
@@ -790,10 +785,8 @@ def edit_metadata_only():
 
         # Ensure release-specific fields reflect the selected release so the user
         # confirms/edits against the exact release context they chose.
-        release_info = conn.execute(
-            "SELECT version, release_type, language FROM release WHERE release_id = ?",
-            (release_id,)
-        ).fetchone()
+        release_details = repo.list_revisions_for_release(release_id)
+        release_info = release_details[0] if release_details else None
 
         if release_info:
             current_metadata["version"] = release_info["version"]

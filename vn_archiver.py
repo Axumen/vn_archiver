@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import yaml
 from colorama import Fore
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from db_manager import get_connection
 from domain_layer import VisualNovelDomainService
@@ -80,7 +80,7 @@ AUTO_METADATA_FIELDS = {
     "original_filename": lambda zip_path: os.path.basename(zip_path),
     "size_bytes": lambda zip_path: os.path.getsize(zip_path),
     "sha256": lambda zip_path: sha256_file(zip_path),  # from utils
-    "archived_at": lambda _: datetime.utcnow().isoformat() + "Z",
+    "archived_at": lambda _: datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
 }
 
 
@@ -117,13 +117,6 @@ def get_available_metadata_template_versions():
             continue
 
     return sorted(set(versions))
-
-
-def safe_json_serialize(obj):
-    """Helper to serialize datetime objects to strings for JSON dumping."""
-    if isinstance(obj, (date, datetime)):
-        return obj.isoformat()
-    raise TypeError(f"Type {type(obj)} not serializable")
 
 
 def detect_latest_metadata_template_version():
