@@ -607,3 +607,34 @@ class VnIngestionRepository:
         self.revision_store.create_file_attachment_metadata(
             release_id, file_id, metadata_dict
         )
+
+    def list_releases(self):
+        return self.conn.execute(
+            """
+            SELECT
+                r.release_id,
+                r.title_id,
+                t.title,
+                r.version,
+                r.release_type,
+                r.language,
+                r.distribution_platform
+            FROM release r
+            JOIN title t ON t.title_id = r.title_id
+            ORDER BY t.title COLLATE NOCASE, r.version COLLATE NOCASE, r.release_id
+            """
+        ).fetchall()
+
+    def list_revisions_for_release(self, release_id):
+        return self.conn.execute(
+            """
+            SELECT
+                r.release_id,
+                r.version,
+                r.release_type,
+                r.language
+            FROM release r
+            WHERE r.release_id = ?
+            """,
+            (release_id,),
+        ).fetchall()
