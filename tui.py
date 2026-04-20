@@ -13,21 +13,24 @@ from ingestion_repository import VnIngestionRepository
 from pathlib import Path
 from colorama import init, Fore, Style
 from b2 import upload_archive, upload_metadata_sidecar
-from utils import sha256_file
+from utils import sha256_file, normalize_csv_list
 from staging import INCOMING_DIR, UPLOADING_DIR
 from vn_archiver import (
-    create_archive_only,
     create_archive_from_metadata_file,
     load_metadata_template,
     load_file_metadata_template,
     resolve_prompt_fields,
+    resolve_prompt_field_groups,
     get_available_metadata_template_versions,
     detect_latest_metadata_template_version,
     insert_visual_novel,
     get_latest_metadata_for_title,
     stage_metadata_yaml_for_upload,
     stage_ingested_files_for_upload,
+    finalize_archive_creation,
     order_metadata_for_yaml,
+    AUTO_METADATA_FIELDS,
+    DEFAULT_METADATA_VERSION,
 )
 
 init(autoreset=True)
@@ -87,38 +90,280 @@ def notify_pipeline(stage, message, level="info"):
     notify(f"Stage {stage}: {message}", level)
 
 # =============================
-# SUGGESTED VALUES (Normalized)
+# METADATA PROMPTING
 # =============================
 
-SUGGESTED_RELEASE_STATUS = [
-    "ongoing", "completed", "hiatus", "cancelled", "abandoned"
-]
+METADATA_LIST_FIELDS = {"tags", "target_platform", "aliases", "developer", "publisher"}
 
-SUGGESTED_DISTRIBUTION_MODEL = [
-    "free", "paid", "freemium", "donationware", "subscription", "patron_only"
-]
+FIELD_SUGGESTIONS = {
+    "release_status": ["ongoing", "completed", "hiatus", "cancelled", "abandoned"],
+    "distribution_model": ["free", "paid", "freemium", "donationware", "subscription", "patron_only"],
+    "release_type": ["full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "standalone"],
+    "language": ["japanese", "english", "chinese-simplified", "chinese-traditional", "korean", "spanish", "german",
+                 "french", "russian", "multi-language"],
+    "distribution_platform": ["steam", "itch.io", "dlsite", "fanza", "gumroad", "patreon", "booth",
+                              "self-distributed", "other"],
+    "content_rating": ["all-ages", "teen", "mature", "18+", "unrated"],
+    "content_mode": ["sfw", "nsfw", "selectable", "patchable", "mixed", "unknown"],
+    "content_type": ["main_story", "story_expansion", "seasonal_event", "april_fools", "side_story", "non_canon_special"],
+    "target_platform": ["windows", "linux", "mac", "android", "web", "ios", "switch"],
+    "tags": [
+        "romance", "drama", "comedy", "slice-of-life", "mystery", "horror", "sci-fi",
+        "fantasy", "psychological", "thriller", "action", "historical", "supernatural",
+        "nakige", "utsuge", "nukige", "moege", "dark", "wholesome", "tragic", "bittersweet",
+        "school", "modern", "adult"
+    ],
+}
 
-SUGGESTED_BUILD_TYPE = [
-    "full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc"
-]
 
-SUGGESTED_LANGUAGE = [
-    "japanese", "english", "chinese-simplified", "chinese-traditional",
-    "korean", "spanish", "german", "french", "russian", "multi-language"
-]
+def _is_empty_metadata_value(value):
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, list):
+        return len(value) == 0
+    return False
 
-SUGGESTED_DISTRIBUTION_PLATFORM = [
-    "steam", "itch.io", "dlsite", "fanza", "gumroad",
-    "patreon", "booth", "self-distributed", "other"
-]
 
-SUGGESTED_CONTENT_RATING = [
-    "all-ages", "teen", "mature", "18+", "unrated"
-]
+def open_metadata_in_editor_with_defaults(initial_metadata):
+    """Open metadata YAML in an editor, then parse and return it."""
+    editor_candidates = []
+    configured_editor = os.environ.get("VN_ARCHIVER_EDITOR") or os.environ.get("EDITOR")
+    if configured_editor:
+        editor_candidates.append(configured_editor)
+    editor_candidates.extend(["notepad", "nano", "vi"])
 
-SUGGESTED_TARGET_PLATFORM = [
-    "windows", "linux", "mac", "android", "web", "ios", "switch"
-]
+    with tempfile.NamedTemporaryFile("w+", suffix=".yaml", delete=False, encoding="utf-8") as tmp:
+        temp_path = tmp.name
+        yaml.safe_dump(initial_metadata, tmp, sort_keys=False, allow_unicode=True)
+
+    selected_editor = None
+    for editor in editor_candidates:
+        command_name = editor.split()[0]
+        if shutil.which(command_name):
+            selected_editor = editor
+            break
+
+    if not selected_editor:
+        os.remove(temp_path)
+        raise RuntimeError("No supported editor found. Install notepad/nano/vi or set VN_ARCHIVER_EDITOR.")
+
+    print(Fore.CYAN + f"Opening metadata in editor: {selected_editor}")
+    subprocess.run(f'{selected_editor} "{temp_path}"', shell=True, check=True)
+
+    try:
+        with open(temp_path, "r", encoding="utf-8") as f:
+            parsed = yaml.safe_load(f) or {}
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+    if not isinstance(parsed, dict):
+        raise ValueError("Edited metadata must be a YAML object.")
+
+    return parsed
+
+
+def create_archive_only(
+    archive_paths=None,
+    metadata_version=DEFAULT_METADATA_VERSION,
+    metadata_input_mode="prompt",
+):
+    if archive_paths is None:
+        archive_paths = []
+    elif isinstance(archive_paths, str):
+        archive_paths = [archive_paths]
+
+    if archive_paths:
+        print(f"\nProcessing {len(archive_paths)} file(s)...")
+
+    # -------------------------------------------------------------------
+    # 1. Gather data for all archives
+    # -------------------------------------------------------------------
+    archives_data = []
+    for path in archive_paths:
+        print(f"Calculating SHA-256 for: {os.path.basename(path)}...")
+        sha256 = sha256_file(path)
+        file_size = os.path.getsize(path)
+
+        archives_data.append({
+            "original_path": path,
+            "filename": os.path.basename(path),
+            "size_bytes": file_size,
+            "sha256": sha256
+        })
+
+    # -------------------------------------------------------------------
+    # 2. Prepare metadata (Prompt or Editor)
+    # -------------------------------------------------------------------
+    base_template = load_metadata_template(metadata_version)
+    required_fields, optional_fields = resolve_prompt_field_groups(base_template)
+    prompt_fields = required_fields + optional_fields
+
+    metadata = {"metadata_version": metadata_version}
+    defaults = {}
+
+    if metadata_input_mode == "editor":
+        template_defaults = base_template.get("defaults", {}) if isinstance(base_template.get("defaults"), dict) else {}
+        metadata_editor_seed = {"metadata_version": metadata_version}
+
+        preselected_title = input(
+            Fore.YELLOW + "title (used to preload defaults before editor opens): "
+        ).strip()
+        if preselected_title:
+            defaults = get_latest_metadata_for_title(preselected_title) or {}
+            defaults.pop("archives", None)
+            defaults.pop("metadata_version", None)
+            if defaults:
+                print(Fore.GREEN + f"Loaded defaults from latest metadata for '{preselected_title}' before editor launch.")
+
+        for field in prompt_fields:
+            default_value = template_defaults.get(field)
+            if field in defaults and not _is_empty_metadata_value(defaults.get(field)):
+                default_value = defaults.get(field)
+            if default_value is None and field in METADATA_LIST_FIELDS:
+                default_value = []
+            if default_value is None:
+                default_value = ""
+            if field == "title" and preselected_title:
+                default_value = preselected_title
+            metadata_editor_seed[field] = default_value
+
+        edited_metadata = None
+        while True:
+            try:
+                edited_metadata = open_metadata_in_editor_with_defaults(metadata_editor_seed)
+            except (RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+                print(Fore.RED + f"Editor metadata mode failed: {exc}")
+                retry_choice = input(
+                    Fore.YELLOW + "Retry opening editor? [y/N]: "
+                ).strip().lower()
+                if retry_choice in ("y", "yes"):
+                    continue
+                return
+
+            confirm_choice = input(
+                Fore.YELLOW
+                + "Use edited metadata? [Y]es / [E]dit again / [C]ancel: "
+            ).strip().lower()
+            if confirm_choice in ("", "y", "yes"):
+                break
+            if confirm_choice in ("e", "edit", "edit again"):
+                continue
+            if confirm_choice in ("c", "cancel", "n", "no"):
+                print(Fore.YELLOW + "Metadata editor flow cancelled.")
+                return
+            print(Fore.YELLOW + "Invalid choice. Re-opening editor.")
+
+        title_value = str(edited_metadata.get("title", "")).strip()
+        if title_value:
+            defaults = get_latest_metadata_for_title(title_value) or {}
+            defaults.pop("archives", None)
+            defaults.pop("metadata_version", None)
+            if defaults:
+                print(Fore.GREEN + f"Loaded defaults from latest metadata for '{title_value}'.")
+
+        for field in prompt_fields:
+            default_value = metadata_editor_seed.get(field)
+            user_value = edited_metadata.get(field, default_value)
+            if _is_empty_metadata_value(user_value):
+                user_value = defaults.get(field, default_value)
+
+            if field in METADATA_LIST_FIELDS and isinstance(user_value, str):
+                user_value = normalize_csv_list(user_value, unique=True, sort_values=True) or []
+
+            if not _is_empty_metadata_value(user_value):
+                metadata[field] = user_value
+    else:
+        print(Fore.MAGENTA + "\nFill Metadata (Press ENTER to skip optional fields)\n")
+        print(Fore.CYAN + "Tip: when a [default] is shown, press ENTER to keep it, or type '-' to clear it.")
+
+        print(Fore.GREEN + "\nRequired fields for a valid build:")
+        for field in required_fields:
+            default_val = defaults.get(field)
+            prompt_text = f"{field} (required)"
+            if default_val not in (None, ""):
+                prompt_text += f" [{default_val}]"
+            raw_val = input(Fore.YELLOW + f"{prompt_text}: ").strip()
+            if raw_val:
+                metadata[field] = raw_val
+            elif default_val not in (None, ""):
+                metadata[field] = default_val
+
+        print(Fore.CYAN + "\nOptional fields and suggestions:")
+        for field in optional_fields:
+            if field in METADATA_LIST_FIELDS:
+                suggestions = FIELD_SUGGESTIONS.get(field) or []
+                if suggestions:
+                    print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
+
+                default_val = defaults.get(field)
+                if isinstance(default_val, list):
+                    default_items = [str(v).strip() for v in default_val if str(v).strip()]
+                elif field in ("developer", "publisher") and isinstance(default_val, str):
+                    default_items = [v.strip() for v in default_val.split(',') if v.strip()]
+                else:
+                    default_items = []
+
+                default_display = ", ".join(default_items) if default_items else ""
+                prompt_text = f"{field} (comma separated)"
+                if default_display:
+                    prompt_text += f" [{default_display}]"
+                raw_val = input(Fore.YELLOW + f"{prompt_text}: ").strip()
+
+                if raw_val == "-":
+                    metadata[field] = []
+                elif raw_val:
+                    metadata[field] = normalize_csv_list(raw_val, unique=True, sort_values=True)
+                elif default_items:
+                    metadata[field] = default_items
+
+            else:
+                suggestions = FIELD_SUGGESTIONS.get(field) or []
+                if suggestions:
+                    print(Fore.CYAN + f"Suggested {field}: " + ", ".join(suggestions))
+                default_val = defaults.get(field)
+                prompt_text = f"{field}"
+                if default_val not in (None, ""):
+                    prompt_text += f" [{default_val}]"
+                raw_val = input(Fore.YELLOW + f"{prompt_text}: ").strip()
+
+                if raw_val == "-":
+                    metadata[field] = ""
+                elif raw_val:
+                    metadata[field] = raw_val
+                    if field == "title":
+                        defaults = get_latest_metadata_for_title(raw_val)
+                        if defaults:
+                            print(Fore.GREEN + f"Loaded defaults from latest metadata for '{raw_val}'.")
+                            latest_known_version = defaults.get('version')
+                            if latest_known_version not in (None, ""):
+                                print(
+                                    Fore.CYAN
+                                    + f"Latest known version is '{latest_known_version}'. "
+                                    "Press ENTER on version to reuse it, or type a new version."
+                                )
+                            defaults.pop('archives', None)
+                            defaults.pop('metadata_version', None)
+                elif default_val not in (None, ""):
+                    metadata[field] = default_val
+
+    # -------------------------------------------------------------------
+    # 3. Inject the multi-archive data
+    # -------------------------------------------------------------------
+    if archives_data:
+        archives_list = []
+        for a in archives_data:
+            archives_list.append({
+                "filename": a.get("filename"),
+                "size_bytes": a.get("size_bytes"),
+                "sha256": a.get("sha256")
+            })
+        metadata["archives"] = archives_list
+
+    finalize_archive_creation(metadata, archives_data)
+
 
 # =============================
 # HELPERS
