@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS release (
     title_id INTEGER NOT NULL,
     version TEXT NOT NULL,
     normalized_version TEXT GENERATED ALWAYS AS (lower(trim(version))) VIRTUAL,
-    build_type TEXT,
+    release_type TEXT,
     distribution_model TEXT,
     distribution_platform TEXT,
     language TEXT,
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS file_snapshot (
     metadata_version INTEGER NOT NULL,
     title TEXT,
     version TEXT,
-    build_type TEXT,
+    release_type TEXT,
     normalized_version TEXT,
     distribution_platform TEXT,
     platform TEXT,
@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS cloud_sidecar (
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_title_series ON title(series_id);
 CREATE INDEX IF NOT EXISTS idx_release_title ON release(title_id);
-CREATE INDEX IF NOT EXISTS idx_release_type ON release(build_type);
+CREATE INDEX IF NOT EXISTS idx_release_type ON release(release_type);
 CREATE INDEX IF NOT EXISTS idx_file_sha256 ON file(sha256);
 CREATE INDEX IF NOT EXISTS idx_file_snapshot_pair ON file_snapshot(release_id, file_id);
 CREATE INDEX IF NOT EXISTS idx_title_tag_title ON title_tag(title_id);

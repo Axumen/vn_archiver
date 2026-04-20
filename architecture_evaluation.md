@@ -24,7 +24,7 @@ The main architectural risks are:
 1. **Mixed responsibilities** in the repository (identity resolution, normalization, relationship syncing, and revision persistence bundled together).
 2. **Inconsistent normalization semantics** between domain-layer language normalization and repository list handling.
 3. **Partial aggregate leakage** where `Title` domain object has fewer fields than the persistent `title` concept.
-4. **Schema/application drift risk** (e.g., `release_status` appears in domain object but maps to `build_type` in canonical release table).
+4. **Schema/application drift risk** (e.g., `release_status` appears in domain object but maps to `release_type` in canonical release table).
 
 Overall maturity: **good foundation with medium-term refactoring opportunity**.
 
@@ -43,11 +43,11 @@ Overall maturity: **good foundation with medium-term refactoring opportunity**.
 ### Gaps / concerns
 
 - `Title` dataclass currently models only `canonical_title`, `developer`, `publisher`, while the `title` table includes much richer work-level semantics (series, content mode/type/rating, source, etc.). This mismatch can hide drift where domain objects no longer represent true business meaning.
-- `Release` uses `release_type` and `release_status` fields, while canonical schema uses `build_type` and does not include `release_status` in `release`; this naming mismatch raises cognitive and maintenance overhead.
+- `Release` uses `release_type` and `release_status` fields, while canonical schema uses `release_type` and does not include `release_status` in `release`; this mismatch can still raise cognitive and maintenance overhead when mixed with older terminology.
 
 ### Recommendation
 
-Define explicit domain value objects for canonical concepts already represented in DB (e.g., `BuildType`, `DistributionPlatform`, maybe optional), and align dataclass fields with schema terminology (`build_type`) to reduce semantic translation costs.
+Define explicit domain value objects for canonical concepts already represented in DB (e.g., `BuildType`, `DistributionPlatform`, maybe optional), and align dataclass fields with schema terminology (`release_type`) to reduce semantic translation costs.
 
 ---
 
@@ -146,7 +146,7 @@ Add focused tests for normalization contracts shared across layers (version/lang
 ## Suggested roadmap (ordered)
 
 1. **Terminology alignment pass**
-   - Replace domain `release_type` usage with canonical `build_type` naming.
+   - Enforce canonical `release_type` naming consistently across domain, schema, and ingestion surfaces.
 2. **Normalization policy extraction**
    - Shared helper(s) for version/language/person-name normalization consumed by domain + repository.
 3. **Repository decomposition**

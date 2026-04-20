@@ -48,7 +48,7 @@ Capitalization is mostly a data-quality recommendation (not a strict parser rule
 - **Keep proper capitalization** for display/name fields:
   - `title`, `series`, `developer`, `publisher`, `parent_title`
   - free-text fields like `description`, `notes`, `change_note`
-  - `release_status`, `distribution_model`, `build_type`, `distribution_platform`
+  - `release_status`, `distribution_model`, `release_type`, `distribution_platform`
   - `content_rating`, `content_mode`, `relationship_type`, `artifact_type`
 
 Example:

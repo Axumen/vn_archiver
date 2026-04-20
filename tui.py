@@ -384,7 +384,7 @@ def add_file_to_existing_release():
                 r.release_id,
                 t.title,
                 r.version,
-                r.build_type,
+                r.release_type,
                 r.language,
                 r.distribution_platform
             FROM release r
@@ -402,7 +402,7 @@ def add_file_to_existing_release():
         print(
             TEXT
             + f"[{i}] {row['title']} | v{row['version']} | "
-            + f"type={row['build_type'] or '-'} | lang={row['language'] or '-'} | "
+            + f"type={row['release_type'] or '-'} | lang={row['language'] or '-'} | "
             + f"platform={row['distribution_platform'] or '-'}"
         )
 
@@ -431,7 +431,7 @@ def add_file_to_existing_release():
         "metadata_version": metadata_version,
         "title": selected_release["title"] or "",
         "version": selected_release["version"] or "",
-        "build_type": selected_release["build_type"] or "",
+        "release_type": selected_release["release_type"] or "",
         "language": selected_release["language"] or "",
         "distribution_platform": selected_release["distribution_platform"] or "",
     }
@@ -757,14 +757,14 @@ def edit_metadata_only():
         # 2. List available releases for the selected title
         print()
         panel("Select Release to Edit")
-        releases = conn.execute("SELECT release_id, version, build_type, language FROM release WHERE title_id = ?", (title_id,)).fetchall()
+        releases = conn.execute("SELECT release_id, version, release_type, language FROM release WHERE title_id = ?", (title_id,)).fetchall()
         if not releases:
             notify("No releases found for this title.", "warn")
             return
 
         for rel in releases:
             lang = rel['language'] or 'default'
-            print(f"[{rel['release_id']}] Version: {rel['version']} - Language: {lang} - Type: {rel['build_type']}")
+            print(f"[{rel['release_id']}] Version: {rel['version']} - Language: {lang} - Type: {rel['release_type']}")
 
         release_id_str = prompt("Enter Release ID to edit (or press Enter to cancel): ")
         if not release_id_str.isdigit():
@@ -791,13 +791,13 @@ def edit_metadata_only():
         # Ensure release-specific fields reflect the selected release so the user
         # confirms/edits against the exact release context they chose.
         release_info = conn.execute(
-            "SELECT version, build_type, language FROM release WHERE release_id = ?",
+            "SELECT version, release_type, language FROM release WHERE release_id = ?",
             (release_id,)
         ).fetchone()
 
         if release_info:
             current_metadata["version"] = release_info["version"]
-            current_metadata["build_type"] = release_info["build_type"]
+            current_metadata["release_type"] = release_info["release_type"]
             current_metadata["language"] = release_info["language"]
 
     finally:
