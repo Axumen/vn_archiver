@@ -401,6 +401,32 @@ class TitleReleaseStore:
     def get_or_create_release(self, title_id, metadata):
         existing = self._find_release(title_id, metadata)
         if existing:
+            _IDENTITY_COLUMNS = {"language", "edition", "distribution_platform"}
+            update_columns = []
+            update_values = []
+
+            for release_column, metadata_key in self.RELEASE_METADATA_COLUMN_MAP.items():
+                if release_column in _IDENTITY_COLUMNS:
+                    continue
+                if metadata_key in metadata:
+                    if release_column == "translator":
+                        normalized_value = normalize_translator_value(
+                            metadata.get(metadata_key), dict_format="inline"
+                        )
+                    else:
+                        normalized_value = normalize_text_value(metadata.get(metadata_key))
+                    update_columns.append(f"{release_column} = ?")
+                    update_values.append(normalized_value)
+
+            if update_columns:
+                assignments = ", ".join(update_columns)
+                release_table = self.ctx["release_table"]
+                release_id_column = self.ctx["release_id_column"]
+                self.conn.execute(
+                    f"UPDATE {release_table} SET {assignments} WHERE {release_id_column} = ?",
+                    tuple(update_values) + (existing,),
+                )
+
             self._sync_release_languages_tables(existing, metadata.get("language"))
             return existing
         return self.create_release(title_id, metadata)
