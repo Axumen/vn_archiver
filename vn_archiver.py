@@ -119,13 +119,6 @@ def get_available_metadata_template_versions():
     return sorted(set(versions))
 
 
-def safe_json_serialize(obj):
-    """Helper to serialize datetime objects to strings for JSON dumping."""
-    if isinstance(obj, (date, datetime)):
-        return obj.isoformat()
-    raise TypeError(f"Type {type(obj)} not serializable")
-
-
 def detect_latest_metadata_template_version():
     versions = get_available_metadata_template_versions()
     if versions:
