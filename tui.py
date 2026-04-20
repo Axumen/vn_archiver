@@ -13,7 +13,7 @@ from ingestion_repository import VnIngestionRepository
 from pathlib import Path
 from colorama import init, Fore, Style
 from b2 import upload_archive, upload_metadata_sidecar
-from utils import sha256_file, normalize_csv_list
+from utils import sha256_file
 from staging import INCOMING_DIR, UPLOADING_DIR
 from vn_archiver import (
     create_archive_from_metadata_file,
@@ -271,7 +271,7 @@ def create_archive_only(
                 user_value = defaults.get(field, default_value)
 
             if field in METADATA_LIST_FIELDS and isinstance(user_value, str):
-                user_value = normalize_csv_list(user_value, unique=True, sort_values=True) or []
+                user_value = [v.strip() for v in user_value.split(',') if v.strip()]
 
             if not _is_empty_metadata_value(user_value):
                 metadata[field] = user_value
@@ -315,7 +315,7 @@ def create_archive_only(
                 if raw_val == "-":
                     metadata[field] = []
                 elif raw_val:
-                    metadata[field] = normalize_csv_list(raw_val, unique=True, sort_values=True)
+                    metadata[field] = [v.strip() for v in raw_val.split(',') if v.strip()]
                 elif default_items:
                     metadata[field] = default_items
 
