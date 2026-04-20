@@ -135,6 +135,15 @@ def initialize_database(*, reset: bool = True):
     with get_connection() as conn:
         conn.executescript(schema_sql)
 
+        # Migration: backfill NULL identity columns in the release table.
+        # The schema now enforces NOT NULL DEFAULT '' on these columns, but
+        # rows created before the constraint was added may still have NULLs.
+        for column in ("language", "edition", "distribution_platform"):
+            conn.execute(
+                f"UPDATE release SET {column} = '' WHERE {column} IS NULL"
+            )
+        conn.commit()
+
 
 @contextlib.contextmanager
 def exclusive_transaction(conn):

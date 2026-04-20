@@ -319,9 +319,9 @@ class TitleReleaseStore:
 
     def _release_lookup_filters(self, metadata):
         version_value = normalize_version_value(metadata.get("version"))
-        language = normalize_language_value(metadata.get("language")) or None
-        edition = normalize_text_value(metadata.get("edition"))
-        distribution_platform = normalize_text_value(metadata.get("distribution_platform"))
+        language = normalize_language_value(metadata.get("language")) or ''
+        edition = normalize_text_value(metadata.get("edition")) or ''
+        distribution_platform = normalize_text_value(metadata.get("distribution_platform")) or ''
         return version_value, language, edition, distribution_platform
 
     def _find_release(self, title_id, metadata):
@@ -341,11 +341,11 @@ class TitleReleaseStore:
         where_clauses = ["title_id = ?", f"{normalized_version_expr} = lower(trim(?))"]
         params = [title_id, version_value]
 
-        where_clauses.append("COALESCE(language, '') = COALESCE(?, '')")
+        where_clauses.append("language = ?")
         params.append(language)
-        where_clauses.append("COALESCE(edition, '') = COALESCE(?, '')")
+        where_clauses.append("edition = ?")
         params.append(edition)
-        where_clauses.append("COALESCE(distribution_platform, '') = COALESCE(?, '')")
+        where_clauses.append("distribution_platform = ?")
         params.append(distribution_platform)
 
         row = self.conn.execute(
@@ -368,8 +368,15 @@ class TitleReleaseStore:
         insert_columns.append("language")
         values.append(language)
 
+        # Columns that participate in the release identity index must never be
+        # NULL — use empty-string sentinels so the UNIQUE index fires correctly.
+        _IDENTITY_COLUMNS = {"language", "edition", "distribution_platform"}
+
         for release_column, metadata_key in self.RELEASE_METADATA_COLUMN_MAP.items():
             if metadata_key not in metadata:
+                if release_column in _IDENTITY_COLUMNS:
+                    insert_columns.append(release_column)
+                    values.append('')
                 continue
             if release_column == "translator":
                 normalized_value = normalize_translator_value(
@@ -377,6 +384,8 @@ class TitleReleaseStore:
                 )
             else:
                 normalized_value = normalize_text_value(metadata.get(metadata_key))
+            if release_column in _IDENTITY_COLUMNS:
+                normalized_value = normalized_value or ''
             insert_columns.append(release_column)
             values.append(normalized_value)
 
