@@ -309,6 +309,10 @@ def normalize_metadata_fields(metadata):
         return metadata
 
     normalized = dict(metadata)
+    
+    if "build_type" in normalized and "release_type" not in normalized:
+        normalized["release_type"] = normalized.pop("build_type")
+        
     validate_metadata_field_categories(normalized)
 
     for field in CSV_TO_TEXT_FIELDS:
