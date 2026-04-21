@@ -169,6 +169,7 @@ def create_archive_only(
     archive_paths=None,
     metadata_version=DEFAULT_METADATA_VERSION,
     metadata_input_mode="prompt",
+    generate_yaml_only=False,
 ):
     if archive_paths is None:
         archive_paths = []
@@ -362,6 +363,29 @@ def create_archive_only(
             })
         metadata["archives"] = archives_list
 
+    if generate_yaml_only:
+        title = str(metadata.get("title", "untitled")).strip()
+        safe_title = "".join(c if c.isalnum() else "_" for c in title).strip("_").lower()
+        if not safe_title:
+            safe_title = "metadata"
+        version = str(metadata.get("version", "1.0")).strip()
+        safe_version = "".join(c if c.isalnum() else "_" for c in version).strip("_").lower()
+        
+        if archive_paths:
+            stem = os.path.splitext(os.path.basename(archive_paths[0]))[0]
+            filename = f"{stem}.yaml"
+        else:
+            filename = f"{safe_title}_{safe_version}.yaml"
+            
+        filepath = os.path.join(INCOMING_DIR, filename)
+        ordered_metadata = order_metadata_for_yaml(metadata)
+        with open(filepath, "w", encoding="utf-8") as f:
+            yaml.safe_dump(ordered_metadata, f, sort_keys=False, allow_unicode=True)
+            
+        notify(f"Created metadata yaml: {filename}", "ok")
+        notify("You can now ingest it via '1) Process Incoming Pairs' or '2) Create Release'.", "info")
+        return
+
     finalize_archive_creation(metadata, archives_data)
 
 
@@ -504,6 +528,7 @@ def process_incoming_pairs():
     print(PRIMARY + "  1) Process Incoming Pairs (File + YAML)")
     print(PRIMARY + "  2) Create Release from Metadata YAML")
     print(PRIMARY + "  3) Add File to Existing Release")
+    print(PRIMARY + "  4) Generate Metadata YAML (Prompt/Editor)")
     print(PRIMARY + "  0) Back\n")
 
     mode = prompt("Select option: ")
@@ -518,8 +543,51 @@ def process_incoming_pairs():
     if mode == "3":
         add_file_to_existing_release()
         return
+    if mode == "4":
+        generate_standalone_metadata_yaml()
+        return
 
     notify("Invalid option.", "error")
+
+
+def generate_standalone_metadata_yaml():
+    print()
+    panel("Generate Metadata YAML")
+    if not os.path.exists(INCOMING_DIR):
+        os.makedirs(INCOMING_DIR)
+
+    files = [f for f in os.listdir(INCOMING_DIR) if os.path.isfile(os.path.join(INCOMING_DIR, f)) and not f.lower().endswith((".yaml", ".yml"))]
+    
+    selected_paths = []
+    if files:
+        for i, filename in enumerate(files, 1):
+            print(TEXT + f"[{i}] {filename}")
+        print(TEXT + "[0] Skip (No archive file)")
+        
+        choice = prompt("Select file number to pair with, or 0 for none: ")
+        if choice and choice != "0":
+            try:
+                idx = int(choice.strip()) - 1
+                if 0 <= idx < len(files):
+                    selected_paths.append(os.path.join(INCOMING_DIR, files[idx]))
+                else:
+                    notify("Invalid selection.", "error")
+                    return
+            except ValueError:
+                notify("Invalid input.", "error")
+                return
+    else:
+        notify(f"No archive files found in '{INCOMING_DIR}'. Generating standalone metadata.", "info")
+
+    active_version = get_active_metadata_template_version()
+    metadata_mode = "editor" if METADATA_EDITOR_MODE else "prompt"
+    
+    create_archive_only(
+        archive_paths=selected_paths,
+        metadata_version=active_version,
+        metadata_input_mode=metadata_mode,
+        generate_yaml_only=True
+    )
 
 
 def _process_incoming_pairs():
