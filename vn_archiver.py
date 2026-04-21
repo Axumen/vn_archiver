@@ -341,16 +341,28 @@ def stage_ingested_files_for_upload(metadata, archives_data, metadata_version_nu
     )
 
 
-def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None):
+def stage_metadata_yaml_for_upload(metadata, metadata_version_number, sha256=None, target_dir=None):
     """Convenience wrapper that passes :func:`order_metadata_for_yaml` to staging."""
     return _stage_metadata_yaml(
-        metadata, metadata_version_number, target_dir,
+        metadata, metadata_version_number, sha256=sha256, target_dir=target_dir,
         order_fn=order_metadata_for_yaml,
     )
 
 
 def finalize_archive_creation(metadata, archives_data):
-    """Shared finalization flow for prompted and pre-filled metadata runs."""
+    """Shared finalization flow for prompted and pre-filled metadata runs.
+    
+    Raises
+    ------
+    ValueError
+        If no archive files are provided. A release must have at least one
+        primary file attached — this is a file-exists-basis archiving system.
+    """
+    if not archives_data:
+        raise ValueError(
+            "A release requires at least one archive file. "
+            "Please provide a primary file before creating a release."
+        )
     result = insert_visual_novel(metadata)
     if not result:
         print(Fore.RED + "Failed to insert visual novel into database.")

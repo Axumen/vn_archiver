@@ -362,7 +362,10 @@ def create_archive_only(
             })
         metadata["archives"] = archives_list
 
-    finalize_archive_creation(metadata, archives_data)
+    try:
+        finalize_archive_creation(metadata, archives_data)
+    except ValueError as exc:
+        notify(str(exc), "error")
 
 
 # =============================

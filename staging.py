@@ -47,7 +47,11 @@ def build_recommended_archive_name(metadata, sha256, ext='.zip'):
 
 
 def build_recommended_metadata_name(metadata, sha256, metadata_version_number):
-    """Return a standardised metadata sidecar filename."""
+    """Return a standardised metadata sidecar filename.
+    
+    For release metadata (no artifact_type): uses the primary file's sha256.
+    For file metadata (artifact_type present): uses the linked file's sha256.
+    """
     title_slug = slugify_component(metadata.get('title'), 'unknown')
     short_hash = (sha256 or 'nohash')[:8]
     padded_revision = f"r{int(metadata_version_number or 1):02d}"
@@ -75,7 +79,7 @@ def get_uploading_latest_dir(metadata):
 # FILE STAGING
 # ==============================
 
-def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir=None, *, order_fn=None):
+def stage_metadata_yaml_for_upload(metadata, metadata_version_number, sha256=None, target_dir=None, *, order_fn=None):
     """Create a metadata YAML sidecar and stage it in uploading/ with recommended naming.
 
     Parameters
@@ -84,6 +88,10 @@ def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir
         The metadata payload to write.
     metadata_version_number : int
         Revision number used in the sidecar filename.
+    sha256 : str | None
+        SHA-256 hash of the primary associated file. Used in the filename.
+        For release metadata this is the primary archive's hash.
+        For file metadata this is the linked file's hash.
     target_dir : Path | str | None
         Override target directory.  Defaults to the upload queue root.
     order_fn : callable | None
@@ -95,7 +103,9 @@ def stage_metadata_yaml_for_upload(metadata, metadata_version_number, target_dir
     metadata_for_staging.pop("_raw_text", None)
     metadata_for_staging.pop("_source_file", None)
 
-    meta_sha = metadata_for_staging.get('sha256')
+    meta_sha = sha256
+    if not meta_sha:
+        meta_sha = metadata_for_staging.get('sha256')
     if not meta_sha and isinstance(metadata_for_staging.get('archives'), list) and metadata_for_staging['archives']:
         first_arch = metadata_for_staging['archives'][0]
         if isinstance(first_arch, dict):
@@ -163,8 +173,17 @@ def stage_ingested_files_for_upload(metadata, archives_data, metadata_version_nu
 
     staged_meta_path = None
     if metadata_version_number is not None:
+        # Use the primary archive's sha256 as the basis for the release metadata filename.
+        primary_sha256 = next(
+            (a.get("sha256") for a in (archives_data or []) if a.get("sha256")),
+            None,
+        )
         staged_meta_path = stage_metadata_yaml_for_upload(
-            metadata, metadata_version_number, target_dir=target_dir, order_fn=order_fn,
+            metadata,
+            metadata_version_number,
+            sha256=primary_sha256,
+            target_dir=target_dir,
+            order_fn=order_fn,
         )
 
     return staged_archives, staged_meta_path
