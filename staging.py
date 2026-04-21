@@ -49,11 +49,16 @@ def build_recommended_archive_name(metadata, sha256, ext='.zip'):
 def build_recommended_metadata_name(metadata, sha256, metadata_version_number):
     """Return a standardised metadata sidecar filename."""
     title_slug = slugify_component(metadata.get('title'), 'unknown')
-    version_slug = slugify_component(metadata.get('version'), 'unknown')
     short_hash = (sha256 or 'nohash')[:8]
+    padded_revision = f"r{int(metadata_version_number or 1):02d}"
     
-    meta_type = "file" if metadata.get("artifact_type") else "release"
-    return f"{title_slug}_{version_slug}_{short_hash}_{meta_type}_v{metadata_version_number}.yaml"
+    artifact_type = metadata.get("artifact_type")
+    if artifact_type:
+        artifact_slug = slugify_component(artifact_type, 'file')
+        return f"{title_slug}_{artifact_slug}_{short_hash}_{padded_revision}.yaml"
+    else:
+        version_slug = slugify_component(metadata.get('version'), 'unknown')
+        return f"{title_slug}_{version_slug}_{short_hash}_{padded_revision}.yaml"
 
 
 # ==============================
