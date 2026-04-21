@@ -51,7 +51,9 @@ def build_recommended_metadata_name(metadata, sha256, metadata_version_number):
     title_slug = slugify_component(metadata.get('title'), 'unknown')
     version_slug = slugify_component(metadata.get('version'), 'unknown')
     short_hash = (sha256 or 'nohash')[:8]
-    return f"{title_slug}_{version_slug}_{short_hash}_meta_v{metadata_version_number}.yaml"
+    
+    meta_type = "file" if metadata.get("artifact_type") else "release"
+    return f"{title_slug}_{version_slug}_{short_hash}_{meta_type}_v{metadata_version_number}.yaml"
 
 
 # ==============================
