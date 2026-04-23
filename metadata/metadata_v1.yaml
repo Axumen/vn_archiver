@@ -35,8 +35,8 @@ optional:
   # -------------------------------------
   # BUILD (version-level)
   # -------------------------------------
-  - build_type         # Release channel/state (stable, beta, alpha, hotfix, etc.)
-  - distribution_model          # Packaging style (free, paid, freemium, subscription, etc.)
+  - build_type          # Release channel/state (stable, beta, alpha, hotfix, etc.)
+  - distribution_model  # Packaging style (free, paid, freemium, subscription, etc.)
   - distribution_platform # Store/platform/source channel (Steam, DLsite, Itch, etc.)
   - language             # Language(s) available in this specific build
   - translator           # String, list, or language-keyed map
