@@ -142,7 +142,7 @@ def _load_and_normalize_sidecar(sidecar_path):
         return None, None
 
     metadata = normalize_metadata_fields(metadata)
-    revision_match = re.search(r"_meta_v(\d+)\.ya?ml$", Path(sidecar_path).name)
+    revision_match = re.search(r"_r(\d+)\.ya?ml$", Path(sidecar_path).name)
     requested_revision = int(revision_match.group(1)) if revision_match else None
     return metadata, requested_revision
 
@@ -271,8 +271,8 @@ def _build_cloud_paths(*, title, title_id, version, metadata_file_name, archive_
     version_slug = slugify_component(version, "unknown")
     archive_cloud_path = None
     if archive_file_name:
-        archive_cloud_path = f"archives/{title_slug}/t-{title_id:05d}/{version_slug}/{archive_file_name}"
-    metadata_cloud_path = f"metadata/{title_slug}/t-{title_id:05d}/{version_slug}/{metadata_file_name}"
+        archive_cloud_path = f"archives/{title_slug}/vn-{title_id:05d}/{version_slug}/{archive_file_name}"
+    metadata_cloud_path = f"metadata/{title_slug}/vn-{title_id:05d}/{version_slug}/{metadata_file_name}"
     return archive_cloud_path, metadata_cloud_path
 
 
@@ -289,8 +289,8 @@ def _ensure_parent_revision_uploaded(metadata_cloud_path, db_version_number):
     if db_version_number <= 1:
         return True
     parent_metadata_cloud_path = re.sub(
-        r"_meta_v\d+(\.ya?ml)$",
-        f"_meta_v{db_version_number - 1}\\1",
+        r"_r\d+(\.ya?ml)$",
+        f"_r{db_version_number - 1:02d}\\1",
         metadata_cloud_path,
     )
     with get_connection() as conn:
@@ -320,14 +320,14 @@ def upload_archive(file_path):
 
     archive_stem = Path(file_path).stem
     sidecar_dir = Path(file_path).parent
-    sidecar_pattern = re.compile(rf"^{re.escape(archive_stem)}_meta_v\d+\.ya?ml$", re.IGNORECASE)
+    sidecar_pattern = re.compile(rf"^{re.escape(archive_stem)}_r\d+\.ya?ml$", re.IGNORECASE)
     sidecar_candidates = [
         candidate for candidate in sidecar_dir.iterdir()
         if candidate.is_file() and sidecar_pattern.match(candidate.name)
     ]
 
     def sidecar_sort_key(path_obj):
-        match = re.search(r"_meta_v(\d+)\.ya?ml$", path_obj.name)
+        match = re.search(r"_r(\d+)\.ya?ml$", path_obj.name)
         numeric_version = int(match.group(1)) if match else -1
         return (numeric_version, path_obj.stat().st_mtime, path_obj.name)
 
@@ -567,8 +567,8 @@ def upload_metadata_sidecar(sidecar_path):
         return False
 
     sidecar_file = Path(sidecar_path)
-    if not re.search(r"_meta_v\d+\.ya?ml$", sidecar_file.name):
-        print(Fore.RED + "Upload Blocked: Metadata sidecar filename must follow '<archive_name>_meta_vN.yaml'.")
+    if not re.search(r"_r(\d+)\.ya?ml$", sidecar_file.name):
+        print(Fore.RED + "Upload Blocked: Metadata sidecar filename must follow '<archive_name>_r0N.yaml'.")
         return False
 
     metadata, requested_metadata_revision = _load_and_normalize_sidecar(sidecar_file)
