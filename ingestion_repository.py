@@ -136,7 +136,7 @@ class TitleReleaseStore:
         self.ctx = schema_context
 
     def _sync_title_tags_tables(self, title_id, tags_value):
-        tags = normalize_csv_list(tags_value, lowercase=True)
+        tags = normalize_csv_list(tags_value)
         self.conn.execute("DELETE FROM title_tag WHERE title_id = ?", (title_id,))
         for tag_name in tags:
             tag_row = self.conn.execute(
@@ -163,7 +163,7 @@ class TitleReleaseStore:
         join_table,
         join_foreign_id_column,
     ):
-        values = normalize_csv_list(raw_value, lowercase=True)
+        values = normalize_csv_list(raw_value)
         self.conn.execute(f"DELETE FROM {join_table} WHERE title_id = ?", (title_id,))
         for name in values:
             row = self.conn.execute(
