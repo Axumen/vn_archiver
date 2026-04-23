@@ -98,7 +98,7 @@ METADATA_LIST_FIELDS = {"tags", "target_platform", "aliases", "developer", "publ
 FIELD_SUGGESTIONS = {
     "release_status": ["ongoing", "completed", "hiatus", "cancelled", "abandoned"],
     "distribution_model": ["free", "paid", "freemium", "donationware", "subscription", "patron_only"],
-    "release_type": ["full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "standalone"],
+    "build_type": ["full", "demo", "trial", "alpha", "beta", "release-candidate", "patch", "dlc", "standalone"],
     "language": ["japanese", "english", "chinese-simplified", "chinese-traditional", "korean", "spanish", "german",
                  "french", "russian", "multi-language"],
     "distribution_platform": ["steam", "itch.io", "dlsite", "fanza", "gumroad", "patreon", "booth",
@@ -710,7 +710,7 @@ def add_file_to_existing_release():
         "metadata_version": metadata_version,
         "title": selected_release["title"] or "",
         "version": selected_release["version"] or "",
-        "release_type": selected_release["release_type"] or "",
+        "build_type": selected_release["release_type"] or "",
         "language": selected_release["language"] or "",
         "distribution_platform": selected_release["distribution_platform"] or "",
     }
@@ -1075,7 +1075,7 @@ def edit_metadata_only():
 
         if release_info:
             current_metadata["version"] = release_info["version"]
-            current_metadata["release_type"] = release_info["release_type"]
+            current_metadata["build_type"] = release_info["release_type"]
             current_metadata["language"] = release_info["language"]
 
     finally:

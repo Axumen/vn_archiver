@@ -456,11 +456,16 @@ def order_metadata_for_yaml(metadata):
         template_field_order.append('archives')
 
     for key in template_field_order:
+        if key == 'archives':
+            continue
         if key in metadata:
             ordered[key] = metadata[key]
 
     for key, value in metadata.items():
-        if key not in ordered:
+        if key not in ordered and key != 'archives':
             ordered[key] = value
+
+    if 'archives' in metadata:
+        ordered['archives'] = metadata['archives']
 
     return ordered
