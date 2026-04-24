@@ -689,6 +689,7 @@ def _process_incoming_pairs():
             release_metadata,
             result.metadata_version_number,
             sha256=file_sha,
+            release_id=release_id,
         )
         if release_sidecar_path:
             notify_pipeline("4", f"Staged release metadata sidecar: {Path(release_sidecar_path).name}", "ok")
@@ -704,6 +705,7 @@ def _process_incoming_pairs():
                 }
             ],
             metadata_version_number=int(file_metadata.get("metadata_version") or 1),
+            release_id=release_id,
         )
         
         for staged_path in staged_archives:
@@ -843,10 +845,12 @@ def add_file_to_existing_release():
             }
         ],
         metadata_version_number=None,
+        release_id=release_id,
     )
     staged_meta_path = stage_metadata_yaml_for_upload(
         file_metadata,
         int(file_metadata.get("metadata_version") or 1),
+        release_id=release_id,
     )
     for staged_path in staged_archives:
         notify(f"Moved ingested file to uploading: {staged_path.name}", "ok")
@@ -956,6 +960,7 @@ def upsert_release_from_metadata_yaml():
                 if result.metadata_version_number is not None
                 else int(metadata.get("metadata_version") or get_active_metadata_template_version())
             ),
+            release_id=result.release_id,
         )
         if staged_archives:
             for staged_path in staged_archives:

@@ -46,10 +46,10 @@ def build_recommended_archive_name(metadata, sha256, ext='.zip'):
     return f"{title_slug}_{version_slug}_{short_hash}{safe_ext}"
 
 
-def build_recommended_metadata_name(metadata, sha256, metadata_version_number):
+def build_recommended_metadata_name(metadata, sha256, metadata_version_number, *, release_id=None):
     """Return a standardised metadata sidecar filename.
     
-    For release metadata (no artifact_type): uses the primary file's sha256.
+    For release metadata (no artifact_type): uses release_id if available, otherwise fallback to hash.
     For file metadata (artifact_type present): uses the linked file's sha256.
     """
     title_slug = slugify_component(metadata.get('title'), 'unknown')
@@ -62,6 +62,8 @@ def build_recommended_metadata_name(metadata, sha256, metadata_version_number):
         return f"{title_slug}_{artifact_slug}_{short_hash}_{padded_revision}.yaml"
     else:
         version_slug = slugify_component(metadata.get('version'), 'unknown')
+        if release_id:
+            return f"{title_slug}_{version_slug}_{int(release_id):05d}_{padded_revision}.yaml"
         return f"{title_slug}_{version_slug}_{short_hash}_{padded_revision}.yaml"
 
 
@@ -79,7 +81,7 @@ def get_uploading_latest_dir(metadata):
 # FILE STAGING
 # ==============================
 
-def stage_metadata_yaml_for_upload(metadata, metadata_version_number, sha256=None, target_dir=None, *, order_fn=None):
+def stage_metadata_yaml_for_upload(metadata, metadata_version_number, sha256=None, release_id=None, target_dir=None, *, order_fn=None):
     """Create a metadata YAML sidecar and stage it in uploading/ with recommended naming.
 
     Parameters
@@ -111,7 +113,12 @@ def stage_metadata_yaml_for_upload(metadata, metadata_version_number, sha256=Non
         if isinstance(first_arch, dict):
             meta_sha = first_arch.get('sha256')
 
-    final_name = build_recommended_metadata_name(metadata_for_staging, meta_sha, metadata_version_number)
+    final_name = build_recommended_metadata_name(
+        metadata_for_staging, 
+        meta_sha, 
+        metadata_version_number, 
+        release_id=release_id
+    )
 
     if target_dir is None:
         target_dir = get_uploading_latest_dir(metadata)
@@ -130,7 +137,14 @@ def stage_metadata_yaml_for_upload(metadata, metadata_version_number, sha256=Non
     return final_path
 
 
-def stage_ingested_files_for_upload(metadata, archives_data, metadata_version_number=None, *, order_fn=None):
+def stage_ingested_files_for_upload(
+    metadata,
+    archives_data,
+    metadata_version_number=None,
+    *,
+    release_id=None,
+    order_fn=None
+):
     """Move ingested archive files to uploading/ and stage metadata sidecar when available.
 
     Parameters
@@ -182,6 +196,7 @@ def stage_ingested_files_for_upload(metadata, archives_data, metadata_version_nu
             metadata,
             metadata_version_number,
             sha256=primary_sha256,
+            release_id=release_id,
             target_dir=target_dir,
             order_fn=order_fn,
         )
