@@ -330,8 +330,8 @@ def test_repository_syncs_title_developers_and_publishers_when_tables_exist():
         (title_id,),
     ).fetchall()
 
-    assert [row["name"] for row in dev_rows] == ["key", "visualart's"]
-    assert [row["name"] for row in pub_rows] == ["key"]
+    assert [row["name"] for row in dev_rows] == ["Key", "VisualArt's"]
+    assert [row["name"] for row in pub_rows] == ["Key"]
 
 
 def test_repository_syncs_release_languages_when_tables_exist():

@@ -262,6 +262,7 @@ PASSTHROUGH_FIELDS = {
     "release_type",
     "distribution_model",
     "distribution_platform",
+    "build_type",
     "platform",
     "translator",
     "edition",

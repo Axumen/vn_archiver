@@ -66,7 +66,7 @@ def test_stage_ingested_files_for_upload_moves_archives_and_stages_metadata(tmp_
 
     monkeypatch.setattr(staging, "UPLOADING_DIR", str(upload_dir))
 
-    def fake_stage_metadata_yaml_for_upload(metadata, metadata_version_number, sha256=None, target_dir=None, *, order_fn=None):
+    def fake_stage_metadata_yaml_for_upload(metadata, metadata_version_number, sha256=None, release_id=None, target_dir=None, *, order_fn=None):
         Path(target_dir).mkdir(parents=True, exist_ok=True)
         staged_meta.write_text("title: Sample\n", encoding="utf-8")
         return staged_meta

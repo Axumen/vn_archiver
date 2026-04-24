@@ -333,18 +333,19 @@ def insert_visual_novel(metadata):
         return result
 
 
-def stage_ingested_files_for_upload(metadata, archives_data, metadata_version_number=None):
+def stage_ingested_files_for_upload(metadata, archives_data, metadata_version_number=None, release_id=None):
     """Convenience wrapper that passes :func:`order_metadata_for_yaml` to staging."""
     return _stage_ingested_files(
         metadata, archives_data, metadata_version_number,
+        release_id=release_id,
         order_fn=order_metadata_for_yaml,
     )
 
 
-def stage_metadata_yaml_for_upload(metadata, metadata_version_number, sha256=None, target_dir=None):
+def stage_metadata_yaml_for_upload(metadata, metadata_version_number, sha256=None, release_id=None, target_dir=None):
     """Convenience wrapper that passes :func:`order_metadata_for_yaml` to staging."""
     return _stage_metadata_yaml(
-        metadata, metadata_version_number, sha256=sha256, target_dir=target_dir,
+        metadata, metadata_version_number, sha256=sha256, release_id=release_id, target_dir=target_dir,
         order_fn=order_metadata_for_yaml,
     )
 
