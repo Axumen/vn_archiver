@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 pytest.importorskip("yaml")
 
 from utils import CATEGORY_ALL_FIELDS
-from vn_archiver import load_metadata_template
+from template_service import load_metadata_template
 from tui import FIELD_SUGGESTIONS
 
 
