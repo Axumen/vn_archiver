@@ -116,6 +116,7 @@ class TitleReleaseStore:
         "release_date": "release_date",
         "engine": "engine",
         "engine_version": "engine_version",
+        "target_platform": "target_platform",
         "notes": "notes",
         "change_note": "change_note",
     }
