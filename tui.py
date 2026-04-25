@@ -8,29 +8,34 @@ import tempfile
 import json
 import re
 from db_manager import initialize_database, get_connection
-from domain_layer import VisualNovelDomainService
+from ingestion_service import ingest_incoming_pair, attach_file_to_release_pipeline
 from ingestion_repository import VnIngestionRepository
 from pathlib import Path
 from colorama import init, Fore, Style
 from b2 import upload_archive, upload_metadata_sidecar
 from utils import sha256_file
-from staging import INCOMING_DIR, UPLOADING_DIR
-from vn_archiver import (
-    create_archive_from_metadata_file,
+from staging import (
+    INCOMING_DIR,
+    UPLOADING_DIR,
+    stage_metadata_yaml_for_upload,
+    stage_ingested_files_for_upload,
+)
+from template_service import (
     load_metadata_template,
     load_file_metadata_template,
     resolve_prompt_fields,
     resolve_prompt_field_groups,
     get_available_metadata_template_versions,
     detect_latest_metadata_template_version,
-    insert_visual_novel,
-    get_latest_metadata_for_title,
-    stage_metadata_yaml_for_upload,
-    stage_ingested_files_for_upload,
-    finalize_archive_creation,
     order_metadata_for_yaml,
     AUTO_METADATA_FIELDS,
     DEFAULT_METADATA_VERSION,
+)
+from vn_archiver import (
+    create_archive_from_metadata_file,
+    insert_visual_novel,
+    get_latest_metadata_for_title,
+    finalize_archive_creation,
 )
 
 init(autoreset=True)
@@ -618,25 +623,8 @@ def _process_incoming_pairs():
 
         ordered_metadata = order_metadata_for_yaml(parsed)
         
-        # --- 1. Process Release Metadata ---
+        # --- 1. Build File Metadata Prompt ---
         release_metadata = dict(ordered_metadata)
-        release_metadata.pop("archives", None)
-        release_metadata["_raw_text"] = raw_metadata_text
-        release_metadata["_source_file"] = metadata_path
-        
-        try:
-            result = insert_visual_novel(release_metadata)
-            release_id = result.release_id
-            notify_pipeline("2", f"Release created (release_id={release_id})", "ok")
-        except Exception as exc:
-            notify(f"Release creation failed for '{archive_name}': {exc}", "error")
-            continue
-            
-        # --- 2. Process File Metadata ---
-        from datetime import datetime as _dt, timezone as _tz
-        file_sha = sha256_file(archive_path)
-        file_size = os.path.getsize(archive_path)
-        archived_at = _dt.now(_tz.utc).isoformat().replace('+00:00', 'Z')
         
         metadata_version = get_active_metadata_template_version()
         template = load_file_metadata_template(metadata_version)
@@ -659,60 +647,32 @@ def _process_incoming_pairs():
             entered_value = prompt(f"{field_name} [{default_value}]: ")
             file_metadata[field_name] = entered_value if entered_value else default_value
             
-        file_metadata["archives"] = [{"filename": archive_name, "sha256": file_sha, "size_bytes": file_size}]
-        
-        # --- 3. Attach File to Release ---
-        with get_connection() as conn:
-            repo = VnIngestionRepository(conn)
-            domain_service = VisualNovelDomainService(
-                conn,
-                repository=repo,
-                collect_archives_for_db=lambda _: ([], None),
+        try:
+            ingest_result = ingest_incoming_pair(
+                archive_path,
+                release_metadata,
+                file_metadata,
+                raw_metadata_text=raw_metadata_text,
+                source_file=metadata_path,
             )
-            file_id = domain_service.attach_file_to_release(
-                release_id=release_id,
-                metadata={
-                    **file_metadata,
-                    "archived_at": archived_at,
-                    "artifact_type": file_metadata.get("artifact_type"),
-                },
-                archive_data={
-                    "sha256": file_sha,
-                    "filename": archive_name,
-                    "size_bytes": file_size,
-                },
+        except Exception as exc:
+            notify(f"Pipeline failed for '{archive_name}': {exc}", "error")
+            continue
+
+        notify_pipeline("2", f"Release created (release_id={ingest_result.release_id})", "ok")
+        notify_pipeline("3", f"File attached (file_id={ingest_result.file_id})", "ok")
+        if ingest_result.release_sidecar_path:
+            notify_pipeline(
+                "4",
+                f"Staged release metadata sidecar: {Path(ingest_result.release_sidecar_path).name}",
+                "ok",
             )
-        notify_pipeline("3", f"File attached (file_id={file_id})", "ok")
-        
-        # --- 4. Stage Release Metadata Sidecar ---
-        release_sidecar_path = stage_metadata_yaml_for_upload(
-            release_metadata,
-            result.metadata_version_number,
-            sha256=file_sha,
-            release_id=release_id,
-        )
-        if release_sidecar_path:
-            notify_pipeline("4", f"Staged release metadata sidecar: {Path(release_sidecar_path).name}", "ok")
-            
-        # --- 5. Stage File + File Metadata Sidecar ---
-        staged_archives, file_sidecar_path = stage_ingested_files_for_upload(
-            file_metadata,
-            [
-                {
-                    "original_path": archive_path,
-                    "filename": archive_name,
-                    "sha256": file_sha,
-                }
-            ],
-            metadata_version_number=int(file_metadata.get("metadata_version") or 1),
-            release_id=release_id,
-        )
-        
-        for staged_path in staged_archives:
+
+        for staged_path in ingest_result.staged_archives:
             notify_pipeline("5", f"Moved ingested archive to uploading: {staged_path.name}", "ok")
-        if file_sidecar_path:
-            notify_pipeline("6", f"Staged file metadata sidecar: {Path(file_sidecar_path).name}", "ok")
-            
+        if ingest_result.file_sidecar_path:
+            notify_pipeline("6", f"Staged file metadata sidecar: {Path(ingest_result.file_sidecar_path).name}", "ok")
+
         notify_pipeline("7", f"Pipeline complete for pair.", "ok")
         
         if os.path.exists(metadata_path):
@@ -721,8 +681,6 @@ def _process_incoming_pairs():
 
 
 def add_file_to_existing_release():
-    from datetime import datetime as _dt, timezone as _tz
-
     print()
     panel("Add File to Existing Release")
 
@@ -788,10 +746,6 @@ def add_file_to_existing_release():
 
     release_id = int(release_rows[release_idx]["release_id"])
     selected_release = release_rows[release_idx]
-    file_sha = sha256_file(selected_path)
-    file_size = os.path.getsize(selected_path)
-    archived_at = _dt.now(_tz.utc).isoformat().replace('+00:00', 'Z')
-
     metadata_version = get_active_metadata_template_version()
     template = load_file_metadata_template(metadata_version)
     prompt_fields = resolve_prompt_fields(template)
@@ -811,51 +765,13 @@ def add_file_to_existing_release():
         entered_value = prompt(f"{field_name} [{default_value}]: ")
         file_metadata[field_name] = entered_value if entered_value else default_value
 
-    file_metadata["archives"] = [{"filename": selected_file, "sha256": file_sha}]
-
-    with get_connection() as conn:
-        repo = VnIngestionRepository(conn)
-        domain_service = VisualNovelDomainService(
-            conn,
-            repository=repo,
-            collect_archives_for_db=lambda _: ([], None),
-        )
-        file_id = domain_service.attach_file_to_release(
-            release_id=release_id,
-            metadata={
-                **file_metadata,
-                "archived_at": archived_at,
-                "artifact_type": file_metadata.get("artifact_type"),
-            },
-            archive_data={
-                "sha256": file_sha,
-                "filename": selected_file,
-                "size_bytes": file_size,
-            },
-        )
+    attach_result = attach_file_to_release_pipeline(selected_path, release_id, file_metadata)
 
     notify(f"Linked file '{selected_file}' to release_id={release_id}.", "ok")
-    staged_archives, _ = stage_ingested_files_for_upload(
-        file_metadata,
-        [
-            {
-                "original_path": selected_path,
-                "filename": selected_file,
-                "sha256": file_sha,
-            }
-        ],
-        metadata_version_number=None,
-        release_id=release_id,
-    )
-    staged_meta_path = stage_metadata_yaml_for_upload(
-        file_metadata,
-        int(file_metadata.get("metadata_version") or 1),
-        release_id=release_id,
-    )
-    for staged_path in staged_archives:
+    for staged_path in attach_result.staged_archives:
         notify(f"Moved ingested file to uploading: {staged_path.name}", "ok")
-    if staged_meta_path:
-        notify(f"Created metadata yaml copy: {Path(staged_meta_path).name}", "ok")
+    if attach_result.file_sidecar_path:
+        notify(f"Created metadata yaml copy: {Path(attach_result.file_sidecar_path).name}", "ok")
 
 def create_metadata_only():
     print()
