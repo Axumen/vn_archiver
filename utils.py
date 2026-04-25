@@ -270,9 +270,7 @@ PASSTHROUGH_FIELDS = {
     "release_date",
     "engine",
     "engine_version",
-    "parent_vn_title",
-    "relationship_type",
-    "build_relations",
+
     "notes",
     "change_note",
     "content_type",

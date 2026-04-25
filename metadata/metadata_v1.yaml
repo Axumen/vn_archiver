@@ -47,11 +47,7 @@ optional:
   - engine_version       # Engine version when known
   - target_platform      # Runtime platform(s) (Windows, Linux, macOS, Android, etc.)
   
-  # -------------------------------------
-  # RELATIONSHIPS
-  # -------------------------------------
-  - parent_vn_title      # Related/canonical parent work title for linked entries
-  - relationship_type    # Link type (fan_disc, sequel, prequel, remake, fandub, etc.)
+
 
   # -------------------------------------
   # MISC
