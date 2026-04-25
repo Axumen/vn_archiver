@@ -16,6 +16,7 @@ from pathlib import Path
 from colorama import Fore
 
 from db_manager import get_connection
+from template_service import order_metadata_for_yaml
 from utils import (
     slugify_component,
     format_uploaded_component,
@@ -126,7 +127,8 @@ def stage_metadata_yaml_for_upload(metadata, metadata_version_number, sha256=Non
     target_dir.mkdir(parents=True, exist_ok=True)
 
     temp_meta_path = target_dir / 'metadata.yaml'
-    ordered_metadata = order_fn(metadata_for_staging) if order_fn is not None else metadata_for_staging
+    effective_order_fn = order_fn or order_metadata_for_yaml
+    ordered_metadata = effective_order_fn(metadata_for_staging) if effective_order_fn is not None else metadata_for_staging
     with open(temp_meta_path, 'w', encoding='utf-8') as handle:
         yaml.dump(ordered_metadata, handle, sort_keys=False, allow_unicode=True)
 
