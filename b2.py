@@ -10,6 +10,7 @@ import yaml
 from colorama import Fore
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from db_manager import get_connection
+from cloud_tracking_repository import CloudTrackingRepository
 from utils import (
     sha1_file,
     sha256_file,
@@ -487,14 +488,9 @@ def upload_archive(file_path):
         print(Fore.GREEN + f"Verified remote archive object: {cloud_path}")
 
         with get_connection() as conn:
+            repo = CloudTrackingRepository(conn)
             try:
-                conn.execute(
-                    '''
-                    INSERT OR IGNORE INTO cloud_archive (sha256, file_size, storage_path)
-                    VALUES (?, ?, ?)
-                    ''',
-                    (archive_sha256, file_size, cloud_path)
-                )
+                repo.mark_archive_uploaded(archive_sha256, file_size, cloud_path)
             except Exception as e:
                 print(Fore.RED + f"Database update failed after upload verification: {e}")
                 return False
@@ -506,14 +502,11 @@ def upload_archive(file_path):
     metadata_local_size = os.path.getsize(selected_sidecar)
 
     with get_connection() as conn:
-        existing_meta_obj = conn.execute(
-            "SELECT storage_path FROM cloud_sidecar WHERE sha256 = ?",
-            (metadata_sha256,)
-        ).fetchone()
+        repo = CloudTrackingRepository(conn)
+        existing_meta_path = repo.get_sidecar_storage_path(metadata_sha256)
 
-    metadata_needs_upload = existing_meta_obj is None
+    metadata_needs_upload = existing_meta_path is None
     if not metadata_needs_upload:
-        existing_meta_path = existing_meta_obj["storage_path"]
         print(Fore.GREEN + f"\n[DEDUPLICATION MATCH] Metadata sidecar already exists in cloud!")
         print(Fore.CYAN + f"Existing Path: {existing_meta_path}")
 
@@ -552,10 +545,8 @@ def upload_archive(file_path):
         print(Fore.GREEN + f"Metadata upload complete: {metadata_cloud_path}")
 
     with get_connection() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO cloud_sidecar (sha256, file_size, storage_path) VALUES (?, ?, ?)",
-            (metadata_sha256, metadata_local_size, metadata_cloud_path)
-        )
+        repo = CloudTrackingRepository(conn)
+        repo.mark_sidecar_uploaded(metadata_sha256, metadata_local_size, metadata_cloud_path)
 
     return True
 

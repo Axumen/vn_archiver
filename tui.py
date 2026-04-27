@@ -1176,25 +1176,15 @@ def upload_archives():
         return
 
     def is_already_uploaded(file_path):
+        from cloud_tracking_repository import CloudTrackingRepository
         lower = file_path.lower()
         file_hash = sha256_file(file_path)
         with get_connection() as conn:
-            if lower.endswith('.zip'):
-                existing_obj = conn.execute(
-                    "SELECT 1 FROM cloud_archive WHERE sha256 = ?",
-                    (file_hash,)
-                ).fetchone()
-            elif lower.endswith(('.yaml', '.yml')):
-                existing_obj = conn.execute(
-                    "SELECT 1 FROM cloud_sidecar WHERE sha256 = ?",
-                    (file_hash,)
-                ).fetchone()
+            repo = CloudTrackingRepository(conn)
+            if lower.endswith(('.yaml', '.yml')):
+                return repo.is_sidecar_uploaded(file_hash)
             else:
-                existing_obj = conn.execute(
-                    "SELECT 1 FROM cloud_archive WHERE sha256 = ?",
-                    (file_hash,)
-                ).fetchone()
-        return bool(existing_obj)
+                return repo.is_archive_uploaded(file_hash)
 
     def dispatch_upload(file_path):
         lower = file_path.lower()
