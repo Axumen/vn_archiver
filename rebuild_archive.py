@@ -46,7 +46,7 @@ def main(argv=None):
         return 2
 
     try:
-        file_count, metadata_count, relationship_count = rebuild_database(
+        file_count, metadata_count = rebuild_database(
             source_dir=source_dir,
             db_path=db_path,
             backup_dir=backup_dir,
@@ -57,7 +57,7 @@ def main(argv=None):
 
     print(
         f"[DONE] Rebuilt {db_path} from {metadata_count} metadata document(s) "
-        f"across {file_count} YAML file(s); canon resync checked {relationship_count} relationship document(s)."
+        f"across {file_count} YAML file(s)."
     )
     return 0
 

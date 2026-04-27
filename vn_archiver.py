@@ -5,7 +5,7 @@ import os
 
 from colorama import Fore
 
-from db_manager import get_connection
+from db_manager import get_connection, exclusive_transaction
 from domain_layer import VisualNovelDomainService
 from ingestion_repository import VnIngestionRepository
 from metadata_validation import validate_metadata_contract
@@ -131,7 +131,8 @@ def insert_visual_novel(metadata):
         if source_file is not None:
             ingest_payload["_source_file"] = source_file
 
-        result = domain_service.ingest(ingest_payload)
+        with exclusive_transaction(conn):
+            result = domain_service.ingest(ingest_payload)
         return result
 
 

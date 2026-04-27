@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from db_manager import get_connection
+from db_manager import get_connection, exclusive_transaction
 from domain_layer import VisualNovelDomainService
 from ingestion_repository import VnIngestionRepository
 from staging import stage_ingested_files_for_upload, stage_metadata_yaml_for_upload
@@ -56,19 +56,20 @@ def attach_file_to_release_pipeline(
             repository=repo,
             collect_archives_for_db=lambda _: ([], None),
         )
-        file_id = domain_service.attach_file_to_release(
-            release_id=release_id,
-            metadata={
-                **metadata_payload,
-                "archived_at": archived_at,
-                "artifact_type": metadata_payload.get("artifact_type"),
-            },
-            archive_data={
-                "sha256": file_sha,
-                "filename": archive_name,
-                "size_bytes": file_size,
-            },
-        )
+        with exclusive_transaction(conn):
+            file_id = domain_service.attach_file_to_release(
+                release_id=release_id,
+                metadata={
+                    **metadata_payload,
+                    "archived_at": archived_at,
+                    "artifact_type": metadata_payload.get("artifact_type"),
+                },
+                archive_data={
+                    "sha256": file_sha,
+                    "filename": archive_name,
+                    "size_bytes": file_size,
+                },
+            )
 
     staged_archives, file_sidecar_path = stage_ingested_files_for_upload(
         metadata_payload,
