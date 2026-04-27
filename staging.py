@@ -262,7 +262,7 @@ def get_vn_archive_version_dir(metadata):
 # REBUILD METADATA MIRROR
 # ==============================
 
-def mirror_metadata_for_rebuild(staged_meta_path, archives_data, release_id):
+def mirror_metadata_for_rebuild(staged_meta_path, archives_data, release_id, conn=None):
     """Mirror staged sidecar metadata into rebuild_metadata/ with archive-id-prefixed names."""
     metadata_dir = Path(REBUILD_METADATA_DIR)
     metadata_dir.mkdir(parents=True, exist_ok=True)
@@ -272,22 +272,30 @@ def mirror_metadata_for_rebuild(staged_meta_path, archives_data, release_id):
         return []
 
     archive_id_by_sha = {}
-    with get_connection() as conn:
-        if table_exists(conn, "file") and table_exists(conn, "release_file"):
-            rows = conn.execute(
+    
+    def _execute(connection):
+        if table_exists(connection, "file") and table_exists(connection, "release_file"):
+            rows = connection.execute(
                 """
                 SELECT f.file_id AS id, f.sha256 AS sha256
                 FROM release_file rf
-                JOIN file f ON f.file_id = rf.file_id
+                JOIN file f ON rf.file_id = f.file_id
                 WHERE rf.release_id = ?
                 """,
-                (release_id,),
+                (release_id,)
             ).fetchall()
-            for row in rows:
-                archive_id_by_sha[str(row["sha256"]).strip().lower()] = int(row["id"])
-        else:
-            print(Fore.YELLOW + "[WARN] Rebuild metadata mirror skipped: missing file/release_file tables.")
-            return []
+            for r in rows:
+                archive_id_by_sha[r["sha256"]] = r["id"]
+
+    if conn is not None:
+        _execute(conn)
+    else:
+        with get_connection() as c:
+            _execute(c)
+
+    if not archive_id_by_sha:
+        print(Fore.YELLOW + "[WARN] Rebuild metadata mirror skipped: missing file/release_file tables.")
+        return []
 
     staged_name = Path(staged_meta_path).name
     mirrored_paths = []

@@ -138,7 +138,11 @@ class TitleReleaseStore:
 
     def _sync_title_tags_tables(self, title_id, tags_value):
         tags = normalize_csv_list(tags_value)
-        self.conn.execute("DELETE FROM title_tag WHERE title_id = ?", (title_id,))
+        
+        current_rows = self.conn.execute("SELECT tag_id FROM title_tag WHERE title_id = ?", (title_id,)).fetchall()
+        current_ids = {int(row["tag_id"]) for row in current_rows}
+        new_ids = set()
+
         for tag_name in tags:
             tag_row = self.conn.execute(
                 "SELECT tag_id FROM tag WHERE name = ? LIMIT 1", (tag_name,)
@@ -148,10 +152,15 @@ class TitleReleaseStore:
             else:
                 self.conn.execute("INSERT INTO tag (name) VALUES (?)", (tag_name,))
                 tag_id = int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-            self.conn.execute(
-                "INSERT OR IGNORE INTO title_tag (title_id, tag_id) VALUES (?, ?)",
-                (title_id, tag_id),
-            )
+            new_ids.add(tag_id)
+            if tag_id not in current_ids:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO title_tag (title_id, tag_id) VALUES (?, ?)",
+                    (title_id, tag_id),
+                )
+
+        for tag_id in current_ids - new_ids:
+            self.conn.execute("DELETE FROM title_tag WHERE title_id = ? AND tag_id = ?", (title_id, tag_id))
 
     def _sync_title_people_tables(
         self,
@@ -165,7 +174,11 @@ class TitleReleaseStore:
         join_foreign_id_column,
     ):
         values = normalize_csv_list(raw_value)
-        self.conn.execute(f"DELETE FROM {join_table} WHERE title_id = ?", (title_id,))
+        
+        current_rows = self.conn.execute(f"SELECT {join_foreign_id_column} FROM {join_table} WHERE title_id = ?", (title_id,)).fetchall()
+        current_ids = {int(row[join_foreign_id_column]) for row in current_rows}
+        new_ids = set()
+
         for name in values:
             row = self.conn.execute(
                 f"SELECT {dictionary_id_column} FROM {dictionary_table} WHERE {dictionary_name_column} = ? LIMIT 1",
@@ -179,14 +192,23 @@ class TitleReleaseStore:
                     (name,),
                 )
                 foreign_id = int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-            self.conn.execute(
-                f"INSERT OR IGNORE INTO {join_table} (title_id, {join_foreign_id_column}) VALUES (?, ?)",
-                (title_id, foreign_id),
-            )
+            new_ids.add(foreign_id)
+            if foreign_id not in current_ids:
+                self.conn.execute(
+                    f"INSERT OR IGNORE INTO {join_table} (title_id, {join_foreign_id_column}) VALUES (?, ?)",
+                    (title_id, foreign_id),
+                )
+        
+        for foreign_id in current_ids - new_ids:
+            self.conn.execute(f"DELETE FROM {join_table} WHERE title_id = ? AND {join_foreign_id_column} = ?", (title_id, foreign_id))
 
     def _sync_release_languages_tables(self, release_id, language_value):
         values = normalize_language_list(language_value)
-        self.conn.execute("DELETE FROM release_language WHERE release_id = ?", (release_id,))
+        
+        current_rows = self.conn.execute("SELECT language_id FROM release_language WHERE release_id = ?", (release_id,)).fetchall()
+        current_ids = {int(row["language_id"]) for row in current_rows}
+        new_ids = set()
+
         for language_name in values:
             row = self.conn.execute(
                 "SELECT language_id FROM language WHERE name = ? LIMIT 1",
@@ -197,10 +219,15 @@ class TitleReleaseStore:
             else:
                 self.conn.execute("INSERT INTO language (name) VALUES (?)", (language_name,))
                 language_id = int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-            self.conn.execute(
-                "INSERT OR IGNORE INTO release_language (release_id, language_id) VALUES (?, ?)",
-                (release_id, language_id),
-            )
+            new_ids.add(language_id)
+            if language_id not in current_ids:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO release_language (release_id, language_id) VALUES (?, ?)",
+                    (release_id, language_id),
+                )
+        
+        for language_id in current_ids - new_ids:
+            self.conn.execute("DELETE FROM release_language WHERE release_id = ? AND language_id = ?", (release_id, language_id))
 
     def _get_or_create_series(self, metadata):
         series_name = normalize_text_value(metadata.get("series"))
