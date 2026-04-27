@@ -87,12 +87,10 @@ class VisualNovelDomainService:
 
     def __init__(
         self,
-        conn,
         repository: IngestionRepository,
         *,
         collect_archives_for_db,
     ):
-        self.conn = conn
         self.repository = repository
         self.collect_archives_for_db = collect_archives_for_db
 

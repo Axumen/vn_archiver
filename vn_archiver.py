@@ -120,7 +120,6 @@ def insert_visual_novel(metadata):
     with get_connection() as conn:
         repository = VnIngestionRepository(conn)
         domain_service = VisualNovelDomainService(
-            conn,
             repository=repository,
             collect_archives_for_db=collect_archives_for_db,
         )

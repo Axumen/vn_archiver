@@ -52,7 +52,6 @@ def attach_file_to_release_pipeline(
     with get_connection() as conn:
         repo = VnIngestionRepository(conn)
         domain_service = VisualNovelDomainService(
-            conn,
             repository=repo,
             collect_archives_for_db=lambda _: ([], None),
         )

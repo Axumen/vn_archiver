@@ -39,7 +39,6 @@ class FakeRepository:
 def test_ingest_requires_title():
     repo = FakeRepository()
     service = VisualNovelDomainService(
-        conn=object(),
         repository=repo,
         collect_archives_for_db=lambda _: ([], None),
     )
@@ -52,7 +51,6 @@ def test_ingest_uses_release_branch_for_non_artifact():
     repo = FakeRepository()
 
     service = VisualNovelDomainService(
-        conn=object(),
         repository=repo,
         collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
     )
@@ -74,7 +72,6 @@ def test_ingest_routes_all_ingests_through_get_or_create_title_and_release():
     called = {"processed": False}
 
     service = VisualNovelDomainService(
-        conn=object(),
         repository=repo,
         collect_archives_for_db=lambda _: ([], None),
     )
@@ -105,7 +102,6 @@ def test_ingest_normalizes_version_language_and_creator_before_resolution():
     repo.get_or_create_release = get_or_create_release
 
     service = VisualNovelDomainService(
-        conn=object(),
         repository=repo,
         collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
     )
@@ -129,7 +125,6 @@ def test_ingest_normalizes_version_language_and_creator_before_resolution():
 def test_ingest_persists_raw_metadata_with_primary_artifact_id_when_present():
     repo = FakeRepository()
     service = VisualNovelDomainService(
-        conn=object(),
         repository=repo,
         collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
     )
@@ -151,7 +146,6 @@ def test_ingest_persists_raw_metadata_with_primary_artifact_id_when_present():
 def test_ingest_persists_raw_metadata_even_when_no_artifact_id_available():
     repo = FakeRepository()
     service = VisualNovelDomainService(
-        conn=object(),
         repository=repo,
         collect_archives_for_db=lambda _: ([], None),
     )
@@ -187,7 +181,6 @@ def test_domain_entities_model_release_to_version_to_title():
 def test_artifact_uses_metadata_sha256_when_archive_list_is_empty():
     repo = FakeRepository()
     service = VisualNovelDomainService(
-        conn=object(),
         repository=repo,
         collect_archives_for_db=lambda _: ([], None),
     )
@@ -200,7 +193,6 @@ def test_artifact_uses_metadata_sha256_when_archive_list_is_empty():
 def test_ingest_succeeds_without_files_when_no_sha256_available():
     repo = FakeRepository()
     service = VisualNovelDomainService(
-        conn=object(),
         repository=repo,
         collect_archives_for_db=lambda _: ([], None),
     )
@@ -219,7 +211,6 @@ def test_ingest_succeeds_without_files_when_no_sha256_available():
 def test_ingest_rejects_duplicate_archive_sha256_values():
     repo = FakeRepository()
     service = VisualNovelDomainService(
-        conn=object(),
         repository=repo,
         collect_archives_for_db=lambda _: (
             [{"sha256": "dup"}, {"sha256": "dup"}],
@@ -286,7 +277,6 @@ def test_ingest_skips_legacy_archive_processing_when_files_table_is_absent():
     repo = SqliteRepo(conn)
     called = {"processed": False}
     service = VisualNovelDomainService(
-        conn=conn,
         repository=repo,
         collect_archives_for_db=lambda _: ([{"sha256": "abc", "filename": "sample.zip"}], "abc"),
     )
