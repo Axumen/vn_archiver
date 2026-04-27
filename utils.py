@@ -7,8 +7,11 @@ depend on utils — utils depends on nothing inside the project.
 
 import hashlib
 import json
+import logging
 import re
 from datetime import date, datetime
+
+log = logging.getLogger(__name__)
 
 
 def sha256_file(filepath):
@@ -299,7 +302,7 @@ def validate_metadata_field_categories(metadata):
 
     unknown_fields = sorted(set(metadata.keys()) - CATEGORY_ALL_FIELDS)
     if unknown_fields:
-        print(f"[WARN] Unknown metadata fields (no explicit category): {', '.join(unknown_fields)}")
+        log.warning("Unknown metadata fields (no explicit category): %s", ", ".join(unknown_fields))
 
 
 def normalize_metadata_fields(metadata):

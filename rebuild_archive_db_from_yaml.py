@@ -2,9 +2,12 @@
 """Recreate archive.db by processing YAML metadata files in a folder tree."""
 
 import argparse
+import logging
 import shutil
 import sys
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 def find_yaml_files(root: Path):
@@ -25,7 +28,7 @@ def load_metadata_documents(yaml_module, path: Path):
     out = []
     for idx, doc in enumerate(docs, start=1):
         if not isinstance(doc, dict):
-            print(f"[WARN] Skipping {path} document #{idx}: expected mapping, got {type(doc).__name__}")
+            log.warning("Skipping %s document #%d: expected mapping, got %s", path, idx, type(doc).__name__)
             continue
         out.append(doc)
     return out
@@ -48,7 +51,7 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
             backup_dir.mkdir(parents=True, exist_ok=True)
             backup_path = backup_dir / f"{db_path.stem}.pre_rebuild{db_path.suffix}"
             shutil.copy2(db_path, backup_path)
-            print(f"[INFO] Backed up existing DB to: {backup_path}")
+            log.info("Backed up existing DB to: %s", backup_path)
         db_path.unlink()
         wal_path = db_path.with_suffix(db_path.suffix + "-wal")
         shm_path = db_path.with_suffix(db_path.suffix + "-shm")
@@ -61,7 +64,7 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
 
     yaml_files = find_yaml_files(source_dir)
     if not yaml_files:
-        print(f"[WARN] No YAML files found under: {source_dir}")
+        log.warning("No YAML files found under: %s", source_dir)
         return 0, 0
 
     file_count = 0
@@ -75,14 +78,14 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
         file_count += 1
         for doc in docs:
             if not doc.get("title"):
-                print(f"[WARN] Skipping metadata without title in {yaml_path}")
+                log.warning("Skipping metadata without title in %s", yaml_path)
                 continue
             try:
                 insert_visual_novel(doc)
                 metadata_count += 1
-                print(f"[OK] Processed metadata from {yaml_path}")
+                log.info("Processed metadata from %s", yaml_path)
             except Exception as exc:
-                print(f"[ERROR] Failed to process metadata from {yaml_path}: {exc}")
+                log.error("Failed to process metadata from %s: %s", yaml_path, exc, exc_info=True)
 
     return file_count, metadata_count
 
@@ -122,18 +125,18 @@ def main(argv=None):
     backup_dir = None if args.no_backup else Path(args.backup_dir).resolve()
 
     if not source_dir.exists() or not source_dir.is_dir():
-        print(f"[ERROR] Source directory does not exist: {source_dir}")
+        log.error("Source directory does not exist: %s", source_dir)
         return 2
 
     try:
         file_count, metadata_count = rebuild_database(source_dir, db_path, backup_dir=backup_dir)
     except Exception as exc:
-        print(f"[ERROR] Rebuild failed: {exc}")
+        log.error("Rebuild failed: %s", exc, exc_info=True)
         return 1
 
-    print(
-        f"[DONE] Rebuilt {db_path} from {metadata_count} metadata document(s) "
-        f"across {file_count} YAML file(s)."
+    log.info(
+        "Rebuilt %s from %d metadata document(s) across %d YAML file(s).",
+        db_path, metadata_count, file_count,
     )
     return 0
 

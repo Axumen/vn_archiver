@@ -10,10 +10,10 @@ callbacks (e.g. field ordering) are accepted as optional parameters to
 avoid circular dependencies.
 """
 
+import logging
 import shutil
 import yaml
 from pathlib import Path
-from colorama import Fore
 
 from db_manager import get_connection
 from template_service import order_metadata_for_yaml
@@ -23,6 +23,8 @@ from utils import (
     determine_latest_version,
     table_exists,
 )
+
+log = logging.getLogger(__name__)
 
 # ==============================
 # PATH CONSTANTS
@@ -268,7 +270,7 @@ def mirror_metadata_for_rebuild(staged_meta_path, archives_data, release_id, con
     metadata_dir.mkdir(parents=True, exist_ok=True)
 
     if not release_id:
-        print(Fore.YELLOW + "[WARN] Rebuild metadata mirror skipped: missing release ID.")
+        log.warning("Rebuild metadata mirror skipped: missing release ID.")
         return []
 
     archive_id_by_sha = {}
@@ -294,7 +296,7 @@ def mirror_metadata_for_rebuild(staged_meta_path, archives_data, release_id, con
             _execute(c)
 
     if not archive_id_by_sha:
-        print(Fore.YELLOW + "[WARN] Rebuild metadata mirror skipped: missing file/release_file tables.")
+        log.warning("Rebuild metadata mirror skipped: no file/release_file rows found for release %s.", release_id)
         return []
 
     staged_name = Path(staged_meta_path).name
@@ -303,7 +305,7 @@ def mirror_metadata_for_rebuild(staged_meta_path, archives_data, release_id, con
         archive_sha = str(archive.get("sha256") or "").strip().lower()
         archive_id = archive_id_by_sha.get(archive_sha)
         if not archive_id:
-            print(Fore.YELLOW + f"[WARN] Could not resolve archive ID for metadata mirror ({archive_sha[:8]}...).")
+            log.warning("Could not resolve archive ID for metadata mirror (%s...).", archive_sha[:8])
             continue
 
         mirrored_path = metadata_dir / f"{archive_id}_{staged_name}"
@@ -311,5 +313,5 @@ def mirror_metadata_for_rebuild(staged_meta_path, archives_data, release_id, con
         mirrored_paths.append(mirrored_path)
 
     if mirrored_paths:
-        print(Fore.GREEN + f"Mirrored metadata copies for rebuild: {len(mirrored_paths)} file(s).")
+        log.info("Mirrored metadata copies for rebuild: %d file(s).", len(mirrored_paths))
     return mirrored_paths

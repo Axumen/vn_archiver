@@ -3,11 +3,11 @@ import sys
 import time
 import json
 import hashlib
+import logging
 import re
 from pathlib import Path
 from tqdm import tqdm
 import yaml
-from colorama import Fore
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 from db_manager import get_connection
 from cloud_tracking_repository import CloudTrackingRepository
@@ -20,6 +20,8 @@ from utils import (
     normalize_text_list_value,
 )
 from staging import build_recommended_archive_name
+
+log = logging.getLogger(__name__)
 
 B2_CONFIG_FILE = "backblaze_config.yaml"
 B2_KEY_ID = None
@@ -51,34 +53,34 @@ def verify_remote_upload_integrity(
     """Verify cloud object integrity using size + cloud-available hash metadata."""
     remote_size = getattr(remote_info, "size", None)
     if remote_size is not None and int(remote_size) != int(local_size):
-        print(
-            Fore.RED
-            + f"Post-upload verification failed for {label}: remote size {remote_size} does not match local size {local_size}."
+        log.error(
+            "Post-upload verification failed for %s: remote size %s does not match local size %s.",
+            label, remote_size, local_size,
         )
         return False
 
     remote_sha1, remote_sha256 = _extract_remote_hashes(remote_info)
     if remote_sha256:
         if remote_sha256 != local_sha256:
-            print(
-                Fore.RED
-                + f"Post-upload verification failed for {label}: remote SHA-256 does not match local SHA-256."
+            log.error(
+                "Post-upload verification failed for %s: remote SHA-256 does not match local SHA-256.",
+                label,
             )
             return False
-        print(Fore.GREEN + f"Verified {label} integrity via remote SHA-256.")
+        log.info("Verified %s integrity via remote SHA-256.", label)
         return True
 
     if remote_sha1:
         if remote_sha1 != local_sha1:
-            print(
-                Fore.RED
-                + f"Post-upload verification failed for {label}: remote SHA-1 does not match local SHA-1."
+            log.error(
+                "Post-upload verification failed for %s: remote SHA-1 does not match local SHA-1.",
+                label,
             )
             return False
-        print(Fore.GREEN + f"Verified {label} integrity via remote SHA-1 (B2-compatible fallback).")
+        log.info("Verified %s integrity via remote SHA-1 (B2-compatible fallback).", label)
         return True
 
-    print(Fore.YELLOW + f"Remote hash unavailable for {label}; verified size only.")
+    log.warning("Remote hash unavailable for %s; verified size only.", label)
     return True
 
 def load_b2_config(config_path=B2_CONFIG_FILE):
@@ -135,11 +137,11 @@ def _load_and_normalize_sidecar(sidecar_path):
         with open(sidecar_path, "r", encoding="utf-8") as handle:
             metadata = yaml.safe_load(handle)
     except Exception as exc:
-        print(Fore.RED + f"Upload Blocked: Failed to read metadata sidecar '{Path(sidecar_path).name}': {exc}")
+        log.error("Upload Blocked: Failed to read metadata sidecar '%s': %s", Path(sidecar_path).name, exc)
         return None, None
 
     if not isinstance(metadata, dict):
-        print(Fore.RED + "Upload Blocked: Metadata sidecar is not a valid YAML mapping.")
+        log.error("Upload Blocked: Metadata sidecar is not a valid YAML mapping.")
         return None, None
 
     metadata = normalize_metadata_fields(metadata)
@@ -157,15 +159,15 @@ def _resolve_release_for_upload(metadata, *, include_registration_hint):
     distribution_platform = str(metadata.get("distribution_platform", "")).strip()
 
     if not title:
-        print(Fore.RED + "Upload Blocked: metadata sidecar is missing 'title'.")
+        log.error("Upload Blocked: metadata sidecar is missing 'title'.")
         return None
 
     with get_connection() as conn:
         title_row = conn.execute("SELECT title_id FROM title WHERE title = ?", (title,)).fetchone()
         if not title_row:
-            print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' does not exist in the database.")
+            log.error("Upload Blocked: Visual Novel '%s' does not exist in the database.", title)
             if include_registration_hint:
-                print(Fore.YELLOW + "Please run '(1) Create Metadata' to register it before uploading.")
+                log.warning("Please run '(1) Create Metadata' to register it before uploading.")
             return None
         title_id = title_row["title_id"]
 
@@ -185,13 +187,13 @@ def _resolve_release_for_upload(metadata, *, include_registration_hint):
                 if include_registration_hint:
                     lang_label = language if language else "default"
                     edition_label = edition if edition else "default"
-                    print(
-                        Fore.RED
-                        + f"Upload Blocked: Version '{version}' (language={lang_label}, edition={edition_label}) for '{title}' does not exist in the database."
+                    log.error(
+                        "Upload Blocked: Version '%s' (language=%s, edition=%s) for '%s' does not exist in the database.",
+                        version, lang_label, edition_label, title,
                     )
-                    print(Fore.YELLOW + "Please run '(1) Create Metadata' to register this release before uploading.")
+                    log.warning("Please run '(1) Create Metadata' to register this release before uploading.")
                 else:
-                    print(Fore.RED + f"Upload Blocked: Version '{version}' for '{title}' does not exist in the database.")
+                    log.error("Upload Blocked: Version '%s' for '%s' does not exist in the database.", version, title)
                 return None
         else:
             release_row = conn.execute(
@@ -199,12 +201,12 @@ def _resolve_release_for_upload(metadata, *, include_registration_hint):
                 (title_id,),
             ).fetchone()
             if not release_row:
-                print(Fore.RED + f"Upload Blocked: Visual Novel '{title}' has no releases in the database.")
+                log.error("Upload Blocked: Visual Novel '%s' has no releases in the database.", title)
                 if include_registration_hint:
-                    print(Fore.YELLOW + "Please run '(1) Create Metadata' to register a release before uploading.")
+                    log.warning("Please run '(1) Create Metadata' to register a release before uploading.")
                 return None
             version = str(release_row["version"]).strip()
-            print(Fore.YELLOW + f"No version supplied in sidecar metadata; using latest DB release version: {version}")
+            log.warning("No version supplied in sidecar metadata; using latest DB release version: %s", version)
 
     return {
         "title": title,
@@ -236,15 +238,15 @@ def _verify_sidecar_integrity(
     if not metadata_row:
         if include_registration_hint:
             if requested_metadata_revision is not None:
-                print(
-                    Fore.RED
-                    + f"Upload Blocked: Release {release_id} has no metadata version v{requested_metadata_revision} in database."
+                log.error(
+                    "Upload Blocked: Release %s has no metadata version v%s in database.",
+                    release_id, requested_metadata_revision,
                 )
             else:
-                print(Fore.RED + f"Upload Blocked: Release {release_id} has no current metadata version in database.")
-            print(Fore.YELLOW + "Please run '(1) Create Metadata' or update metadata before uploading.")
+                log.error("Upload Blocked: Release %s has no current metadata version in database.", release_id)
+            log.warning("Please run '(1) Create Metadata' or update metadata before uploading.")
         else:
-            print(Fore.RED + f"Upload Blocked: No matching metadata version found in database for release {release_id}.")
+            log.error("Upload Blocked: No matching metadata version found in database for release %s.", release_id)
         return None
 
     db_metadata_hash = metadata_row["metadata_hash"]
@@ -258,11 +260,11 @@ def _verify_sidecar_integrity(
     )
     sidecar_metadata_hash = hashlib.sha256(canonical_metadata_json.encode("utf-8")).hexdigest()
     if sidecar_metadata_hash != db_metadata_hash:
-        print(Fore.RED + "Upload Blocked: Sidecar metadata does not match metadata stored in database for this revision.")
-        print(Fore.YELLOW + f"DB metadata hash : {db_metadata_hash}")
-        print(Fore.YELLOW + f"Sidecar hash     : {sidecar_metadata_hash}")
+        log.error("Upload Blocked: Sidecar metadata does not match metadata stored in database for this revision.")
+        log.warning("DB metadata hash : %s", db_metadata_hash)
+        log.warning("Sidecar hash     : %s", sidecar_metadata_hash)
         if include_registration_hint:
-            print(Fore.YELLOW + "Regenerate/stage metadata so the sidecar matches the intended build metadata revision.")
+            log.warning("Regenerate/stage metadata so the sidecar matches the intended build metadata revision.")
         return None
     return db_version_number
 
@@ -300,18 +302,18 @@ def _ensure_parent_revision_uploaded(metadata_cloud_path, db_version_number):
             (parent_metadata_cloud_path,),
         ).fetchone()
     if not parent_uploaded_row:
-        print(Fore.RED + f"Upload Blocked: Parent metadata revision v{db_version_number - 1} is not uploaded yet.")
-        print(Fore.YELLOW + f"Expected parent path: {parent_metadata_cloud_path}")
+        log.error("Upload Blocked: Parent metadata revision v%d is not uploaded yet.", db_version_number - 1)
+        log.warning("Expected parent path: %s", parent_metadata_cloud_path)
         return False
     return True
 
 
 def upload_archive(file_path):
     if not os.path.exists(file_path):
-        print(Fore.RED + f"File not found: {file_path}")
+        log.error("File not found: %s", file_path)
         return False
 
-    print(Fore.CYAN + f"\nAnalyzing {os.path.basename(file_path)}...")
+    log.info("Analyzing %s...", os.path.basename(file_path))
 
     # -------------------------------------------------------------------
     # 1. Read metadata only from queued sidecar file
@@ -339,15 +341,15 @@ def upload_archive(file_path):
         metadata_source = str(selected_sidecar)
 
     if not selected_sidecar:
-        print(Fore.RED + "Upload Blocked: Could not find valid metadata sidecar file.")
-        print(Fore.YELLOW + "Expected '<archive_name>_meta_vN.yaml' next to the archive in uploading/.")
+        log.error("Upload Blocked: Could not find valid metadata sidecar file.")
+        log.warning("Expected '<archive_name>_meta_vN.yaml' next to the archive in uploading/.")
         return False
 
     metadata, requested_metadata_revision = _load_and_normalize_sidecar(selected_sidecar)
     if metadata is None:
         return False
 
-    print(Fore.CYAN + f"Metadata source: sidecar file ({metadata_source})")
+    log.info("Metadata source: sidecar file (%s)", metadata_source)
     release_info = _resolve_release_for_upload(metadata, include_registration_hint=True)
     if release_info is None:
         return False
@@ -369,7 +371,7 @@ def upload_archive(file_path):
     # -------------------------------------------------------------------
     # 4. Formulate cloud naming paths & hashes
     # -------------------------------------------------------------------
-    print(Fore.CYAN + "Calculating archive SHA-256 for cloud verification...")
+    log.info("Calculating archive SHA-256 for cloud verification...")
     archive_sha256 = sha256_file(file_path)
 
     ext = os.path.splitext(file_path)[1].lower()
@@ -388,7 +390,7 @@ def upload_archive(file_path):
     if not _ensure_parent_revision_uploaded(metadata_cloud_path, db_version_number):
         return False
 
-    print(Fore.GREEN + f"Database verification passed (Title ID: {title_id}, metadata v{db_version_number})")
+    log.info("Database verification passed (Title ID: %s, metadata v%s)", title_id, db_version_number)
 
     # Ensure queued local file uses the same recommended naming scheme
     current_name = os.path.basename(file_path)
@@ -398,7 +400,7 @@ def upload_archive(file_path):
             os.remove(renamed_local_path)
         os.rename(file_path, renamed_local_path)
         file_path = renamed_local_path
-        print(Fore.CYAN + f"Renamed queued archive to: {file_name}")
+        log.info("Renamed queued archive to: %s", file_name)
 
     file_size = os.path.getsize(file_path)
 
@@ -414,9 +416,9 @@ def upload_archive(file_path):
     archive_needs_upload = existing_obj is None
     if not archive_needs_upload:
         existing_cloud_path = existing_obj["storage_path"]
-        print(Fore.GREEN + f"\n[DEDUPLICATION MATCH] Archive already exists in cloud!")
-        print(Fore.CYAN + f"Existing Path: {existing_cloud_path}")
-        print(Fore.YELLOW + "Skipping archive upload. Linking database records...")
+        log.info("[DEDUPLICATION MATCH] Archive already exists in cloud!")
+        log.info("Existing Path: %s", existing_cloud_path)
+        log.warning("Skipping archive upload. Linking database records...")
 
     # -------------------------------------------------------------------
     # 6. Backblaze B2 Authentication via Config
@@ -424,7 +426,7 @@ def upload_archive(file_path):
     try:
         bucket, dry_run = _get_authenticated_bucket()
     except Exception as e:
-        print(Fore.RED + f"B2 Authentication failed: {e}")
+        log.error("B2 Authentication failed: %s", e)
         return False
 
     # -------------------------------------------------------------------
@@ -432,16 +434,16 @@ def upload_archive(file_path):
     # -------------------------------------------------------------------
     if dry_run:
         if archive_needs_upload:
-            print(Fore.YELLOW + f"[DRY RUN] Would upload archive {file_name} to: {cloud_path}")
+            log.warning("[DRY RUN] Would upload archive %s to: %s", file_name, cloud_path)
         else:
-            print(Fore.YELLOW + f"[DRY RUN] Archive already deduplicated at: {cloud_path}")
-        print(Fore.YELLOW + f"[DRY RUN] Would upload metadata {metadata_file_name} to: {metadata_cloud_path}")
+            log.warning("[DRY RUN] Archive already deduplicated at: %s", cloud_path)
+        log.warning("[DRY RUN] Would upload metadata %s to: %s", metadata_file_name, metadata_cloud_path)
         return True
 
     if archive_needs_upload:
         archive_sha1 = sha1_file(file_path)
-        print(Fore.CYAN + f"\nUploading Archive: {file_name}")
-        print(Fore.CYAN + f"Destination      : {cloud_path}")
+        log.info("Uploading Archive: %s", file_name)
+        log.info("Destination     : %s", cloud_path)
 
         with tqdm(total=file_size, unit='B', unit_scale=True, desc="Progress", colour="green") as pbar:
             class TqdmProgressListener:
@@ -465,15 +467,15 @@ def upload_archive(file_path):
                     progress_listener=TqdmProgressListener()
                 )
             except Exception as e:
-                print(Fore.RED + f"\nUpload failed for {file_name}: {e}")
+                log.error("Upload failed for %s: %s", file_name, e)
                 return False
 
-        print(Fore.GREEN + "\nArchive upload complete!")
+        log.info("Archive upload complete!")
 
         try:
             uploaded_info = bucket.get_file_info_by_name(cloud_path)
         except Exception as e:
-            print(Fore.RED + f"Post-upload verification failed for {cloud_path}: {e}")
+            log.error("Post-upload verification failed for %s: %s", cloud_path, e)
             return False
 
         if not verify_remote_upload_integrity(
@@ -485,14 +487,14 @@ def upload_archive(file_path):
         ):
             return False
 
-        print(Fore.GREEN + f"Verified remote archive object: {cloud_path}")
+        log.info("Verified remote archive object: %s", cloud_path)
 
         with get_connection() as conn:
             repo = CloudTrackingRepository(conn)
             try:
                 repo.mark_archive_uploaded(archive_sha256, file_size, cloud_path)
             except Exception as e:
-                print(Fore.RED + f"Database update failed after upload verification: {e}")
+                log.error("Database update failed after upload verification: %s", e)
                 return False
 
     # -------------------------------------------------------------------
@@ -507,13 +509,13 @@ def upload_archive(file_path):
 
     metadata_needs_upload = existing_meta_path is None
     if not metadata_needs_upload:
-        print(Fore.GREEN + f"\n[DEDUPLICATION MATCH] Metadata sidecar already exists in cloud!")
-        print(Fore.CYAN + f"Existing Path: {existing_meta_path}")
+        log.info("[DEDUPLICATION MATCH] Metadata sidecar already exists in cloud!")
+        log.info("Existing Path: %s", existing_meta_path)
 
     if metadata_needs_upload:
         metadata_sha1 = sha1_file(selected_sidecar)
-        print(Fore.CYAN + f"\nUploading Metadata: {metadata_file_name}")
-        print(Fore.CYAN + f"Destination       : {metadata_cloud_path}")
+        log.info("Uploading Metadata: %s", metadata_file_name)
+        log.info("Destination       : %s", metadata_cloud_path)
         try:
             bucket.upload_local_file(
                 local_file=str(selected_sidecar),
@@ -524,13 +526,13 @@ def upload_archive(file_path):
                 },
             )
         except Exception as e:
-            print(Fore.RED + f"Upload failed for metadata sidecar {metadata_file_name}: {e}")
+            log.error("Upload failed for metadata sidecar %s: %s", metadata_file_name, e)
             return False
 
         try:
             metadata_info = bucket.get_file_info_by_name(metadata_cloud_path)
         except Exception as e:
-            print(Fore.RED + f"Post-upload verification failed for metadata {metadata_cloud_path}: {e}")
+            log.error("Post-upload verification failed for metadata %s: %s", metadata_cloud_path, e)
             return False
 
         if not verify_remote_upload_integrity(
@@ -542,7 +544,7 @@ def upload_archive(file_path):
         ):
             return False
 
-        print(Fore.GREEN + f"Metadata upload complete: {metadata_cloud_path}")
+        log.info("Metadata upload complete: %s", metadata_cloud_path)
 
     with get_connection() as conn:
         repo = CloudTrackingRepository(conn)
@@ -554,12 +556,12 @@ def upload_archive(file_path):
 def upload_metadata_sidecar(sidecar_path):
     """Upload a metadata sidecar file independently of archive upload."""
     if not os.path.exists(sidecar_path):
-        print(Fore.RED + f"Metadata sidecar not found: {sidecar_path}")
+        log.error("Metadata sidecar not found: %s", sidecar_path)
         return False
 
     sidecar_file = Path(sidecar_path)
     if not re.search(r"_r(\d+)\.ya?ml$", sidecar_file.name):
-        print(Fore.RED + "Upload Blocked: Metadata sidecar filename must follow '<archive_name>_r0N.yaml'.")
+        log.error("Upload Blocked: Metadata sidecar filename must follow '<archive_name>_r0N.yaml'.")
         return False
 
     metadata, requested_metadata_revision = _load_and_normalize_sidecar(sidecar_file)
@@ -609,20 +611,20 @@ def upload_metadata_sidecar(sidecar_path):
     try:
         bucket, dry_run = _get_authenticated_bucket()
     except Exception as e:
-        print(Fore.RED + f"B2 Authentication failed: {e}")
+        log.error("B2 Authentication failed: %s", e)
         return False
 
     if dry_run:
         if metadata_needs_upload:
-            print(Fore.YELLOW + f"[DRY RUN] Would upload metadata {metadata_file_name} to: {metadata_cloud_path}")
+            log.warning("[DRY RUN] Would upload metadata %s to: %s", metadata_file_name, metadata_cloud_path)
         else:
-            print(Fore.YELLOW + f"[DRY RUN] Metadata already deduplicated at: {metadata_cloud_path}")
+            log.warning("[DRY RUN] Metadata already deduplicated at: %s", metadata_cloud_path)
         return True
 
     if metadata_needs_upload:
         metadata_sha1 = sha1_file(sidecar_file)
-        print(Fore.CYAN + f"\nUploading Metadata: {metadata_file_name}")
-        print(Fore.CYAN + f"Destination       : {metadata_cloud_path}")
+        log.info("Uploading Metadata: %s", metadata_file_name)
+        log.info("Destination       : %s", metadata_cloud_path)
         try:
             bucket.upload_local_file(
                 local_file=str(sidecar_file),
@@ -633,13 +635,13 @@ def upload_metadata_sidecar(sidecar_path):
                 },
             )
         except Exception as e:
-            print(Fore.RED + f"Upload failed for metadata sidecar {metadata_file_name}: {e}")
+            log.error("Upload failed for metadata sidecar %s: %s", metadata_file_name, e)
             return False
 
         try:
             metadata_info = bucket.get_file_info_by_name(metadata_cloud_path)
         except Exception as e:
-            print(Fore.RED + f"Post-upload verification failed for metadata {metadata_cloud_path}: {e}")
+            log.error("Post-upload verification failed for metadata %s: %s", metadata_cloud_path, e)
             return False
 
         if not verify_remote_upload_integrity(
@@ -652,10 +654,8 @@ def upload_metadata_sidecar(sidecar_path):
             return False
 
     with get_connection() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO cloud_sidecar (sha256, file_size, storage_path) VALUES (?, ?, ?)",
-            (metadata_sha256, metadata_local_size, metadata_cloud_path)
-        )
+        repo = CloudTrackingRepository(conn)
+        repo.mark_sidecar_uploaded(metadata_sha256, metadata_local_size, metadata_cloud_path)
 
-    print(Fore.GREEN + f"Metadata upload complete: {metadata_cloud_path}")
+    log.info("Metadata upload complete: %s", metadata_cloud_path)
     return True

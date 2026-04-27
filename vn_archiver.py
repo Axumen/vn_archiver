@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 
 import json
+import logging
 import os
-
-from colorama import Fore
 
 from db_manager import get_connection, exclusive_transaction
 from domain_layer import VisualNovelDomainService
@@ -20,6 +19,8 @@ from utils import (
     CATEGORY_ALL_FIELDS,
     sha256_file,
 )
+
+log = logging.getLogger(__name__)
 
 
 # ==============================
@@ -145,7 +146,7 @@ def finalize_archive_creation(metadata, archives_data):
 
     result = insert_visual_novel(metadata)
     if not result:
-        print(Fore.RED + "Failed to insert visual novel into database.")
+        log.error("Failed to insert visual novel into database.")
         return
 
     staged_paths, staged_meta_path = stage_ingested_files_for_upload(
@@ -156,16 +157,16 @@ def finalize_archive_creation(metadata, archives_data):
 
     if staged_paths:
         for staged_path in staged_paths:
-            print(Fore.GREEN + f"Staged archive for upload: {staged_path}")
+            log.info("Staged archive for upload: %s", staged_path)
     if staged_meta_path:
-        print(Fore.GREEN + f"Staged metadata sidecar: {staged_meta_path}")
+        log.info("Staged metadata sidecar: %s", staged_meta_path)
 
 
 def create_archive_from_metadata_file(archive_paths, metadata, raw_text=None, source_file=None):
     """Create archive pipeline from an existing metadata YAML payload."""
     archives_data = []
     for path in archive_paths:
-        print(f"Calculating SHA-256 for: {os.path.basename(path)}...")
+        log.info("Calculating SHA-256 for: %s", os.path.basename(path))
         sha256 = sha256_file(path)
         file_size = os.path.getsize(path)
         archives_data.append(

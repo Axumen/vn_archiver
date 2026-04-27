@@ -37,8 +37,10 @@ from vn_archiver import (
     get_latest_metadata_for_title,
     finalize_archive_creation,
 )
+from logger import configure_logging
 
 init(autoreset=True)
+configure_logging()
 
 SELECTED_METADATA_TEMPLATE_VERSION = None
 METADATA_EDITOR_MODE = False

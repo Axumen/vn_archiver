@@ -2,10 +2,13 @@
 """Convenience wrapper for rebuilding from metadata mirror folders."""
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
 from rebuild_archive_db_from_yaml import rebuild_database
+
+log = logging.getLogger(__name__)
 
 
 def parse_args(argv):
@@ -42,7 +45,7 @@ def main(argv=None):
     backup_dir = None if args.no_backup else Path(args.backup_dir).resolve()
 
     if not source_dir.exists() or not source_dir.is_dir():
-        print(f"[ERROR] Source directory does not exist: {source_dir}")
+        log.error("Source directory does not exist: %s", source_dir)
         return 2
 
     try:
@@ -52,12 +55,12 @@ def main(argv=None):
             backup_dir=backup_dir,
         )
     except Exception as exc:
-        print(f"[ERROR] Rebuild failed: {exc}")
+        log.error("Rebuild failed: %s", exc, exc_info=True)
         return 1
 
-    print(
-        f"[DONE] Rebuilt {db_path} from {metadata_count} metadata document(s) "
-        f"across {file_count} YAML file(s)."
+    log.info(
+        "Rebuilt %s from %d metadata document(s) across %d YAML file(s).",
+        db_path, metadata_count, file_count,
     )
     return 0
 
