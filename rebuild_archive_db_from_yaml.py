@@ -34,6 +34,76 @@ def load_metadata_documents(yaml_module, path: Path):
     return out
 
 
+def _snapshot_cloud_tracking(db_path: Path) -> tuple[list, list]:
+    """Dump cloud_archive and cloud_sidecar rows before the DB is wiped.
+
+    Returns (cloud_archive_rows, cloud_sidecar_rows) where each element is a
+    list of (sha256, file_size, storage_path) tuples.  Returns empty lists if
+    the tables do not exist or the DB cannot be read.
+    """
+    import sqlite3 as _sqlite3
+
+    cloud_archive_rows: list[tuple] = []
+    cloud_sidecar_rows: list[tuple] = []
+    try:
+        conn = _sqlite3.connect(str(db_path))
+        conn.row_factory = _sqlite3.Row
+        existing_tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        if "cloud_archive" in existing_tables:
+            cloud_archive_rows = [
+                (r["sha256"], r["file_size"], r["storage_path"])
+                for r in conn.execute(
+                    "SELECT sha256, file_size, storage_path FROM cloud_archive"
+                ).fetchall()
+            ]
+        if "cloud_sidecar" in existing_tables:
+            cloud_sidecar_rows = [
+                (r["sha256"], r["file_size"], r["storage_path"])
+                for r in conn.execute(
+                    "SELECT sha256, file_size, storage_path FROM cloud_sidecar"
+                ).fetchall()
+            ]
+        conn.close()
+    except Exception as exc:  # pragma: no cover
+        log.warning("Could not snapshot cloud tracking tables (data may be lost): %s", exc)
+    return cloud_archive_rows, cloud_sidecar_rows
+
+
+def _restore_cloud_tracking(
+    cloud_archive_rows: list[tuple],
+    cloud_sidecar_rows: list[tuple],
+) -> None:
+    """Reinsert snapshotted cloud tracking rows into the freshly rebuilt DB."""
+    if not cloud_archive_rows and not cloud_sidecar_rows:
+        return
+    import db_manager
+
+    with db_manager.get_connection() as conn:
+        if cloud_archive_rows:
+            conn.executemany(
+                "INSERT OR IGNORE INTO cloud_archive (sha256, file_size, storage_path)"
+                " VALUES (?, ?, ?)",
+                cloud_archive_rows,
+            )
+        if cloud_sidecar_rows:
+            conn.executemany(
+                "INSERT OR IGNORE INTO cloud_sidecar (sha256, file_size, storage_path)"
+                " VALUES (?, ?, ?)",
+                cloud_sidecar_rows,
+            )
+        conn.commit()
+    log.info(
+        "Restored cloud tracking: %d cloud_archive row(s), %d cloud_sidecar row(s).",
+        len(cloud_archive_rows),
+        len(cloud_sidecar_rows),
+    )
+
+
 def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = None):
     try:
         import yaml
@@ -45,6 +115,19 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
     db_manager.DB_PATH = str(db_path)
 
     from vn_archiver import insert_visual_novel
+
+    # Snapshot cloud tracking data before the DB is erased so it can be
+    # restored afterwards.  This prevents every file appearing as "not
+    # uploaded" after a rebuild.
+    cloud_archive_rows, cloud_sidecar_rows = (
+        _snapshot_cloud_tracking(db_path) if db_path.exists() else ([], [])
+    )
+    if cloud_archive_rows or cloud_sidecar_rows:
+        log.info(
+            "Snapshotted %d cloud_archive and %d cloud_sidecar row(s) for restoration.",
+            len(cloud_archive_rows),
+            len(cloud_sidecar_rows),
+        )
 
     if db_path.exists():
         if backup_dir is not None:
@@ -61,6 +144,7 @@ def rebuild_database(source_dir: Path, db_path: Path, backup_dir: Path | None = 
             shm_path.unlink()
 
     db_manager.initialize_database(reset=True)
+    _restore_cloud_tracking(cloud_archive_rows, cloud_sidecar_rows)
 
     yaml_files = find_yaml_files(source_dir)
     if not yaml_files:

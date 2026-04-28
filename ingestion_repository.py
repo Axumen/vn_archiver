@@ -12,6 +12,12 @@ from utils import (
 )
 
 
+class SchemaValidationError(RuntimeError):
+    """Raised when the database schema does not meet the requirements of the
+    current ingestion pipeline.  Callers that want to distinguish a schema
+    problem from other runtime errors can catch this specific type."""
+
+
 class SchemaGuard:
     """Startup schema validation and canonical schema context resolution."""
 
@@ -64,21 +70,23 @@ class SchemaGuard:
     def resolve(self):
         title_table = "title"
         if not self.table_exists(title_table):
-            raise RuntimeError("New schema required: missing 'title' table.")
+            raise SchemaValidationError("New schema required: missing 'title' table.")
         title_columns = self.table_columns(title_table)
         if "title_id" not in title_columns:
-            raise RuntimeError("New schema required: 'title.title_id' column is missing.")
+            raise SchemaValidationError("New schema required: 'title.title_id' column is missing.")
 
         release_table = "release"
         if not self.table_exists(release_table):
-            raise RuntimeError("New schema required: missing 'release' table.")
+            raise SchemaValidationError("New schema required: missing 'release' table.")
         release_columns = self.table_columns(release_table)
         if "release_id" not in release_columns or "version" not in release_columns:
-            raise RuntimeError("New schema required: 'release.release_id' and 'release.version' columns are missing.")
+            raise SchemaValidationError(
+                "New schema required: 'release.release_id' and 'release.version' columns are missing."
+            )
 
         missing_tables = [name for name in self.REQUIRED_TABLES if not self.table_exists(name)]
         if missing_tables:
-            raise RuntimeError(
+            raise SchemaValidationError(
                 f"New schema required: missing canonical table(s): {', '.join(missing_tables)}."
             )
 
@@ -86,7 +94,7 @@ class SchemaGuard:
             name for name in self.REQUIRED_RELEASE_COLUMNS if name not in release_columns
         ]
         if missing_release_columns:
-            raise RuntimeError(
+            raise SchemaValidationError(
                 f"New schema required: missing canonical release column(s): {', '.join(missing_release_columns)}."
             )
 

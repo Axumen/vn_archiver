@@ -610,6 +610,7 @@ def _process_incoming_pairs():
         return
 
     notify(f"Found {len(pairs)} pair(s). Starting pipeline.", "ok")
+    failed_pairs: list[tuple[str, str]] = []
 
     for archive_name, yaml_name in pairs:
         archive_path = os.path.join(INCOMING_DIR, archive_name)
@@ -659,6 +660,7 @@ def _process_incoming_pairs():
             )
         except Exception as exc:
             notify(f"Pipeline failed for '{archive_name}': {exc}", "error")
+            failed_pairs.append((archive_name, str(exc)))
             continue
 
         notify_pipeline("2", f"Release created (release_id={ingest_result.release_id})", "ok")
@@ -680,6 +682,23 @@ def _process_incoming_pairs():
         if os.path.exists(metadata_path):
             os.remove(metadata_path)
             notify(f"Removed processed original YAML: {yaml_name}", "info")
+
+    # ── Batch summary ─────────────────────────────────────────────────────────
+    print()
+    rule()
+    total = len(pairs)
+    succeeded = total - len(failed_pairs)
+    if failed_pairs:
+        notify(
+            f"Batch complete: {succeeded}/{total} pair(s) succeeded, "
+            f"{len(failed_pairs)} failed.",
+            "warn",
+        )
+        for pair_name, reason in failed_pairs:
+            notify(f"  {pair_name}: {reason}", "error")
+    else:
+        notify(f"Batch complete: all {total} pair(s) processed successfully.", "ok")
+    rule()
 
 
 def add_file_to_existing_release():

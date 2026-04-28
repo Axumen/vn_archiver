@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ingestion_repository import VnIngestionRepository
+from ingestion_repository import VnIngestionRepository, SchemaValidationError
 
 
 def make_conn():
@@ -491,3 +491,15 @@ def test_repository_release_lookup_normalizes_v_prefix_in_version():
         },
     )
     assert looked_up == release_id
+
+
+def test_schema_validation_error_is_raised_for_bad_schema():
+    """SchemaValidationError should be raised — not just the bare RuntimeError."""
+    conn = make_conn()
+    with pytest.raises(SchemaValidationError, match="New schema required"):
+        VnIngestionRepository(conn)
+
+
+def test_schema_validation_error_is_runtime_error_subclass():
+    """Existing broad except RuntimeError catches must continue to match."""
+    assert issubclass(SchemaValidationError, RuntimeError)
