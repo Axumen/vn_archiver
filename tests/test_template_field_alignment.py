@@ -8,7 +8,7 @@ pytest.importorskip("yaml")
 
 from utils import CATEGORY_ALL_FIELDS
 from template_service import load_metadata_template
-from tui import FIELD_SUGGESTIONS
+from metadata_prompter import FIELD_SUGGESTIONS
 
 
 def _template_fields(template):
